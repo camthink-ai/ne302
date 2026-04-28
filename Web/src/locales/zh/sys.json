@@ -264,7 +264,9 @@
       "lux_ref_ll_lum2": "第 2 次参考亮度",
       "fast_capture_skip_frames": "跳帧数",
       "fast_capture_resolution": "分辨率",
-      "fast_capture_jpeg_quality": "JPEG 质量"
+      "fast_capture_jpeg_quality": "JPEG 质量",
+      "capture_disable_comm": "抓拍后仅存储本地",
+      "capture_storage_ai": "存储 AI 画框结果图"
     },
     "system_management": {
       "communication_title": "通讯管理",

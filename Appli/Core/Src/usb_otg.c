@@ -179,7 +179,7 @@ void HAL_HCD_MspInit(HCD_HandleTypeDef* hcdHandle)
     /* Enable VDDUSB */
     __HAL_RCC_PWR_CLK_ENABLE();
     HAL_PWREx_EnableVddUSBVMEN();
-    while(__HAL_PWR_GET_FLAG(PWR_FLAG_USB33RDY));
+    while (__HAL_PWR_GET_FLAG(PWR_FLAG_USB33RDY) == 0U);
     HAL_PWREx_EnableVddUSB();
 
     /** Initializes the peripherals clock
@@ -247,7 +247,7 @@ void HAL_HCD_MspInit(HCD_HandleTypeDef* hcdHandle)
 
     __HAL_RCC_PWR_CLK_ENABLE();
     HAL_PWREx_EnableVddUSBVMEN();
-    while(__HAL_PWR_GET_FLAG(PWR_FLAG_USB33RDY));
+    while (__HAL_PWR_GET_FLAG(PWR_FLAG_USB33RDY) == 0U);
     HAL_PWREx_EnableVddUSB();
 
     /** Initializes the peripherals clock

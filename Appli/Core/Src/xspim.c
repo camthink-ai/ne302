@@ -98,8 +98,13 @@ void MX_XSPI1_Init(void)
     hxspi1.Init.FifoThresholdByte = 4;
     hxspi1.Init.MemoryMode = HAL_XSPI_SINGLE_MEM;
     hxspi1.Init.MemoryType = HAL_XSPI_MEMTYPE_APMEM_16BITS;
+#if defined(BOARD_PSRAM_SIZE) && BOARD_PSRAM_SIZE == 64
     /* 512 Mbits = 64 MBytes PSRAM */
     hxspi1.Init.MemorySize = HAL_XSPI_SIZE_512MB;
+#else
+    /* 256 Mbits = 32 MBytes PSRAM */
+    hxspi1.Init.MemorySize = HAL_XSPI_SIZE_256MB;
+#endif
     hxspi1.Init.ChipSelectHighTimeCycle = 5;
     hxspi1.Init.FreeRunningClock = HAL_XSPI_FREERUNCLK_DISABLE;
     hxspi1.Init.ClockMode = HAL_XSPI_CLOCK_MODE_0;
@@ -593,9 +598,7 @@ void HAL_XSPI_MspInit(XSPI_HandleTypeDef* hxspi)
     /** Initializes the peripherals clock
     */
         PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_XSPI2;
-        PeriphClkInitStruct.Xspi2ClockSelection = RCC_XSPI2CLKSOURCE_IC3;
-        PeriphClkInitStruct.ICSelection[RCC_IC3].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-        PeriphClkInitStruct.ICSelection[RCC_IC3].ClockDivider = 6;
+        PeriphClkInitStruct.Xspi2ClockSelection = RCC_XSPI2CLKSOURCE_HCLK;
         if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
         {
             Error_Handler();
@@ -953,8 +956,13 @@ int32_t XSPI_NOR_Read(uint8_t *pData, uint32_t ReadAddr, uint32_t Size)
 
 
 #define PSRAM_BASE_ADDR   ((uint32_t)0x90000000)
+#if defined(BOARD_PSRAM_SIZE) && BOARD_PSRAM_SIZE == 64
 /* 64MB total PSRAM size (0x90000000 ~ 0x93FFFFFF) */
 #define PSRAM_SIZE        (64 * 1024 * 1024)
+#else
+/* 32MB total PSRAM size (0x90000000 ~ 0x91FFFFFF) */
+#define PSRAM_SIZE        (32 * 1024 * 1024)
+#endif
 #define PSRAM_END_ADDR    (PSRAM_BASE_ADDR + PSRAM_SIZE)
 #define PSRAM_TEST_STEP   4
 

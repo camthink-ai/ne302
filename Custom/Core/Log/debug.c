@@ -17,7 +17,7 @@
 #include "common_utils.h"
 #include "cmsis_os2.h"
 #include "cli_cmd.h"
-#include "buffer_mgr.h"
+#include "json_config_internal.h"
 
 /* ==================== Missing Macro Definitions ==================== */
 
@@ -269,7 +269,7 @@ aicam_result_t debug_system_init(void)
         return AICAM_OK;
     }
 
-    printf("[DEBUG] Initializing debug system...\r\n");
+    // printf("[DEBUG] Initializing debug system...\r\n");
     
     // Initialize debug context
     memset(&g_debug_ctx, 0, sizeof(debug_context_t));
@@ -299,7 +299,7 @@ aicam_result_t debug_system_init(void)
     }
     
     // Initialize logging system first (so we can use LOG macros)
-    printf("[DEBUG] Initializing logging...\r\n");
+    // printf("[DEBUG] Initializing logging...\r\n");
     result = debug_init_logging();
     if (result != AICAM_OK) {
         printf("[ERROR] Failed to initialize logging system\r\n");
@@ -307,21 +307,21 @@ aicam_result_t debug_system_init(void)
     }
     
     // Initialize other subsystems
-    printf("[DEBUG] Initializing subsystems...\r\n");
+    // printf("[DEBUG] Initializing subsystems...\r\n");
     result = debug_init_uart();
     if (result != AICAM_OK) {
         LOG_CORE_ERROR("Failed to initialize UART");
         return result;
     }
     
-    printf("[DEBUG] Initializing command line...\r\n");
+    // printf("[DEBUG] Initializing command line...\r\n");
     result = debug_init_cmdline();
     if (result != AICAM_OK) {
         LOG_CORE_ERROR("Failed to initialize command line");
         return result;
     }
     
-    printf("[DEBUG] Initializing YModem...\r\n");
+    // printf("[DEBUG] Initializing YModem...\r\n");
     result = debug_init_ymodem();
     if (result != AICAM_OK) {
         LOG_CORE_ERROR("Failed to initialize YModem");
@@ -329,7 +329,7 @@ aicam_result_t debug_system_init(void)
     }
     
     // Create tasks
-    printf("[DEBUG] Creating debug tasks...\r\n");
+    // printf("[DEBUG] Creating debug tasks...\r\n");
     g_debug_ctx.debug_task = osThreadNew(debug_task_function, NULL, &debug_task_attributes);
     
     if (!g_debug_ctx.debug_task ) {
@@ -337,7 +337,7 @@ aicam_result_t debug_system_init(void)
         return AICAM_ERROR;
     }
     
-    printf("[DEBUG] Registering built-in commands...\r\n");
+    // printf("[DEBUG] Registering built-in commands...\r\n");
     // Register built-in commands
     result = debug_register_commands(builtin_commands, sizeof(builtin_commands) / sizeof(builtin_commands[0]));
     if (result != AICAM_OK) {
@@ -352,11 +352,11 @@ aicam_result_t debug_system_init(void)
     LOG_CORE_INFO("Debug system initialized successfully");
     
     // test uart output
-    printf("[DEBUG] Testing UART output...\r\n");
-    debug_uart_output_str("UART string output test\r\n");
-    debug_uart_output_str("Prompt test: ");
-    debug_uart_output_str(g_debug_ctx.cmdline.prompt);
-    debug_uart_output_str("\r\n");
+    // printf("[DEBUG] Testing UART output...\r\n");
+    // debug_uart_output_str("UART string output test\r\n");
+    // debug_uart_output_str("Prompt test: ");
+    // debug_uart_output_str(g_debug_ctx.cmdline.prompt);
+    // debug_uart_output_str("\r\n");
     
     return AICAM_OK;
 }
@@ -594,20 +594,20 @@ static aicam_result_t debug_uart_mode_switch(debug_mode_e mode)
 
 static void debug_task_function(void *argument)
 {
-    printf("[DEBUG] Debug task started\r\n");
+    // printf("[DEBUG] Debug task started\r\n");
     
     // ensure uart receive interrupt is started
     if (g_debug_ctx.current_mode == DEBUG_MODE_COMMAND) {
         HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
-        printf("[DEBUG] UART interrupt initialized\r\n");
+        // printf("[DEBUG] UART interrupt initialized\r\n");
     }
     
 
     osDelay(100);
     
-    debug_uart_output_str("\r\n");  // first line feed
-    debug_uart_output_str(g_debug_ctx.cmdline.prompt);  
-    printf("[DEBUG] Initial prompt displayed\r\n");
+    // debug_uart_output_str("\r\n");  // first line feed
+    // debug_uart_output_str(g_debug_ctx.cmdline.prompt);  
+    // printf("[DEBUG] Initial prompt displayed\r\n");
     
     while (1) {
         if (!queue_empty(&g_debug_ctx.cmd_queue)) {
@@ -618,12 +618,12 @@ static void debug_task_function(void *argument)
         
   
         if (g_debug_ctx.current_mode != DEBUG_MODE_COMMAND) {
-            printf("[DEBUG] Switching mode, debug task paused\r\n");
+            // printf("[DEBUG] Switching mode, debug task paused\r\n");
             while (g_debug_ctx.current_mode != DEBUG_MODE_COMMAND) {
                 osDelay(100);
             }
             HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
-            printf("[DEBUG] Back to command mode\r\n");
+            // printf("[DEBUG] Back to command mode\r\n");
             debug_uart_output_str("\r\n");
             debug_uart_output_str(g_debug_ctx.cmdline.prompt);
         }
@@ -632,48 +632,37 @@ static void debug_task_function(void *argument)
 
 static aicam_result_t debug_load_config(void)
 {
-    // Load configuration from JSON config manager
-    aicam_global_config_t *global_config = NULL;
     aicam_result_t result;
-    
-    global_config = (aicam_global_config_t*)buffer_calloc(1, sizeof(aicam_global_config_t));
-    if (!global_config) {
-        printf("[ERROR] Failed to allocate memory for config\r\n");
-        // Use default configuration
-        g_debug_ctx.config.console_level = LOG_LEVEL_INFO;
-        g_debug_ctx.config.file_level = LOG_LEVEL_WARN;
-        g_debug_ctx.config.log_file_size = 100 * 1024;
-        g_debug_ctx.config.log_rotation_count = 3;
-        g_debug_ctx.config.uart_echo_enable = AICAM_TRUE;
-        g_debug_ctx.config.timestamp_enable = AICAM_TRUE;
-        return AICAM_ERROR_NO_MEMORY;
-    }
-    
-    result = json_config_load_from_file(NULL, global_config);
-    printf("[DEBUG] Config loaded, console level: %lu\r\n", global_config->log_config.log_level);
+    uint8_t temp_u8 = 0;
+    uint32_t temp_u32 = 0;
 
+    /* Base defaults aligned with `default_config` / NVS keys in json_config_nvs.c (cf. quick_storage) */
+    g_debug_ctx.config.console_level = (log_level_e)default_config.log_config.log_level;
+    g_debug_ctx.config.file_level = LOG_LEVEL_WARN;
+    g_debug_ctx.config.log_file_size =
+        (unsigned int)(default_config.log_config.log_file_size_kb * 1024U);
+    g_debug_ctx.config.log_rotation_count = default_config.log_config.log_file_count;
+    g_debug_ctx.config.uart_echo_enable = AICAM_TRUE;
+    g_debug_ctx.config.timestamp_enable = AICAM_TRUE;
+
+    result = json_config_nvs_read_uint8(NVS_KEY_LOG_LEVEL, &temp_u8);
     if (result == AICAM_OK) {
-        // Map configuration values
-        g_debug_ctx.config.console_level = (log_level_e)global_config->log_config.log_level;
-        g_debug_ctx.config.file_level = LOG_LEVEL_WARN; // Default file level
-        g_debug_ctx.config.log_file_size = global_config->log_config.log_file_size_kb * 1024;
-        g_debug_ctx.config.log_rotation_count = global_config->log_config.log_file_count;
-        g_debug_ctx.config.uart_echo_enable = AICAM_TRUE;
-        g_debug_ctx.config.timestamp_enable = AICAM_TRUE;
-    } else {
-        // Use default configuration
-        printf("[DEBUG] Using default configuration\r\n");
-        g_debug_ctx.config.console_level = LOG_LEVEL_INFO;
-        g_debug_ctx.config.file_level = LOG_LEVEL_WARN;
-        g_debug_ctx.config.log_file_size = DEBUG_DEFAULT_LOG_FILE_SIZE;
-        g_debug_ctx.config.log_rotation_count = DEBUG_DEFAULT_LOG_FILE_COUNT;
-        g_debug_ctx.config.uart_echo_enable = AICAM_TRUE;
-        g_debug_ctx.config.timestamp_enable = AICAM_TRUE;
+        g_debug_ctx.config.console_level = (log_level_e)temp_u8;
     }
-    printf("[DEBUG] Config loaded, console level: %d, file level: %d\r\n", g_debug_ctx.config.console_level, g_debug_ctx.config.file_level);
-    
-    buffer_free(global_config);
-    
+
+    result = json_config_nvs_read_uint32(NVS_KEY_LOG_FILE_SIZE, &temp_u32);
+    if (result == AICAM_OK && temp_u32 > 0U) {
+        g_debug_ctx.config.log_file_size = (unsigned int)(temp_u32 * 1024U);
+    }
+
+    result = json_config_nvs_read_uint32(NVS_KEY_LOG_FILE_COUNT, &temp_u32);
+    if (result == AICAM_OK && temp_u32 > 0U) {
+        g_debug_ctx.config.log_rotation_count = temp_u32;
+    }
+
+    // printf("[DEBUG] Config from NVS, console level: %d, file level: %d\r\n",
+    //        (int)g_debug_ctx.config.console_level, (int)g_debug_ctx.config.file_level);
+
     return AICAM_OK;
 }
 

@@ -20,8 +20,147 @@
 #include "ai_draw.h"
 #include "mem_map.h"
 #include "rs485_driver.h"
+#include "storage.h"
+#include "xspim.h"
+#include "crc.h"
 
 static int create_file(const char* filename, const void* data, size_t data_size);
+
+static const char *sysclk_profile_name(uint32_t p)
+{
+    switch (p) {
+    case FSBL_APP_SYSCLK_PROFILE_HSE_200MHZ: return "HSE_200MHZ";
+    case FSBL_APP_SYSCLK_PROFILE_HSE_400MHZ: return "HSE_400MHZ";
+    case FSBL_APP_SYSCLK_PROFILE_HSI_800MHZ: return "HSI_800MHZ";
+    case FSBL_APP_SYSCLK_PROFILE_HSE_800MHZ: return "HSE_800MHZ";
+    default: return "unknown";
+    }
+}
+
+static int sysclk_test_cmd(int argc, char *argv[])
+{
+    if (argc < 2) {
+        LOG_SIMPLE("sysclk: usage\r\n");
+        LOG_SIMPLE("  sysclk get              -- read saved sys_clk_config from flash\r\n");
+        LOG_SIMPLE("  sysclk set <prof>       -- write profile for next boot (200|400|800|hsi800)\r\n");
+        LOG_SIMPLE("  sysclk delaytest [ms]   -- measure osDelay vs HAL tick + DWT (default 1000)\r\n");
+        return -1;
+    }
+
+    const char *sub = argv[1];
+
+    if (strcmp(sub, "delaytest") == 0) {
+        uint32_t ms = 1000U;
+        if (argc >= 3)
+            ms = (uint32_t)atoi(argv[2]);
+        if (ms == 0U || ms > 60000U) {
+            LOG_SIMPLE("sysclk delaytest: ms must be 1..60000\r\n");
+            return -1;
+        }
+
+        SystemCoreClockUpdate();
+        uint32_t cpu_hz = SystemCoreClock;
+
+        uint32_t t0 = HAL_GetTick();
+        osDelay(ms);
+        uint32_t t1 = HAL_GetTick();
+        uint32_t dt = t1 - t0;
+        LOG_SIMPLE("sysclk delaytest: osDelay(%lu) HAL_GetTick delta=%lu ms (expect ~%lu)\r\n",
+                   (unsigned long)ms, (unsigned long)dt, (unsigned long)ms);
+
+        /* DWT window capped: CYCCNT is 32-bit, high CPU MHz can wrap in long delays */
+        uint32_t dwt_ms = (ms > 50U) ? 50U : ms;
+#if defined(CoreDebug_DEMCR_TRCENA_Msk)
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+#endif
+        DWT->CYCCNT = 0U;
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+        uint32_t tick_d0 = HAL_GetTick();
+        uint32_t c0 = DWT->CYCCNT;
+        osDelay(dwt_ms);
+        uint32_t c1 = DWT->CYCCNT;
+        uint32_t tick_d1 = HAL_GetTick();
+        uint32_t cy = c1 - c0;
+        uint32_t tick_step = tick_d1 - tick_d0;
+        uint64_t expect_nom = (uint64_t)cpu_hz * (uint64_t)dwt_ms / 1000ULL;
+        uint64_t expect_tick = (uint64_t)cpu_hz * (uint64_t)tick_step / 1000ULL;
+        int64_t err_nom = (int64_t)cy - (int64_t)expect_nom;
+        int64_t err_tick = (int64_t)cy - (int64_t)expect_tick;
+        /* If SysCoreClk matches CYCCNT rate, cycles / Hz ~= wall time that CYCCNT "saw" */
+        uint64_t implied_us = (cy * 1000000ULL + ((uint64_t)cpu_hz / 2ULL)) / (uint64_t)cpu_hz;
+        uint32_t implied_whole_ms = (uint32_t)(implied_us / 1000ULL);
+        uint32_t implied_frac_us = (uint32_t)(implied_us % 1000ULL);
+        LOG_SIMPLE("sysclk delaytest: DWT osDelay(%lu ms req): HAL tick step=%lu ms, cycles=%lu\r\n",
+                   (unsigned long)dwt_ms, (unsigned long)tick_step, (unsigned long)cy);
+        LOG_SIMPLE("  SysClk %lu MHz: expect_cycles@tick_step=%lu err=%ld; implied~%lu.%03lu ms from cycles/Hz\r\n",
+                   (unsigned long)(cpu_hz / 1000000U), (unsigned long)expect_tick, (long)err_tick,
+                   (unsigned long)implied_whole_ms, (unsigned long)implied_frac_us);
+        if (tick_step != dwt_ms) {
+            LOG_SIMPLE("  note: requested %lu ms but tick stepped %lu ms (tick quantization); nominal err=%ld cycles\r\n",
+                       (unsigned long)dwt_ms, (unsigned long)tick_step, (long)err_nom);
+        }
+        return 0;
+    }
+
+    if (strcmp(sub, "get") == 0 || strcmp(sub, "read") == 0) {
+        sys_clk_config_t cfg = {0};
+        int ret = fsbl_app_read_sys_clk_config(&cfg);
+        if (ret == 0) {
+            LOG_SIMPLE("sysclk: saved profile=%lu (%s) crc32=0x%08lx\r\n",
+                       (unsigned long)cfg.sys_clk_profile, sysclk_profile_name(cfg.sys_clk_profile),
+                       (unsigned long)cfg.crc32);
+            return 0;
+        }
+        if (ret == -4)
+            LOG_SIMPLE("sysclk: no valid saved config (crc mismatch or empty)\r\n");
+        else
+            LOG_SIMPLE("sysclk: read failed (%d)\r\n", ret);
+        return ret;
+    }
+
+    if (strcmp(sub, "set") == 0 || strcmp(sub, "write") == 0) {
+        if (argc < 3) {
+            LOG_SIMPLE("sysclk set: need profile 200|400|800|hsi800\r\n");
+            return -1;
+        }
+        uint32_t prof;
+        if (strcmp(argv[2], "200") == 0)
+            prof = FSBL_APP_SYSCLK_PROFILE_HSE_200MHZ;
+        else if (strcmp(argv[2], "400") == 0)
+            prof = FSBL_APP_SYSCLK_PROFILE_HSE_400MHZ;
+        else if (strcmp(argv[2], "800") == 0)
+            prof = FSBL_APP_SYSCLK_PROFILE_HSE_800MHZ;
+        else if (strcmp(argv[2], "hsi800") == 0)
+            prof = FSBL_APP_SYSCLK_PROFILE_HSI_800MHZ;
+        else {
+            LOG_SIMPLE("sysclk set: unknown profile '%s'\r\n", argv[2]);
+            return -1;
+        }
+
+        sys_clk_config_t cfg = {0};
+        cfg.sys_clk_profile = prof;
+        int ret = fsbl_app_write_sys_clk_config(&cfg);
+        if (ret != 0) {
+            LOG_SIMPLE("sysclk: write failed (%d)\r\n", ret);
+            return ret;
+        }
+        LOG_SIMPLE("sysclk: wrote profile %lu (%s), reboot for FSBL to apply\r\n",
+                   (unsigned long)prof, sysclk_profile_name(prof));
+        return 0;
+    }
+
+    LOG_SIMPLE("sysclk: unknown '%s'\r\n", sub);
+    return -1;
+}
+
+debug_cmd_reg_t sysclk_cmd_table[] = {
+    {"sysclk", "Flash sys_clk_config + delay timing test", sysclk_test_cmd},
+};
+
+static void sysclk_cmd_register(void)
+{
+    debug_cmdline_register(sysclk_cmd_table, sizeof(sysclk_cmd_table) / sizeof(sysclk_cmd_table[0]));
+}
 
 mpe_draw_conf_t mpe_draw_conf = {0};
 od_draw_conf_t od_draw_conf = {0};
@@ -1679,6 +1818,8 @@ void driver_test_main(void)
 #endif
     driver_cmd_register_callback("io", io_cmd_register);
     driver_cmd_register_callback("rs485", rs485_cmd_register);
+    driver_cmd_register_callback("sysclk", sysclk_cmd_register);
+
     // driver_cmd_register_callback("usb", usb_cmd_register);
     // driver_cmd_register_callback("driver_core", video_cmd_register);
     // rtc_test();

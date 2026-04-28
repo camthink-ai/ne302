@@ -22,7 +22,10 @@ BUILD_DIR = build
 # C source files - Core (from .project)
 C_SOURCES =
 C_SOURCES += Core/Src/main.c
+C_SOURCES += Core/Src/cmsis_os2_stubs.c
+C_SOURCES += Core/Src/sysclk.c
 C_SOURCES += Core/Src/boot.c
+C_SOURCES += Core/Src/crc.c
 C_SOURCES += Core/Src/adc.c
 C_SOURCES += Core/Src/gpdma.c
 C_SOURCES += Core/Src/gpio.c
@@ -43,7 +46,26 @@ C_SOURCES += ../Gcc/Src/syscalls.c
 
 # Custom files (from .project)
 C_SOURCES += ../Custom/Common/Utils/generic_math.c
+C_SOURCES += ../Custom/Common/Utils/fsbl_app_common.c
 C_SOURCES += ../Custom/Core/System/ota_header.c
+
+# ISP / Camera middleware (same set as Appli)
+C_SOURCES += ../Middlewares/ST/STM32_Camera_Middleware/cmw_camera.c
+C_SOURCES += ../Middlewares/ST/STM32_Camera_Middleware/cmw_utils.c
+C_SOURCES += ../Middlewares/ST/STM32_Camera_Middleware/sensors/cmw_os04c10.c
+C_SOURCES += ../Middlewares/ST/STM32_Camera_Middleware/sensors/os04c10/os04c10.c
+C_SOURCES += ../Middlewares/ST/STM32_Camera_Middleware/sensors/os04c10/os04c10_reg.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_algo.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_cmd_parser.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_core.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_services.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_tool_com.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_ae_algo.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/Src/isp_awb_algo.c
+C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_dcmipp.c
+C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c.c
+C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c
+C_SOURCES += ../BSP/STM32N6570-DK/stm32n6570_discovery_bus.c
 C_SOURCES += ../Custom/Core/System/upgrade_manager.c
 
 # HAL drivers (from .project)
@@ -52,6 +74,8 @@ C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_adc.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_adc_ex.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_bsec.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_cortex.c
+C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_crc.c
+C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_crc_ex.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_dma.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_dma_ex.c
 C_SOURCES += ../Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_exti.c
@@ -79,16 +103,16 @@ ASM_SOURCES += Core/Startup/startup_stm32n657l0hxq_fsbl.s
 C_DEFS = $(COMMON_DEFS)
 C_DEFS += -DDEBUG
 C_DEFS += -DUSE_HAL_DRIVER
-C_DEFS += -DTX_INCLUDE_USER_DEFINE_FILE
 C_DEFS += -DTX_SINGLE_MODE_SECURE=1
 C_DEFS += -DBOOT_IN_PSRAM
+C_DEFS += -DUSE_OS04C10_SENSOR
+C_DEFS += -DSENSOR_VD66GY_FLIP=0x01U
 
 ######################################
 # Assembly Defines (from .cproject lines 36-40)
 ######################################
 AS_DEFS =
 AS_DEFS += -DDEBUG
-AS_DEFS += -DTX_INCLUDE_USER_DEFINE_FILE
 AS_DEFS += -DTX_SINGLE_MODE_SECURE=1
 AS_DEFS += -DTX_LOW_POWER
 
@@ -100,8 +124,6 @@ AS_INCLUDES += -ICore/Inc
 AS_INCLUDES += -I../Drivers/STM32N6xx_HAL_Driver/Inc
 AS_INCLUDES += -I../Drivers/CMSIS/Device/ST/STM32N6xx/Include
 AS_INCLUDES += -I../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy
-AS_INCLUDES += -I../Middlewares/ST/threadx/common/inc
-AS_INCLUDES += -I../Middlewares/ST/threadx/ports/cortex_M55/gnu/inc
 AS_INCLUDES += -I../Drivers/CMSIS/Include
 
 ######################################
@@ -112,12 +134,17 @@ C_INCLUDES += -ICore/Inc
 C_INCLUDES += -I../Drivers/STM32N6xx_HAL_Driver/Inc
 C_INCLUDES += -I../Drivers/CMSIS/Device/ST/STM32N6xx/Include
 C_INCLUDES += -I../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy
-C_INCLUDES += -I../Middlewares/ST/threadx/common/inc
-C_INCLUDES += -I../Middlewares/ST/threadx/ports/cortex_M55/gnu/inc
 C_INCLUDES += -I../Drivers/CMSIS/Include
 C_INCLUDES += -I../Custom/Common/Inc
 C_INCLUDES += -I../Custom/Core/System
 C_INCLUDES += -I../Custom/Common/Utils
+C_INCLUDES += -I../Appli/Core/Inc
+C_INCLUDES += -I../BSP/STM32N6570-DK
+C_INCLUDES += -I../Middlewares/ST/STM32_Camera_Middleware
+C_INCLUDES += -I../Middlewares/ST/STM32_Camera_Middleware/sensors
+C_INCLUDES += -I../Middlewares/ST/STM32_Camera_Middleware/sensors/os04c10
+C_INCLUDES += -I../Middlewares/ST/STM32_ISP_Library/isp/Inc
+C_INCLUDES += -I../Middlewares/Third_Party/CMSIS/RTOS2/Include
 
 ######################################
 # Compiler and Linker Flags
@@ -138,7 +165,12 @@ ASFLAGS += -mcmse
 # Linker Configuration
 ######################################
 # Linker script
-LDSCRIPT = STM32N657L0HXQ_AXISRAM2_fsbl.ld
+# Match root COMMON_DEFS: -DBOARD_PSRAM_SIZE=64 vs 32 (no separate Make variable required)
+ifneq ($(filter -DBOARD_PSRAM_SIZE=64,$(COMMON_DEFS)),)
+LDSCRIPT = STM32N657L0HXQ_FSBL.ld
+else
+LDSCRIPT = STM32N657L0HXQ_FSBL_32MB.ld
+endif
 
 # Libraries
 LIBS = -lc -lm -lnosys

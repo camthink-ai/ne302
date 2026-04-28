@@ -366,6 +366,8 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
+        cJSON_AddBoolToObject(response_json, "capture_disable_comm", camera_config.image_config.capture_disable_comm);
+        cJSON_AddBoolToObject(response_json, "capture_storage_ai", camera_config.image_config.capture_storage_ai);
         
         // Send response
         char* json_string = cJSON_Print(response_json);
@@ -478,6 +480,16 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
             }
         }
 
+        cJSON* cap_dis_comm_item = cJSON_GetObjectItem(request_json, "capture_disable_comm");
+        if (cap_dis_comm_item && cJSON_IsBool(cap_dis_comm_item)) {
+            image_config.capture_disable_comm = cJSON_IsTrue(cap_dis_comm_item) ? AICAM_TRUE : AICAM_FALSE;
+        }
+
+        cJSON* cap_stor_ai_item = cJSON_GetObjectItem(request_json, "capture_storage_ai");
+        if (cap_stor_ai_item && cJSON_IsBool(cap_stor_ai_item)) {
+            image_config.capture_storage_ai = cJSON_IsTrue(cap_stor_ai_item) ? AICAM_TRUE : AICAM_FALSE;
+        }
+
         cJSON_Delete(request_json);
 
         // Determine whether changes require restarting AI pipeline
@@ -518,6 +530,8 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", image_config.fast_capture_jpeg_quality);
+        cJSON_AddBoolToObject(response_json, "capture_disable_comm", image_config.capture_disable_comm);
+        cJSON_AddBoolToObject(response_json, "capture_storage_ai", image_config.capture_storage_ai);
         
         // Send response
         char* json_string = cJSON_Print(response_json);
@@ -833,6 +847,8 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddNumberToObject(image_config_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
+            cJSON_AddBoolToObject(image_config_json, "capture_disable_comm", camera_config.image_config.capture_disable_comm);
+            cJSON_AddBoolToObject(image_config_json, "capture_storage_ai", camera_config.image_config.capture_storage_ai);
             cJSON_AddItemToObject(response_json, "image_config", image_config_json);
         }
         
@@ -935,6 +951,18 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
                     camera_config.image_config.aec = (uint32_t)aec_value;
                 }
             }
+
+            cJSON* cap_dis_comm_item = cJSON_GetObjectItem(image_config_item, "capture_disable_comm");
+            if (cap_dis_comm_item && cJSON_IsBool(cap_dis_comm_item)) {
+                camera_config.image_config.capture_disable_comm =
+                    cJSON_IsTrue(cap_dis_comm_item) ? AICAM_TRUE : AICAM_FALSE;
+            }
+
+            cJSON* cap_stor_ai_item = cJSON_GetObjectItem(image_config_item, "capture_storage_ai");
+            if (cap_stor_ai_item && cJSON_IsBool(cap_stor_ai_item)) {
+                camera_config.image_config.capture_storage_ai =
+                    cJSON_IsTrue(cap_stor_ai_item) ? AICAM_TRUE : AICAM_FALSE;
+            }
         }
         
         cJSON_Delete(request_json);
@@ -967,6 +995,8 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddNumberToObject(image_config_response, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
+            cJSON_AddBoolToObject(image_config_response, "capture_disable_comm", camera_config.image_config.capture_disable_comm);
+            cJSON_AddBoolToObject(image_config_response, "capture_storage_ai", camera_config.image_config.capture_storage_ai);
             cJSON_AddItemToObject(response_json, "image_config", image_config_response);
         }
         

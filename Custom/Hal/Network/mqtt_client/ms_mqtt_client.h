@@ -11,7 +11,7 @@
 #include "semphr.h"
 #include "task.h"
 
-#define MS_MQTT_CLIENT_IS_DEBUG                     (1)
+#define MS_MQTT_CLIENT_IS_DEBUG                     (0)
 #define MS_MQTT_CLIENT_PING_TRY_COUNT               (3)
 #define MS_MQTT_CLIENT_MAX_EVENT_FUNC_SIZE          (3)
 #define MS_MQTT_CLIENT_TASK_BLOCK_TICK              (100)

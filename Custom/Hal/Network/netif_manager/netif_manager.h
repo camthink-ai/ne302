@@ -59,7 +59,11 @@
 #define NETIF_USB_ECM_DEFAULT_IP            {192, 168, 10, 100}
 #define NETIF_USB_ECM_DEFAULT_MASK          {255, 255, 255, 0}
 #define NETIF_USB_ECM_DEFAULT_GW            {192, 168, 10, 1}
-#define NETIF_USB_ECM_IS_CAT1_MODULE        (1)
+#if defined(STM32N6_DK_BOARD)
+    #define NETIF_USB_ECM_IS_CAT1_MODULE        (0)
+#else
+    #define NETIF_USB_ECM_IS_CAT1_MODULE        (1)
+#endif
 
 #define NETIF_NAME_STR_FMT                  "%c%c%d"
 #define NETIF_NAME_PARAMETER(netif)          (netif)->name[0], (netif)->name[1], (netif)->num

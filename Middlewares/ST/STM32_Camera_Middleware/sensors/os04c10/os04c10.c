@@ -366,7 +366,8 @@ int32_t OS04C10_Init(OS04C10_Object_t *pObj, uint32_t Resolution, uint32_t Pixel
     {0x378d, 0x30},
     {0x3790, 0x4a},
     {0x3791, 0xa2},
-    {0x3798, 0x40},
+    // {0x3798, 0x40},    //HCG mode
+    {0x3798, 0xc0},       //LCG mode
     {0x379e, 0x00},
     {0x379f, 0x04},
     {0x37a1, 0x01},
@@ -471,7 +472,6 @@ int32_t OS04C10_Init(OS04C10_Object_t *pObj, uint32_t Resolution, uint32_t Pixel
           }
         }
       }
-
       // if(ret == OS04C10_OK)
       // {
       //   /* Set configuration for Serial Interface */
@@ -1062,8 +1062,8 @@ int32_t OS04C10_ReadID(OS04C10_Object_t *pObj, uint32_t *Id)
   int32_t ret;
   uint8_t tmp;
 
-  /* Initialize I2C */
-  pObj->IO.Init();
+  // /* Initialize I2C */
+  // pObj->IO.Init();
 
   /* Prepare the camera to be configured */
   tmp = 0x80;
@@ -1074,7 +1074,7 @@ int32_t OS04C10_ReadID(OS04C10_Object_t *pObj, uint32_t *Id)
   }
   else
   {
-    (void)OS04C10_Delay(pObj, 50);
+    (void)OS04C10_Delay(pObj, 5);
 
     if (os04c10_read_reg(&pObj->Ctx, OS04C10_CHIP_ID_HIGH_BYTE, &tmp, 1) != OS04C10_OK)
     {

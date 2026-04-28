@@ -54,6 +54,11 @@
  // AI Debug configuration key names
  #define NVS_KEY_AI_ENABLE           "ai_enabled"
  #define NVS_KEY_AI_1_ACTIVE         "ai_1_active"
+ /* AI pipeline input resolution (stored in NVS). If reading fails or the value is invalid/placeholder,
+  * do not guess a resolution. Wait until the model is loaded and obtain the input size from
+  * nn_model_info_t (or an equivalent interface) before configuring the AI pipeline. */
+ #define NVS_KEY_AI_PIPE_WIDTH       "ai_pipe_width"
+ #define NVS_KEY_AI_PIPE_HEIGHT      "ai_pipe_height"
  #define NVS_KEY_CONFIDENCE          "confidence"
  #define NVS_KEY_NMS_THRESHOLD       "nms_thresh"
  
@@ -94,6 +99,9 @@
  #define NVS_KEY_IMAGE_FAST_SKIP_FRAMES  "img_fast_skip"
  #define NVS_KEY_IMAGE_FAST_RESOLUTION   "img_fast_res"
  #define NVS_KEY_IMAGE_FAST_JPEG_QUALITY "img_fast_jq"
+ #define NVS_KEY_CAPTURE_DISABLE_COMM    "capture_un_comm"
+ #define NVS_KEY_CAPTURE_STORAGE_AI      "capture_stor_ai"
+ #define NVS_KEY_CAPTURE_QUICK_MODE      "capture_qmode"
  #define NVS_KEY_LIGHT_CONNECTED         "light_conn"
  #define NVS_KEY_LIGHT_MODE              "light_mode"
  #define NVS_KEY_LIGHT_START_HOUR        "light_s_h"

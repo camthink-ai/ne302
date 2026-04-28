@@ -26,6 +26,7 @@
 #include "web_service.h"
 #include "ai_draw_service.h"
 #include "nn.h"
+#include "quick_snapshot.h"
 #include "cJSON.h"
  
  
@@ -3151,6 +3152,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     uint8_t *jpeg_buffer = NULL;
     uint8_t *jpeg_copy = NULL;
     int jpeg_size = 0;
+    size_t jpeg_size_ret = 0;
     nn_result_t nn_result = {0};
     uint32_t frame_id = 0;
     aicam_result_t ret = AICAM_OK;
@@ -3158,7 +3160,14 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     step_start_time = rtc_get_uptime_ms();
     if (requires_time_optimized_mode) {
         LOG_SVC_INFO("[TIMING] Step 1: Capturing image using fast capture API (RTC wakeup)...");
-        ret = device_service_camera_capture_fast(&jpeg_buffer, &jpeg_size, enable_ai, &nn_result, &frame_id);
+        if (quick_snapshot_is_init()) {
+            ret = quick_snapshot_wait_capture_jpeg(&jpeg_buffer, &jpeg_size_ret);
+            jpeg_size = (int)jpeg_size_ret;
+            if (ret == AICAM_OK && enable_ai) ret = quick_snapshot_wait_ai_result(&nn_result);
+            if (ret == AICAM_OK) ret = quick_snapshot_get_frame_id(&frame_id);
+        } else {
+            ret = device_service_camera_capture_fast(&jpeg_buffer, &jpeg_size, enable_ai, &nn_result, &frame_id);
+        }
         step_end_time = rtc_get_uptime_ms();
         step_duration = step_end_time - step_start_time;
         
@@ -3210,25 +3219,10 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             uint8_t *inference_jpeg = NULL;
             uint32_t inference_jpeg_size = 0;
 
-            jpeg_copy = buffer_calloc(1, jpeg_size);
-            if (!jpeg_copy) {
-                LOG_SVC_WARN("Failed to allocate JPEG copy buffer");
-            } else {
-                memcpy(jpeg_copy, jpeg_buffer, jpeg_size);
-            }
-            
-            if(jpeg_copy) {
-                device_service_camera_free_jpeg_buffer(jpeg_buffer);
-                jpeg_buffer = jpeg_copy;
-                
-                step_start_time = rtc_get_uptime_ms();
-                LOG_SVC_INFO("[TIMING] Step 1.1.2: Generating inference image...");
-                ret = generate_inference_image(jpeg_buffer, jpeg_size, &nn_result, 
-                                        &inference_jpeg, &inference_jpeg_size);
-                step_end_time = rtc_get_uptime_ms();
-                step_duration = step_end_time - step_start_time;
-                
-                if (ret == AICAM_OK && inference_jpeg && inference_jpeg_size > 0) {
+            if (quick_snapshot_is_init()) {
+                ret = quick_snapshot_wait_ai_jpeg(&inference_jpeg, &jpeg_size_ret);
+                if (ret == AICAM_OK && inference_jpeg && jpeg_size_ret > 0) {
+                    inference_jpeg_size = (uint32_t)jpeg_size_ret;
                     snprintf(filename, sizeof(filename), "image_%lu_%lu_inference.jpg", timestamp, (unsigned long)frame_id);
                     aicam_result_t inference_ret = sd_write_file(inference_jpeg, inference_jpeg_size, filename);
                     step_end_time = rtc_get_uptime_ms();
@@ -3247,6 +3241,46 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                 } else {
                     LOG_SVC_WARN("[TIMING] Step 1.1.2 SKIPPED: Failed to generate inference image: %d (duration: %lu ms)", 
                                 ret, (unsigned long)step_duration);
+                }
+            } else {
+                jpeg_copy = buffer_calloc(1, jpeg_size);
+                if (!jpeg_copy) {
+                    LOG_SVC_WARN("Failed to allocate JPEG copy buffer");
+                } else {
+                    memcpy(jpeg_copy, jpeg_buffer, jpeg_size);
+                }
+
+                if (jpeg_copy) {
+                    device_service_camera_free_jpeg_buffer(jpeg_buffer);
+                    jpeg_buffer = jpeg_copy;
+                    
+                    step_start_time = rtc_get_uptime_ms();
+                    LOG_SVC_INFO("[TIMING] Step 1.1.2: Generating inference image...");
+                    ret = generate_inference_image(jpeg_buffer, jpeg_size, &nn_result, 
+                                            &inference_jpeg, &inference_jpeg_size);
+                    step_end_time = rtc_get_uptime_ms();
+                    step_duration = step_end_time - step_start_time;
+                    
+                    if (ret == AICAM_OK && inference_jpeg && inference_jpeg_size > 0) {
+                        snprintf(filename, sizeof(filename), "image_%lu_%lu_inference.jpg", timestamp, (unsigned long)frame_id);
+                        aicam_result_t inference_ret = sd_write_file(inference_jpeg, inference_jpeg_size, filename);
+                        step_end_time = rtc_get_uptime_ms();
+                        step_duration = step_end_time - step_start_time;
+                        
+                        if (inference_ret != AICAM_OK) {
+                            LOG_SVC_ERROR("[TIMING] Step 1.1.2 FAILED: Store inference image to sd card failed: %d (duration: %lu ms)", 
+                                        inference_ret, (unsigned long)step_duration);
+                        } else {
+                            LOG_SVC_INFO("[TIMING] Step 1.1.2 COMPLETED: Inference image stored to SD card (duration: %lu ms)", 
+                                        (unsigned long)step_duration);
+                        }
+                        
+                        // Free inference JPEG buffer
+                        device_service_camera_free_jpeg_buffer(inference_jpeg);
+                    } else {
+                        LOG_SVC_WARN("[TIMING] Step 1.1.2 SKIPPED: Failed to generate inference image: %d (duration: %lu ms)", 
+                                    ret, (unsigned long)step_duration);
+                    }
                 }
             }
         }

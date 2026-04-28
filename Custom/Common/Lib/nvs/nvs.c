@@ -180,11 +180,11 @@ static int nvs_flash_cmp_const(nvs_fs_t *fs, uint32_t addr, uint8_t value,
             uint8_t buf[32];
             size_t dump_len = bytes_to_cmp > 32 ? 32 : bytes_to_cmp;
             nvs_flash_rd(fs, addr, buf, dump_len);
-            printf("[NVS] cmp_const mismatch at 0x%x, expect=0x%02x, got: ", (unsigned int)addr, value);
-            for (size_t j = 0; j < dump_len; j++) {
-                printf("%02x ", buf[j]);
-            }
-            printf("\r\n");
+            // printf("[NVS] cmp_const mismatch at 0x%x, expect=0x%02x, got: ", (unsigned int)addr, value);
+            // for (size_t j = 0; j < dump_len; j++) {
+            //     printf("%02x ", buf[j]);
+            // }
+            // printf("\r\n");
             return rc;
         }
         len -= bytes_to_cmp;
@@ -519,8 +519,9 @@ static int nvs_startup(nvs_fs_t *fs)
     uint16_t i, closed_sectors = 0;
     uint8_t erase_value = fs->flash_parameters.erase_value;
 
-    printf("[NVS] startup: offset=0x%x, sector_count=%d, sector_size=%d\r\n", 
-           (unsigned int)fs->offset, fs->sector_count, fs->sector_size);
+    /* printf("[NVS] startup: offset=0x%x, sector_count=%d, sector_size=%d\r\n",
+     *        (unsigned int)fs->offset, fs->sector_count, fs->sector_size);
+     */
 
     fs->mutex_ops.lock(fs->mutex);
 
@@ -541,10 +542,10 @@ static int nvs_startup(nvs_fs_t *fs)
             }
         }
     }
-    printf("[NVS] scan: closed_sectors=%d, i=%d, addr=0x%x\r\n", closed_sectors, i, (unsigned int)addr);
+    // printf("[NVS] scan: closed_sectors=%d, i=%d, addr=0x%x\r\n", closed_sectors, i, (unsigned int)addr);
     
     if (closed_sectors == fs->sector_count) {
-        printf("[NVS] ERROR: all sectors closed (EDEADLK)\r\n");
+        // printf("[NVS] ERROR: all sectors closed (EDEADLK)\r\n");
         rc = -EDEADLK;
         goto end;
     }
@@ -559,12 +560,12 @@ static int nvs_startup(nvs_fs_t *fs)
 
     fs->ate_wra = addr - ate_size;
     fs->data_wra = addr & ADDR_SECT_MASK;
-    printf("[NVS] init pos: ate_wra=0x%x, data_wra=0x%x\r\n", (unsigned int)fs->ate_wra, (unsigned int)fs->data_wra);
+    // printf("[NVS] init pos: ate_wra=0x%x, data_wra=0x%x\r\n", (unsigned int)fs->ate_wra, (unsigned int)fs->data_wra);
 
     while (fs->ate_wra >= fs->data_wra) {
         rc = nvs_flash_ate_rd(fs, fs->ate_wra, &last_ate);
         if (rc) {
-            printf("[NVS] ERROR: ate_rd failed at 0x%x, rc=%d\r\n", (unsigned int)fs->ate_wra, rc);
+            // printf("[NVS] ERROR: ate_rd failed at 0x%x, rc=%d\r\n", (unsigned int)fs->ate_wra, rc);
             goto end;
         }
 
@@ -580,7 +581,7 @@ static int nvs_startup(nvs_fs_t *fs)
             fs->data_wra += nvs_al_size(fs, last_ate.len);
 
             if (fs->ate_wra == fs->data_wra && last_ate.len) {
-                printf("[NVS] ERROR: ate/data overlap (ESPIPE)\r\n");
+                // printf("[NVS] ERROR: ate/data overlap (ESPIPE)\r\n");
                 rc = -ESPIPE;
                 goto end;
             }
@@ -595,7 +596,7 @@ static int nvs_startup(nvs_fs_t *fs)
         rc = nvs_flash_cmp_const(fs, fs->data_wra, erase_value,
                 empty_len);
         if (rc < 0) {
-            printf("[NVS] ERROR: cmp_const failed at data_wra=0x%x, rc=%d\r\n", (unsigned int)fs->data_wra, rc);
+            // printf("[NVS] ERROR: cmp_const failed at data_wra=0x%x, rc=%d\r\n", (unsigned int)fs->data_wra, rc);
             goto end;
         }
         if (!rc) {
@@ -609,14 +610,14 @@ static int nvs_startup(nvs_fs_t *fs)
     nvs_sector_advance(fs, &addr);
     rc = nvs_flash_cmp_const(fs, addr, erase_value, fs->sector_size);
     if (rc < 0) {
-        printf("[NVS] ERROR: next sector cmp failed at 0x%x, rc=%d\r\n", (unsigned int)addr, rc);
+        // printf("[NVS] ERROR: next sector cmp failed at 0x%x, rc=%d\r\n", (unsigned int)addr, rc);
         goto end;
     }
     if (rc) {
-        printf("[NVS] next sector not empty at 0x%x, erasing...\r\n", (unsigned int)addr);
+        // printf("[NVS] next sector not empty at 0x%x, erasing...\r\n", (unsigned int)addr);
         rc = nvs_flash_erase_sector(fs, fs->ate_wra);
         if (rc) {
-            printf("[NVS] ERROR: erase_sector failed, rc=%d\r\n", rc);
+            // printf("[NVS] ERROR: erase_sector failed, rc=%d\r\n", rc);
             goto end;
         }
         fs->ate_wra &= ADDR_SECT_MASK;
@@ -624,13 +625,13 @@ static int nvs_startup(nvs_fs_t *fs)
         fs->data_wra = (fs->ate_wra & ADDR_SECT_MASK);
         rc = nvs_gc(fs);
         if (rc) {
-            printf("[NVS] ERROR: gc failed, rc=%d\r\n", rc);
+            // printf("[NVS] ERROR: gc failed, rc=%d\r\n", rc);
             goto end;
         }
     }
 
 end:
-    printf("[NVS] startup end: rc=%d\r\n", rc);
+    // printf("[NVS] startup end: rc=%d\r\n", rc);
     fs->mutex_ops.unlock(fs->mutex);
     return rc;
 }

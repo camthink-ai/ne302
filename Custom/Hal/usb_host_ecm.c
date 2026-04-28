@@ -1,6 +1,7 @@
 #include "usb_host_ecm.h"
 #include "cat1.h"
 #include "ux_hcd_stm32.h"
+#include "ux_api.h"
 #include "ux_system.h"
 #include "ux_utility.h"
 #include "pwr.h"
@@ -12,7 +13,11 @@ static usb_host_ecm_event_callback_t g_usb_host_ecm_event_callback = NULL;
 
 void usb_host_ecm_error_callback(UINT system_level, UINT system_context, UINT error_code)
 {
-    printf("USB ECM Error: 0x%X\r\n ", (unsigned int)error_code);
+    printf("USB ECM Error: level=0x%X context=0x%X code=0x%X (%u)\r\n",
+           (unsigned int)system_level,
+           (unsigned int)system_context,
+           (unsigned int)error_code,
+           (unsigned int)error_code);
     if (g_usb_host_ecm_event_callback != NULL) {
         g_usb_host_ecm_event_callback(USB_HOST_ECM_EVENT_ERROR, (void *)(uintptr_t)error_code);
     }
@@ -119,8 +124,66 @@ int usb_host_ecm_init(usb_host_ecm_event_callback_t event_callback)
 
 int usb_host_ecm_send_raw_data(NX_PACKET *packet)
 {
-    if (ux_host_cdc_ecm == NULL) return -1;
-    return ux_host_class_cdc_ecm_write(ux_host_cdc_ecm, packet);
+    UX_INTERRUPT_SAVE_AREA
+    UX_HOST_CLASS_CDC_ECM *inst;
+
+    if (packet == NULL) return (int)UX_INVALID_PARAMETER;
+
+    /* Snapshot instance under IRQ lock to avoid disconnect race. */
+    UX_DISABLE
+    inst = ux_host_cdc_ecm;
+    UX_RESTORE
+
+    if (inst == UX_NULL) return (int)UX_NO_DEVICE_CONNECTED;
+    if (inst->ux_host_class_cdc_ecm_state != UX_HOST_CLASS_INSTANCE_LIVE) return (int)UX_HOST_CLASS_INSTANCE_UNKNOWN;
+    if (inst->ux_host_class_cdc_ecm_link_state != UX_HOST_CLASS_CDC_ECM_LINK_STATE_UP) return (int)UX_CLASS_CDC_ECM_LINK_STATE_DOWN_ERROR;
+
+    return (int)ux_host_class_cdc_ecm_write(inst, packet);
+}
+
+int usb_host_ecm_wait_tx_done(uint32_t timeout_ms)
+{
+    UX_INTERRUPT_SAVE_AREA
+    UX_HOST_CLASS_CDC_ECM *inst;
+    UX_TRANSFER *transfer_request = UX_NULL;
+    ULONG start_tick;
+    ULONG timeout_ticks;
+
+    /* Snapshot instance under IRQ lock to avoid disconnect race. */
+    UX_DISABLE
+    inst = ux_host_cdc_ecm;
+    UX_RESTORE
+
+    if (inst == UX_NULL) return (int)UX_NO_DEVICE_CONNECTED;
+    if (inst->ux_host_class_cdc_ecm_state != UX_HOST_CLASS_INSTANCE_LIVE) return (int)UX_HOST_CLASS_INSTANCE_UNKNOWN;
+    if (inst->ux_host_class_cdc_ecm_bulk_out_endpoint == UX_NULL) return (int)UX_ENDPOINT_HANDLE_UNKNOWN;
+
+    transfer_request = &inst->ux_host_class_cdc_ecm_bulk_out_endpoint->ux_endpoint_transfer_request;
+
+    /* Fast path: not pending (idle or already completed). */
+    if (transfer_request->ux_transfer_request_completion_code != UX_TRANSFER_STATUS_PENDING) {
+        return (int)transfer_request->ux_transfer_request_completion_code;
+    }
+
+    start_tick = _ux_utility_time_get();
+    timeout_ticks = (timeout_ms == USB_HOST_ECM_WAIT_FOREVER) ? UX_WAIT_FOREVER : UX_MS_TO_TICK_NON_ZERO(timeout_ms);
+
+    /* Poll completion_code until it changes from PENDING. */
+    for (;;) {
+        if (transfer_request->ux_transfer_request_completion_code != UX_TRANSFER_STATUS_PENDING) {
+            return (int)transfer_request->ux_transfer_request_completion_code;
+        }
+
+        if (timeout_ticks != UX_WAIT_FOREVER) {
+            ULONG elapsed = _ux_utility_time_get() - start_tick;
+            if (elapsed >= timeout_ticks) return (int)UX_TRANSFER_STATUS_PENDING;
+        }
+
+        /* Yield to let USBX/HCD callbacks run. */
+        /* If instance gets deactivated, stop waiting. */
+        if (inst->ux_host_class_cdc_ecm_state != UX_HOST_CLASS_INSTANCE_LIVE) return (int)UX_HOST_CLASS_INSTANCE_UNKNOWN;
+        _ux_utility_delay_ms(1);
+    }
 }
 
 void usb_host_ecm_deinit(void)

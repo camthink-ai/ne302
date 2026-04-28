@@ -135,7 +135,7 @@ int32_t BSP_I2C1_IsReady(uint16_t DevAddr, uint32_t Trials);
 int32_t BSP_I2C1_RegisterDefaultMspCallbacks (void);
 int32_t BSP_I2C1_RegisterMspCallbacks (BSP_I2C_Cb_t *Callback);
 #endif /* USE_HAL_I2C_REGISTER_CALLBACKS */
-HAL_StatusTypeDef MX_I2C1_Init(I2C_HandleTypeDef *phi2c, uint32_t timing);
+HAL_StatusTypeDef BSP_MX_I2C1_Init(I2C_HandleTypeDef *phi2c, uint32_t timing);
 int32_t BSP_I2C2_Init(void);
 int32_t BSP_I2C2_DeInit(void);
 int32_t BSP_I2C2_WriteReg(uint16_t DevAddr, uint16_t Reg, uint8_t *pData, uint16_t Length);

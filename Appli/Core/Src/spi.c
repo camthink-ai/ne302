@@ -23,6 +23,7 @@
 /* USER CODE BEGIN 0 */
 #include <string.h>
 #include "cmsis_os2.h"
+#include "rcc_ic_auto.h"
 /* USER CODE END 0 */
 
 SPI_HandleTypeDef hspi2;
@@ -199,27 +200,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
   /** Initializes the peripherals clock
   */
-#if CPU_CLK_USE_400MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI2;
-    PeriphClkInitStruct.Spi2ClockSelection = RCC_SPI2CLKSOURCE_IC8;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockDivider = 5;
-#elif CPU_CLK_USE_200MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI2;
-    PeriphClkInitStruct.Spi2ClockSelection = RCC_SPI2CLKSOURCE_IC8;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockSelection = RCC_ICCLKSOURCE_PLL3;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockDivider = 4;
-#elif CPU_CLK_USE_HSI_800MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI2;
-    PeriphClkInitStruct.Spi2ClockSelection = RCC_SPI2CLKSOURCE_IC8;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockDivider = 10;
-#else // CPU_CLK_USE_800MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI2;
-    PeriphClkInitStruct.Spi2ClockSelection = RCC_SPI2CLKSOURCE_IC8;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC8].ClockDivider = 10;
-#endif
+    RCC_IC_FillSPI2_PLL_IC8(&PeriphClkInitStruct);
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();
@@ -441,27 +422,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
   /** Initializes the peripherals clock
   */
-#if CPU_CLK_USE_400MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI4;
-    PeriphClkInitStruct.Spi4ClockSelection = RCC_SPI4CLKSOURCE_IC9;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockDivider = 4;
-#elif CPU_CLK_USE_200MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI4;
-    PeriphClkInitStruct.Spi4ClockSelection = RCC_SPI4CLKSOURCE_IC9;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockDivider = 2;
-#elif CPU_CLK_USE_HSI_800MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI4;
-    PeriphClkInitStruct.Spi4ClockSelection = RCC_SPI4CLKSOURCE_IC9;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockDivider = 8;
-#else // CPU_CLK_USE_800MHZ
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI4;
-    PeriphClkInitStruct.Spi4ClockSelection = RCC_SPI4CLKSOURCE_IC9;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    PeriphClkInitStruct.ICSelection[RCC_IC9].ClockDivider = 8;
-#endif
+    RCC_IC_FillSPI4_PLL_IC9(&PeriphClkInitStruct);
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();

@@ -625,6 +625,6 @@ void rtmp_push_test_register_commands(void)
     
     debug_cmdline_register(rtmp_test_cmd_table, 
                           sizeof(rtmp_test_cmd_table) / sizeof(rtmp_test_cmd_table[0]));
-    LOG_SIMPLE("[RTMP_TEST] Commands registered\r\n");
+    // LOG_SIMPLE("[RTMP_TEST] Commands registered\r\n");
 }
 

@@ -61,7 +61,7 @@ static factory_test_result_t test_psram(void) {
     
     // Quick sanity check - test a small area that's known to be available
     // Use SRAM_AI_EXT area which should be initialized
-    volatile uint32_t *psram = (volatile uint32_t *)0x90800000; // Offset 8MB, safer area
+    volatile uint32_t *psram = (volatile uint32_t *)0x90400000; // Offset 4MB, safer area
     const uint32_t test_pattern = 0xDEADBEEF;
     uint32_t backup;
     
@@ -233,7 +233,7 @@ int factory_test_init(void) {
     memset(&g_last_report, 0, sizeof(g_last_report));
     g_factory_test_initialized = true;
     
-    LOG_SIMPLE("[FACTORY] Factory test module initialized (v%s)\r\n", FACTORY_TEST_VERSION);
+    // LOG_SIMPLE("[FACTORY] Factory test module initialized (v%s)\r\n", FACTORY_TEST_VERSION);
     return 0;
 }
 
@@ -710,6 +710,6 @@ void factory_test_register_commands(void) {
     factory_test_init();
     debug_register_commands(factory_commands, 
                             sizeof(factory_commands) / sizeof(factory_commands[0]));
-    LOG_SIMPLE("[FACTORY] Commands registered\r\n");
+    // LOG_SIMPLE("[FACTORY] Commands registered\r\n");
 }
 

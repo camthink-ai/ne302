@@ -471,21 +471,21 @@ uint64_t rtc_get_uptime_ms(void)
 {
     // System relative time (uptime) based on system tick
     // Not affected by RTC time modification
-    static uint32_t system_start_tick = 0;
+    // static uint32_t system_start_tick = 0;
     
-    if (system_start_tick == 0) {
-        system_start_tick = osKernelGetTickCount();
-    }
+    // if (system_start_tick == 0) {
+    //     system_start_tick = osKernelGetTickCount();
+    // }
     
-    uint32_t current_tick = osKernelGetTickCount();
-    uint32_t elapsed_ticks = current_tick - system_start_tick;
+    // uint32_t current_tick = osKernelGetTickCount();
+    // uint32_t elapsed_ticks = current_tick - system_start_tick;
     
-    // Convert ticks to milliseconds
-    // osKernelGetTickFreq() returns ticks per second (Hz)
-    uint32_t tick_freq = osKernelGetTickFreq();
-    uint64_t uptime_ms = ((uint64_t)elapsed_ticks * 1000) / tick_freq;
+    // // Convert ticks to milliseconds
+    // // osKernelGetTickFreq() returns ticks per second (Hz)
+    // uint32_t tick_freq = osKernelGetTickFreq();
+    // uint64_t uptime_ms = ((uint64_t)elapsed_ticks * 1000) / tick_freq;
     
-    return uptime_ms;
+    return HAL_GetTick();
 }
 
 static int rtc_init(void *priv)
@@ -510,7 +510,7 @@ static int rtc_init(void *priv)
         rtc->timezone = TIMEZONE;
         rtc->sched_manager.timezone = rtc->timezone;
     }
-    printf("timezone: %d\r\n", rtc->timezone);
+    // printf("timezone: %d\r\n", rtc->timezone);
     rtc->is_init = true;
     LOG_DRV_DEBUG("rtc_init end\r\n");
     return 0;

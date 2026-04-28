@@ -11,7 +11,7 @@ extern "C" {
 #include "queue.h"
 #include "semphr.h"
 
-#define __DEF_MODEM_DBG__           (2)
+#define __DEF_MODEM_DBG__           (1)
 #if __DEF_MODEM_DBG__ > 0
     #define MODEM_LOGE(fmt, ...)    printf("[%s: %d]"fmt"\r\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #else

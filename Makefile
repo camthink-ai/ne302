@@ -102,7 +102,7 @@ OPT = -g3
 COMMON_CFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections -fstack-usage -std=gnu11
 COMMON_ASFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 COMMON_LDFLAGS = $(MCU_FLAGS) -specs=nano.specs -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--print-memory-usage -u _printf_float
-COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DCPU_CLK_USE_800MHZ -DPWR_USE_3V3
+COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=64
 
 # Export to sub-Makefiles
 export CC AS CP SZ READELF HEX BIN MCU_FLAGS OPT

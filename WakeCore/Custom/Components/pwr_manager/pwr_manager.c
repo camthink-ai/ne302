@@ -317,7 +317,7 @@ void pwr_enter_standby(uint32_t wakeup_flags, pwr_rtc_wakeup_config_t *rtc_wakeu
 
     if (rtc_wakeup_config != NULL && wakeup_flags & PWR_WAKEUP_FLAG_RTC_TIMING && rtc_wakeup_config->wakeup_time_s > 0) {
         if (rtc_wakeup_config->wakeup_time_s <= PWR_RTC_WAKEUP_ADV_OFFSET_S) {
-            pwr_n6_restart(900, 1000);
+            pwr_n6_restart(970, 30);
             global_wakeup_flags = (PWR_WAKEUP_FLAG_VALID | PWR_WAKEUP_FLAG_STANDBY | PWR_WAKEUP_FLAG_RTC_TIMING);
             return;
         }
@@ -419,7 +419,7 @@ void pwr_enter_stop2(uint32_t wakeup_flags, uint32_t switch_bits, pwr_rtc_wakeup
 
     if (rtc_wakeup_config != NULL && wakeup_flags & PWR_WAKEUP_FLAG_RTC_TIMING && rtc_wakeup_config->wakeup_time_s > 0) {
         if (rtc_wakeup_config->wakeup_time_s <= PWR_RTC_WAKEUP_ADV_OFFSET_S) {
-            pwr_n6_restart(900, 1000);
+            pwr_n6_restart(970, 30);
             global_wakeup_flags = (PWR_WAKEUP_FLAG_VALID | PWR_WAKEUP_FLAG_STOP2 | PWR_WAKEUP_FLAG_RTC_TIMING);
             return;
         }

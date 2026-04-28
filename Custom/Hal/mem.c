@@ -190,7 +190,7 @@ int32_t hal_mem_init(void *internal_base, void *external_base)
     }
 
     g_slab_pools_initialized = true;
-    printf("Slab memory pools initialized successfully\r\n");
+    // printf("Slab memory pools initialized successfully\r\n");
 
     return MEM_OK;
 }
@@ -507,7 +507,7 @@ static int hal_mem_module_init(void *priv)
     }
 
     mem_mod->is_init = true;
-    printf("Slab memory pools initialized successfully\r\n");
+    // printf("Slab memory pools initialized successfully\r\n");
     return 0;
 }
 
@@ -552,7 +552,7 @@ void hal_mem_register(void)
     device_register(g_mem_module.dev);
     driver_cmd_register_callback("mpool", hal_mem_cmd_register);
 
-    printf("Memory module registered\r\n");
+    // printf("Memory module registered\r\n");
 }
 
 void hal_mem_unregister(void)
@@ -562,5 +562,5 @@ void hal_mem_unregister(void)
         free(g_mem_module.dev);
         g_mem_module.dev = NULL;
     }
-    LOG_DRV_DEBUG("Memory module unregistered\r\n");
+    // LOG_DRV_DEBUG("Memory module unregistered\r\n");
 }

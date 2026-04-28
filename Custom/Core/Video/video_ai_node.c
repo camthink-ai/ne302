@@ -281,6 +281,7 @@ aicam_result_t video_ai_node_load_model(video_node_t *node, uintptr_t model_ptr)
         // Get model information
         nn_get_model_info(&data->model_info);
         LOG_CORE_INFO("AI model loaded: %s", data->model_info.name);
+        json_config_sync_ai_pipe_nvs_from_input_size(data->model_info.input_width, data->model_info.input_height);
         return AICAM_OK;
     } else {
         LOG_CORE_ERROR("Failed to load AI model: %d", nn_ret);
@@ -674,6 +675,8 @@ static aicam_result_t video_ai_node_load_model_active(video_node_t *node) {
         LOG_CORE_ERROR("Failed to get model info");
         return AICAM_ERROR;
     }
+
+    json_config_sync_ai_pipe_nvs_from_input_size(data->model_info.input_width, data->model_info.input_height);
 
     LOG_CORE_INFO("AI model loaded: %dx%d from %p", data->model_info.input_width, data->model_info.input_height, model_ptr);
     return AICAM_OK;

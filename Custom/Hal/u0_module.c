@@ -89,7 +89,7 @@ void u0_module_notify_cb(void *handler, ms_bridging_frame_t *frame)
 {
     ms_bridging_version_t version = {0};
     value_change_event_t value_change_event = {0};
-    LOG_SIMPLE("u0 module notify: %d", frame->header.cmd);
+    // LOG_SIMPLE("u0 module notify: %d", frame->header.cmd);
 
     if (frame->header.type == MS_BR_FRAME_TYPE_REQUEST) {
         switch (frame->header.cmd) {
@@ -114,7 +114,7 @@ void u0_module_notify_cb(void *handler, ms_bridging_frame_t *frame)
                     osMessageQueuePut(value_change_event_queue, &value_change_event, 0, 0);
                 }
                 ms_bridging_event_ack(handler, frame);
-                LOG_SIMPLE("key value: %d", g_key_value);
+                // LOG_SIMPLE("key value: %d", g_key_value);
                 break;
             case MS_BR_FRAME_CMD_PIR_VALUE:
                 g_pir_value = *(uint32_t *)frame->data;
@@ -125,7 +125,7 @@ void u0_module_notify_cb(void *handler, ms_bridging_frame_t *frame)
                     osMessageQueuePut(value_change_event_queue, &value_change_event, 0, 0);
                 }
                 ms_bridging_event_ack(handler, frame);
-                LOG_SIMPLE("pir value: %d", g_pir_value);
+                // LOG_SIMPLE("pir value: %d", g_pir_value);
                 break;
             default:
                 break;

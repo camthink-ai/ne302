@@ -1038,7 +1038,7 @@ void wifi_mode_process(void)
         wifi_update_times = 0;
     }
 
-    printf("\r\n wifi_mode: %s , wifi_update_times: %ld \r\n", wifi_mode, wifi_update_times);
+    // printf("\r\n wifi_mode: %s , wifi_update_times: %ld \r\n", wifi_mode, wifi_update_times);
 
     if (strcmp(WIFI_MODE_UPDATE, wifi_mode) == 0) {
         printf("\r\n wifi_update_process \r\n");

@@ -66,6 +66,7 @@ typedef enum {
     MISC_CMD_PWM_SET_BLINK,     // PWM set blink
 
     MISC_CMD_ADC_GET_PERCENT = MISC_CMD_BASE + 0x30,       // Get ADC percent
+    MISC_CMD_USB_GET_STATUS, // Get USB status
 
     MISC_CMD_IO_GET_GROUP_INFO = MISC_CMD_BASE + 0x40,
     MISC_CMD_IO_SET_MODE,
@@ -139,6 +140,13 @@ typedef struct {
     io_group_cfg_t groups[MAX_GPIO_GROUPS];
 } io_group_info_t;
 
+typedef struct {
+    uint32_t voltage;
+    uint8_t rate;
+    uint8_t usb_status;
+    char power_supply_type[16];
+} battery_data_t;
+
 /*
  * Miscellaneous structure
 */
@@ -151,6 +159,7 @@ typedef struct {
     uint32_t handle;        // handle
     PowerHandle pwr_handle; // power handle
     void *config;
+    void *data;
 } misc_t;
 
 int misc_register(void);

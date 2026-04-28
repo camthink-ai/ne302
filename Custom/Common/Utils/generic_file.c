@@ -29,6 +29,16 @@ static file_instance_t* get_current_instance()
     return NULL;
 }
 
+FS_Type_t file_get_current_type(void)
+{
+    for (int i = 0; i < FS_MAX; i++) {
+        if (instances[i].handle == current_handle) {
+            return (FS_Type_t)i;
+        }
+    }
+    return FS_MAX;
+}
+
 void* file_fopen(const char *path, const char *mode) 
 {
     file_instance_t* inst = get_current_instance();

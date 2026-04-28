@@ -48,12 +48,19 @@ typedef enum {
   */
 
 /**
- * @brief This function boots on the application, the operation consists in mapping 
+ * @brief This function copies the application from the flash to the SRAM/PSRAM
+ * @return @ref BOOTStatus_TypeDef
+ **/
+BOOTStatus_TypeDef BOOT_Copy_Application(void);
+
+
+/**
+ * @brief This function jumps to the application, the operation consists in mapping 
  *        the memories, loading the code and jumping in the application. 
  *
  * @return @ref BOOTStatus_TypeDef
  **/
- BOOTStatus_TypeDef BOOT_Application(void);
+ BOOTStatus_TypeDef BOOT_Jump_Application(void);
 
 /**
   * @}

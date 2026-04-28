@@ -378,6 +378,14 @@ aicam_result_t json_config_save_device_service_image_config_to_nvs(const image_c
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image fast capture JPEG quality to NVS");
 
+    result = json_config_nvs_write_bool(NVS_KEY_CAPTURE_DISABLE_COMM, config->capture_disable_comm);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save capture disable comm to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_CAPTURE_STORAGE_AI, config->capture_storage_ai);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save capture storage AI to NVS");
+
     LOG_CORE_INFO("Device service image configuration saved to NVS successfully");
     return result;
 }
@@ -1408,6 +1416,18 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->device_service.image_config.fast_capture_jpeg_quality = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_IMAGE_FAST_JPEG_QUALITY, config->device_service.image_config.fast_capture_jpeg_quality);
+
+    result = json_config_nvs_read_bool(NVS_KEY_CAPTURE_DISABLE_COMM, &temp_bool);
+    if (result == AICAM_OK)
+        config->device_service.image_config.capture_disable_comm = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_CAPTURE_DISABLE_COMM, config->device_service.image_config.capture_disable_comm);
+
+    result = json_config_nvs_read_bool(NVS_KEY_CAPTURE_STORAGE_AI, &temp_bool);
+    if (result == AICAM_OK)
+        config->device_service.image_config.capture_storage_ai = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_CAPTURE_STORAGE_AI, config->device_service.image_config.capture_storage_ai);
 
     // Load device service configuration - light config
     result = json_config_nvs_read_bool(NVS_KEY_LIGHT_CONNECTED, &temp_bool);

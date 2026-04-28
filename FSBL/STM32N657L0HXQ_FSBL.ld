@@ -35,7 +35,7 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
-_estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */
+_estack = ORIGIN(AXISRAM1_S2) + LENGTH(AXISRAM1_S2); /* top of heap/stack region (see ._user_heap_stack) */
 _sstack = _estack - _Min_Stack_Size;
 
 _Min_Heap_Size = 0x200; /* required amount of heap */
@@ -44,8 +44,11 @@ _Min_Stack_Size = 0x1000; /* required amount of stack */
 /* Memories definition */
 MEMORY
 {
-  ROM    (xrw)    : ORIGIN = 0x34180400,   LENGTH = 255K
-  RAM    (xrw)    : ORIGIN = 0x341C0000,   LENGTH = 256K
+  AXISRAM1_S1 (xrw)       : ORIGIN = 0x34000000, LENGTH = 620K
+  AXISRAM1_S2 (xrw)       : ORIGIN = 0x3409B000, LENGTH =  84K
+  AXISRAM1_UNCACHED (xrw) : ORIGIN = 0x340B0000, LENGTH = 320K
+  AXISRAM2_S  (xrw)       : ORIGIN = 0x34180400, LENGTH = 511K
+  PSRAM (xrw)             : ORIGIN = 0x90000000, LENGTH =  64M
 }
 
 /* Sections */
@@ -57,7 +60,7 @@ SECTIONS
     . = ALIGN(4);
     KEEP(*(.isr_vector)) /* Startup code */
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
   /* The program code and other data into "RAM" Ram type memory */
   .text :
@@ -76,7 +79,14 @@ SECTIONS
 
     . = ALIGN(4);
     _etext = .;        /* define a global symbols at end of code */
-  } >ROM
+  } >AXISRAM2_S
+
+  .gnu.sgstubs :
+  {
+    . = ALIGN(4);
+    *(.gnu.sgstubs*)   /* Secure Gateway stubs */
+    . = ALIGN(4);
+  } >AXISRAM2_S
 
   /* Constant data into "RAM" Ram type memory */
   .rodata :
@@ -85,34 +95,32 @@ SECTIONS
     *(.rodata)         /* .rodata sections (constants, strings, etc.) */
     *(.rodata*)        /* .rodata* sections (constants, strings, etc.) */
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
-  .ARM.extab   (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
-   {
+  .ARM.extab   : {
     . = ALIGN(4);
     *(.ARM.extab* .gnu.linkonce.armextab.*)
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
-  .ARM (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
-   {
+  .ARM : {
     . = ALIGN(4);
     __exidx_start = .;
     *(.ARM.exidx*)
     __exidx_end = .;
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
-  .preinit_array     (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
+  .preinit_array     :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array*))
     PROVIDE_HIDDEN (__preinit_array_end = .);
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
-  .init_array (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
+  .init_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN (__init_array_start = .);
@@ -120,9 +128,9 @@ SECTIONS
     KEEP (*(.init_array*))
     PROVIDE_HIDDEN (__init_array_end = .);
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
-  .fini_array (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
+  .fini_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN (__fini_array_start = .);
@@ -130,7 +138,7 @@ SECTIONS
     KEEP (*(.fini_array*))
     PROVIDE_HIDDEN (__fini_array_end = .);
     . = ALIGN(4);
-  } >ROM
+  } >AXISRAM2_S
 
   /* Used by the startup to initialize data */
   _sidata = LOADADDR(.data);
@@ -146,24 +154,8 @@ SECTIONS
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
 
-  } >RAM AT> ROM
+  } >AXISRAM2_S
 
-  .noncacheable :
-  {
-    . = ALIGN(8);
-    __snoncacheable = .;/* create symbol for start of section */
-    KEEP(*(.noncacheable))
-    . = ALIGN(8);
-    __enoncacheable = .;  /* create symbol for end of section */
-  } > RAM
-
-
-  .gnu.sgstubs :
-  {
-    . = ALIGN(4);
-    *(.gnu.sgstubs*)   /* Secure Gateway stubs */
-    . = ALIGN(4);
-  } >ROM
   /* Uninitialized data section into "RAM" Ram type memory */
   . = ALIGN(4);
   .bss :
@@ -178,7 +170,18 @@ SECTIONS
     . = ALIGN(4);
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
-  } >RAM
+  } >AXISRAM2_S
+
+  /* Uncached AXI SRAM */
+  .uncached_bss (NOLOAD) :
+  {
+    __uncached_bss_start__ = .;
+    . = ALIGN(4);
+    *(.uncached_bss)
+    *(.uncached_bss*)
+    . = ALIGN(4);
+    __uncached_bss_end__ = .;
+  } >AXISRAM1_UNCACHED
 
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
   ._user_heap_stack :
@@ -189,7 +192,22 @@ SECTIONS
     . = . + _Min_Heap_Size;
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
-  } >RAM
+  } >AXISRAM1_S2
+
+  /* Camera frame buffer in another part of RAM */
+  .buffRam (NOLOAD):
+  {
+    . = ALIGN(4);
+    *(.buffRam)
+    . = ALIGN(4);
+  } >AXISRAM1_S1
+
+  .psram_section (NOLOAD):
+  {
+     . = ALIGN(32);
+    *(.psram_bss)
+    . = ALIGN(32);
+  } >PSRAM
 
   /* Remove information from the compiler libraries */
   /DISCARD/ :

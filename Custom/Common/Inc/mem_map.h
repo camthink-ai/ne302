@@ -7,15 +7,21 @@
 |   APP         | 0x34000000        | 0x3419FFFF        | 1664K      |
 | UNCACHED      | 0x341A0000        | 0x341FFFFF        | 384K       |
 | AI            | 0x34200000        | 0x343BFFFF        | 1M + 768K  |
-| AI_EXT        | 0x90000000        | 0x907FFFFF        | 8M         |
-| APP EXT       | 0x90800000        | 0x93FFFFFF        | 56M        |
+| APP EXT       | 0x90000000        | 0x903EFFFF        | 4032K      |
+| SWAP          | 0x903F0000        | 0x903FFFFF        | 64K        |
+#if defined(BOARD_PSRAM_SIZE) && BOARD_PSRAM_SIZE == 64
+| PSRAM REGION  | 0x90400000        | 0x93FFFFFF        | 60M        |
+#else
+| PSRAM REGION  | 0x90400000        | 0x91FFFFFF        | 28M        |
+#endif
 
 =================== Flash Partition Layout ===================
 |   Partition    |   Start Address   |   End Address     |   Size     |
 | FSBL           | 0x70000000        | 0x7007FFFF        | 512K       |
 | NVS            | 0x70080000        | 0x7008FFFF        | 64K        |
 | OTA            | 0x70090000        | 0x70091FFF        | 8K         |
-| Reserve1       | 0x70093000        | 0x700FFFFF        | 440K       |
+| SWAP           | 0x70092000        | 0x700A1FFF        | 64K        |
+| Reserve1       | 0x700A2000        | 0x700FFFFF        | 376K       |
 | APP1           | 0x70100000        | 0x704FFFFF        | 4M         |
 | APP2           | 0x70500000        | 0x708FFFFF        | 4M         |
 | AI_Default     | 0x70900000        | 0x70DFFFFF        | 5M         |
@@ -31,25 +37,33 @@
 // =================== Memory Regions ===================
 #define SRAM_BASE            0x34000000U
 #ifdef BOOT_IN_PSRAM
-#define SRAM_APP_BASE        0x90000000U
-#define SRAM_APP_END         0x900FFFFFU
+#define SRAM_APP_BASE        0x90000000U    // 4032K
+#define SRAM_APP_END         0x903EFFFFU
+#define SRAM_APP_SIZE        (0x903F0000U - 0x90000000U)   // 4032K
 #else
-#define SRAM_APP_BASE        0x34000000U
+#define SRAM_APP_BASE        0x34000000U    // 1663K
 #define SRAM_APP_END         0x3419FFFFU
+#define SRAM_APP_SIZE        (0x341A0000U - 0x34000000U)   // 1663K
 #endif
-#define SRAM_APP_SIZE        (SRAM_APP_END - SRAM_APP_BASE)
 #define SRAM_UNCACHED_BASE   0x341A0000U
 #define SRAM_UNCACHED_END    0x341FFFFFU
 #define SRAM_UNCACHED_SIZE   (0x34200000U - 0x341A0000U)   // 384K
 #define SRAM_AI_BASE         0x34200000U
 #define SRAM_AI_END          0x343BFFFFU
 #define SRAM_AI_SIZE         (0x343C0000U - 0x34200000U)   // 1M + 768K
-#define SRAM_AI_EXT_BASE     0x90000000U
-#define SRAM_AI_EXT_END      0x907FFFFFU
-#define SRAM_AI_EXT_SIZE     (0x90800000U - 0x90000000U)   // 8M
-#define SRAM_APP_EXT_BASE    0x90800000U
-#define SRAM_APP_EXT_END     0x93FFFFFFU
-#define SRAM_APP_EXT_SIZE    (0x94000000U - 0x90800000U)   // 56M
+
+#define PSRAM_SWAP_BASE      0x903F0000U
+#define PSRAM_SWAP_END       0x903FFFFFU
+#define PSRAM_SWAP_SIZE      (0x90400000U - 0x903F0000U)   // 64K
+
+#define PSRAM_REGION_BASE     0x90400000
+#if defined(BOARD_PSRAM_SIZE) && BOARD_PSRAM_SIZE == 64
+#define PSRAM_REGION_END      0x93FFFFFFU
+#define PSRAM_REGION_SIZE     (0x94000000U - 0x90400000U)   // 60M
+#else
+#define PSRAM_REGION_END      0x91FFFFFFU
+#define PSRAM_REGION_SIZE     (0x92000000U - 0x90400000U)   // 28M
+#endif
 
 // =================== Flash Partitions ===================
 #define FLASH_BASE      0x70000000U
@@ -62,9 +76,12 @@
 #define OTA_BASE        0x70090000U
 #define OTA_END         0x70091FFFU
 #define OTA_SIZE        (0x70092000U - 0x70090000U)   // 8K
-#define RESERVE1_BASE   0x70093000U
+#define SWAP_BASE       0x70092000U
+#define SWAP_END        0x700A1FFFU
+#define SWAP_SIZE       (0x700A2000U - 0x70092000U)   // 64K
+#define RESERVE1_BASE   0x700A2000U
 #define RESERVE1_END    0x700FFFFFU
-#define RESERVE1_SIZE   (0x70100000U - 0x70093000U)   // 440K
+#define RESERVE1_SIZE   (0x70100000U - 0x700A2000U)   // 376K
 #define APP1_BASE       0x70100000U
 #define APP1_END        0x704FFFFFU
 #define APP1_SIZE       (0x70500000U - 0x70100000U)   // 4M

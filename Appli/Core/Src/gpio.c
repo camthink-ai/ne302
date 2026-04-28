@@ -152,7 +152,12 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSE, RCC_MCODIV_2);
 
+#if defined(STM32N6_DK_BOARD)
+  HAL_GPIO_WritePin(PWR_WIFI_ON_GPIO_Port, PWR_WIFI_ON_Pin, GPIO_PIN_SET);
+#else
   HAL_GPIO_WritePin(PWR_USB_3V3_GPIO_Port, PWR_USB_3V3_Pin, GPIO_PIN_SET);
+#endif
+
 }
 
 /* USER CODE BEGIN 2 */

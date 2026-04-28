@@ -20,7 +20,7 @@
 #define MEDIA_OPENED                     0UL
 
 #define SD_DEBOUNCE_CHECKS 5
-#define SD_DEBOUNCE_DELAY_MS 5
+#define SD_DEBOUNCE_DELAY_MS 1
 
 #define FX_SD_VOLUME_NAME "SD_DISK"
 
@@ -74,6 +74,8 @@ typedef struct {
 int sd_file_ops_switch(void);
 int sd_format(void);
 int sd_get_disk_info(sd_disk_info_t *info);
+int sd_is_detected(void);
+int sd_wait_ready_for_open(uint32_t timeout_ms);
 int sd_register(void);
 int sd_unregister(void);
 #endif

@@ -2,6 +2,7 @@
 #include <string.h>
 #include "lwip/etharp.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "lwip/ethip6.h"
 #include "lwip/ip6_addr.h"
 #include "lwip/apps/mdns.h"
@@ -664,7 +665,7 @@ static int sl_net_set_client_link_up(sl_net_wifi_client_profile_t *profile)
         ip_addr_set_zero_ip4(&(client_netif.gw));
 
         osEventFlagsClear(sl_net_events, SL_NET_EVENT_FIRMWARE_ERROR);
-        err = dhcp_start(&client_netif);
+        err = netifapi_dhcp_start(&client_netif);
         if (err == ERR_OK) {
             timeout_ms = 0;
             do {
@@ -710,7 +711,7 @@ static int sl_net_set_client_link_up(sl_net_wifi_client_profile_t *profile)
 
     if (err != ERR_OK) {
 #if LWIP_IPV4 && LWIP_DHCP && !IS_TCP_IP_DUAL_MODE
-        dhcp_stop(&client_netif);
+        (void)netifapi_dhcp_stop(&client_netif);
 #endif /* LWIP_IPV4 && LWIP_DHCP && !IS_TCP_IP_DUAL_MODE */
         netifapi_netif_set_link_down(&client_netif);
         netifapi_netif_set_down(&client_netif);
@@ -759,7 +760,13 @@ sl_status_t sl_net_wifi_client_up(sl_net_interface_t interface, sl_net_profile_i
         LOG_DRV_ERROR("Failed to set advanced client configuration: 0x%0lX\r\n", status);
         return status;
     }
-    
+
+    /* Set join feature bitmap */
+    uint8_t join_feature_bitmap = 0;
+    sl_si91x_get_join_configuration(SL_WIFI_CLIENT_INTERFACE, &join_feature_bitmap);
+    join_feature_bitmap |= SL_WIFI_JOIN_FEAT_QUICK_JOIN;
+    sl_si91x_set_join_configuration(SL_WIFI_CLIENT_INTERFACE, join_feature_bitmap);
+
     // do {
         status = sl_wifi_connect(SL_WIFI_CLIENT_INTERFACE, &wifi_client_profile.config, 18000);
     // } while (status != SL_STATUS_OK && cnt_try_times++ < 3);
@@ -849,7 +856,7 @@ sl_status_t sl_net_wifi_client_up(sl_net_interface_t interface, sl_net_profile_i
 static void sl_net_set_client_link_down(void)
 {
 #if LWIP_IPV4 && LWIP_DHCP
-    dhcp_stop(&client_netif);
+    (void)netifapi_dhcp_stop(&client_netif);
 #endif /* LWIP_IPV4 && LWIP_DHCP */
     netifapi_netif_set_link_down(&client_netif);
     netifapi_netif_set_down(&client_netif);
@@ -914,8 +921,8 @@ int sl_net_client_netif_init(void)
     //     }
     // }
 
-    /* Add station interfaces */
-    if (netif_add(&client_netif,
+    /* Add station interfaces (must run on tcpip_thread via netifapi_*) */
+    err_t nif_err = netifapi_netif_add(&client_netif,
 #if LWIP_IPV4
             (const ip4_addr_t *)&sta_ipaddr,
             (const ip4_addr_t *)&sta_netmask,
@@ -923,7 +930,8 @@ int sl_net_client_netif_init(void)
 #endif /* LWIP_IPV4 */
             NULL,
             &sl_net_ethernetif_init,
-            &tcpip_input) == NULL) {
+            &tcpip_input);
+    if (nif_err != ERR_OK) {
         if (netif_get_by_index(ap_netif.num + 1) != &ap_netif) {
             sl_net_deinit(SL_NET_WIFI_CLIENT_INTERFACE);
         }
@@ -1020,7 +1028,7 @@ void sl_net_client_netif_deinit(void)
     if (netif_get_by_index(ap_netif.num + 1) != &ap_netif) {
         sl_net_deinit(SL_NET_WIFI_CLIENT_INTERFACE);
     }
-    netif_remove(wl0);
+    (void)netifapi_netif_remove(wl0);
 }
 /// @brief Network interface configuration function provided externally (client)
 /// @param netif_cfg Specific configuration
@@ -1769,7 +1777,7 @@ int sl_net_ap_netif_init(void)
     // }
 
     /* Add station interfaces */
-    if (netif_add(&ap_netif,
+    err_t nif_err = netifapi_netif_add(&ap_netif,
 #if LWIP_IPV4
             (const ip4_addr_t *)&ap_ipaddr,
             (const ip4_addr_t *)&ap_netmask,
@@ -1777,7 +1785,8 @@ int sl_net_ap_netif_init(void)
 #endif /* LWIP_IPV4 */
             NULL,
             &sl_net_ethernetif_init,
-            &tcpip_input) == NULL) {
+            &tcpip_input);
+    if (nif_err != ERR_OK) {
         if (netif_get_by_index(client_netif.num + 1) != &client_netif) {
             sl_net_deinit(SL_NET_WIFI_AP_INTERFACE);
         }
@@ -1853,7 +1862,7 @@ void sl_net_ap_netif_deinit(void)
     if (netif_get_by_index(client_netif.num + 1) != &client_netif) {
         sl_net_deinit(SL_NET_WIFI_AP_INTERFACE);
     }
-    netif_remove(ap0);
+    (void)netifapi_netif_remove(ap0);
 }
 /// @brief Network interface configuration function provided externally (AP)
 /// @param netif_cfg Specific configuration

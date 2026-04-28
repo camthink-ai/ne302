@@ -224,7 +224,7 @@ void ms_bridging_notify_callback(void *handler, ms_bridging_frame_t *frame)
                     pwr_enter_stop2(power_ctrl.wakeup_flags, power_ctrl.switch_bits, &rtc_wakeup_config);
                     xTaskResumeAll();
                     n6_comm_set_event_isr(N6_COMM_EVENT_ERR);
-                    osDelay(1000);
+                    osDelay(30);
 
                     osEventFlagsSet(app_task_event, APP_TASK_EVENT_FLAG_START);
                     osEventFlagsWait(app_task_event, APP_TASK_EVENT_FLAG_START_ACK, osFlagsWaitAny, osWaitForever);
@@ -248,7 +248,7 @@ void ms_bridging_notify_callback(void *handler, ms_bridging_frame_t *frame)
                 ms_bridging_response(handler, frame, NULL, 0);
                 osEventFlagsSet(app_task_event, APP_TASK_EVENT_FLAG_STOP);
                 osEventFlagsWait(app_task_event, APP_TASK_EVENT_FLAG_STOP_ACK, osFlagsWaitAny, osWaitForever);
-                pwr_n6_restart(500, 1000);
+                pwr_n6_restart(300, 30);
                 osEventFlagsSet(app_task_event, APP_TASK_EVENT_FLAG_START);
                 osEventFlagsWait(app_task_event, APP_TASK_EVENT_FLAG_START_ACK, osFlagsWaitAny, osWaitForever);
                 break;
@@ -412,7 +412,7 @@ void app_task(void *argument)
             case N6_STATE_WAIT_REBOOT:
             #if MS_BD_KEEPLIVE_ENABLE
                 WIC_LOGD("app: reboot N6...");
-                pwr_n6_restart(500, 1000);
+                pwr_n6_restart(500, 100);
             #endif
                 n6_comm_set_event_isr(N6_COMM_EVENT_ERR);
             #if MS_BD_KEEPLIVE_ENABLE

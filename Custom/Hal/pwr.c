@@ -422,7 +422,7 @@ static IOGroup iogroup_list[] = {
     {GPIOG, GPIO_PIN_12, GPIO_NOPULL},
 };
 
-static void iogroup_power_init(void)
+static void __attribute__((unused)) iogroup_power_init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     for(int i = 0; i < sizeof(iogroup_list) / sizeof(iogroup_list[0]); i++) {
@@ -434,14 +434,14 @@ static void iogroup_power_init(void)
     }
 }
 
-static void iogroup_power_on(void)
+static void __attribute__((unused)) iogroup_power_on(void)
 {
     for(int i = 0; i < sizeof(iogroup_list) / sizeof(iogroup_list[0]); i++) {
         HAL_GPIO_WritePin(iogroup_list[i].GPIOx, iogroup_list[i].pin, GPIO_PIN_SET);
     }
 }
 
-static void iogroup_power_off(void)
+static void __attribute__((unused)) iogroup_power_off(void)
 {
     for(int i = 0; i < sizeof(iogroup_list) / sizeof(iogroup_list[0]); i++) {
         HAL_GPIO_WritePin(iogroup_list[i].GPIOx, iogroup_list[i].pin, GPIO_PIN_RESET);
@@ -457,7 +457,7 @@ power_desc pwr_descs[] = {
     {PWR_CAT1_NAME, cat1_power_init, cat1_power_on, cat1_power_off},
     {PWR_TF_NAME, tf_power_init, tf_power_on, tf_power_off},
     {PWR_WIFI, wifi_power_init, wifi_power_on, wifi_power_off},
-    {PWR_IOGROUP, iogroup_power_init, iogroup_power_on, iogroup_power_off},
+    // {PWR_IOGROUP, iogroup_power_init, iogroup_power_on, iogroup_power_off},
 };
 
 
@@ -479,14 +479,21 @@ static int pwr_init(void *priv)
 {
     LOG_DRV_DEBUG("pwr_init \r\n");
     pwr_t *pwr = (pwr_t *)priv;
-    const int n = sizeof(pwr_descs)/sizeof(pwr_descs[0]);
-    PowerHandle handles[n];
 
     pwr->mtx_id = osMutexNew(NULL);
     pwr->sem_id = osSemaphoreNew(1, 0, NULL);
     pwr->pwr_processId = osThreadNew(pwrProcess, pwr, &pwrTask_attributes);
 
     pwr->pwr_mgr = power_manager_create();
+
+#ifdef STM32N6_DK_BOARD
+    /* Nucleo DK: pinout differs from product; skip all rail GPIO init/register. */
+    pwr->is_init = true;
+    LOG_DRV_DEBUG("pwr_init end (DK: no power IO)\r\n");
+    return 0;
+#else
+    const int n = sizeof(pwr_descs) / sizeof(pwr_descs[0]);
+    PowerHandle handles[n];
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -505,6 +512,7 @@ static int pwr_init(void *priv)
     pwr->is_init = true;
     LOG_DRV_DEBUG("pwr_init end\r\n");
     return 0;
+#endif
 }
 
 PowerHandle pwr_manager_get_handle(const char *name)
@@ -514,13 +522,22 @@ PowerHandle pwr_manager_get_handle(const char *name)
 
 int pwr_manager_acquire(PowerHandle handle)
 {
+#ifdef STM32N6_DK_BOARD
+    (void)handle;
+    return 0;
+#else
     return power_manager_acquire_by_handle(g_pwr.pwr_mgr, handle);
+#endif
 }
 
 int pwr_manager_release(PowerHandle handle)
 {
+#ifdef STM32N6_DK_BOARD
+    (void)handle;
+    return 0;
+#else
     return power_manager_release_by_handle(g_pwr.pwr_mgr, handle);
-
+#endif
 }
 
 static void power_manager_print_all_states(PowerManager *manager)

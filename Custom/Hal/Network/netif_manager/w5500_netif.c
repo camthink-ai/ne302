@@ -3,6 +3,7 @@
 #include "common_utils.h"
 #include "lwip/etharp.h"
 #include "lwip/dhcp.h"
+#include "lwip/netifapi.h"
 #include "Log/debug.h"
 #include "dhcpserver.h"
 #include "mem.h"
@@ -377,9 +378,9 @@ int w5500_netif_init(void)
     // Enable Interrupt
     W5500_Enable_Interrupt(w5500_interrupt_callback);
     
-    // Add Network Interface
-    eth = netif_add(&eth_netif, NULL, NULL, NULL, NULL, &w5500_ethernetif_init, &tcpip_input);
-    if (eth == NULL) {
+    // Add Network Interface (run on tcpip thread)
+    err_t nif_err = netifapi_netif_add(&eth_netif, NULL, NULL, NULL, NULL, &w5500_ethernetif_init, &tcpip_input);
+    if (nif_err != ERR_OK) {
         ret = W5500_ERR_FAILED;
         goto w5500_netif_init_failed;
     }
@@ -486,7 +487,7 @@ int w5500_netif_up(void)
         ip_addr_set_zero_ip4(&(eth_netif.netmask));
         ip_addr_set_zero_ip4(&(eth_netif.gw));
 
-        ret = dhcp_start(&eth_netif);
+        ret = netifapi_dhcp_start(&eth_netif);
         if (ret == ERR_OK) {
             do {
                 if (dhcp_supplied_address(&eth_netif)) {
@@ -519,8 +520,8 @@ int w5500_netif_up(void)
     }
 
 w5500_netif_up_end:
-    if (ret != ERR_OK) {
-        if (eth_config.ip_mode == NETIF_IP_MODE_DHCP) dhcp_stop(&eth_netif);
+        if (ret != ERR_OK) {
+        if (eth_config.ip_mode == NETIF_IP_MODE_DHCP) (void)netifapi_dhcp_stop(&eth_netif);
         netifapi_netif_set_link_down(&eth_netif);
         netifapi_netif_set_down(&eth_netif);
     }
@@ -537,7 +538,7 @@ int w5500_netif_down(void)
     // Close Socket
     W5500_Macraw_Sock_Close();
 
-    dhcp_stop(&eth_netif);
+    (void)netifapi_dhcp_stop(&eth_netif);
     netifapi_netif_set_link_down(&eth_netif);
     netifapi_netif_set_down(&eth_netif);
     return W5500_OK;
@@ -563,7 +564,7 @@ void w5500_netif_deinit(void)
     
     // osMutexAcquire(w5500_sbuf_mutex, osWaitForever);
     
-    netif_remove(eth);
+    (void)netifapi_netif_remove(eth);
 
     // Disable Interrupt
     W5500_Disable_Interrupt();

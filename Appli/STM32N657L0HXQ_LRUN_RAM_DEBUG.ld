@@ -17,8 +17,8 @@ MEMORY
   AXISRAM1_2_S (xrw)        : ORIGIN = 0x34000400, LENGTH = 1631K
   SRAM_POOL                 : ORIGIN = 0x34198000, LENGTH = 344K
   AXI_SRAM_UNCACHED (xrw)   : ORIGIN = 0x341ee000, LENGTH = 72K
-  /* External PSRAM APP_EXT: 0x90800000 ~ 0x93FFFFFF (56MB, see mem_map.h) */
-  PSRAM (xrw)               : ORIGIN = 0x90800000, LENGTH = 56M
+  /* External PSRAM APP_EXT: 0x90400000 ~ 0x93FFFFFF (60MB, see mem_map.h) */
+  PSRAM (xrw)               : ORIGIN = 0x90400000, LENGTH = 60M
 }
 
 /* Sections */

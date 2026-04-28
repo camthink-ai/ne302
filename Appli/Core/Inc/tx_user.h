@@ -24,16 +24,11 @@
 #define TX_TIMER_TICKS_PER_SECOND   (1000UL)
 
 #ifndef SYSTEM_CLOCK
-#if CPU_CLK_USE_400MHZ
-#define SYSTEM_CLOCK                400000000UL
-#elif CPU_CLK_USE_200MHZ
-#define SYSTEM_CLOCK                200000000UL
-#elif CPU_CLK_USE_HSI_800MHZ
+/* Used at link time by tx_initialize_low_level.S; must be a compile-time constant.
+ * main.c calls threadx_resync_systick_from_rcc() after SystemClock_Config() so
+ * SysTick matches HAL_RCC_GetCpuClockFreq() at runtime. */
 #define SYSTEM_CLOCK                800000000UL
-#else // CPU_CLK_USE_800MHZ
-#define SYSTEM_CLOCK                800000000UL
-#endif
-#endif
+#endif /* SYSTEM_CLOCK */
 
 #ifndef TICK_FREQ
 #define TICK_FREQ TX_TIMER_TICKS_PER_SECOND

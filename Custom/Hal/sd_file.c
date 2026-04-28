@@ -14,7 +14,7 @@ static sd_t g_sd = {0};
 static uint8_t sd_tread_stack[1024 * 4] ALIGN_32 IN_PSRAM;
 const osThreadAttr_t sdTask_attributes = {
     .name = "sdTask",
-    .priority = (osPriority_t) osPriorityNormal,
+    .priority = (osPriority_t) osPriorityLow,
     .stack_mem = sd_tread_stack,
     .stack_size = sizeof(sd_tread_stack),
 };
@@ -643,7 +643,7 @@ static void sdProcess(void *argument)
     unsigned int sd_status = FX_SUCCESS;
     LOG_DRV_DEBUG("sdProcess start\r\n");
     pwr_manager_acquire(sd->pwr_handle);
-    osDelay(100);
+    osDelay(5);
     fx_system_initialize();
     
     // Set FileX system time and date from RTC
@@ -666,9 +666,7 @@ static void sdProcess(void *argument)
     
     sd->mode = SD_MODE_UNPLUG;
     if(SD_IsDetected()){
-
         sd_status =  fx_media_open(&sd->sdio_disk, FX_SD_VOLUME_NAME, fx_stm32_sd_driver, (VOID *)FX_NULL, (VOID *) fx_sd_media_memory, FX_STM32_SD_DEFAULT_SECTOR_SIZE);
-
         /* Check the media open sd_status */
         if (sd_status != FX_SUCCESS){
             LOG_DRV_ERROR("sd_init error 0x%x\r\n",sd_status);
@@ -862,6 +860,27 @@ int sd_get_disk_info(sd_disk_info_t *info)
 #endif
 
     return 0;
+}
+
+int sd_is_detected(void)
+{
+    return SD_IsDetected();
+}
+
+int sd_wait_ready_for_open(uint32_t timeout_ms)
+{
+    if (g_sd.is_init == true && g_sd.media_status == MEDIA_OPENED) {
+        return AICAM_OK;
+    }
+    if (sd_is_detected()) {
+        while (g_sd.media_status != MEDIA_OPENED && timeout_ms > 0) {
+            osDelay(5);
+            if (timeout_ms > 5) timeout_ms -= 5;
+            else return AICAM_ERROR_TIMEOUT;
+        }
+        return AICAM_OK;
+    }
+    return AICAM_ERROR_TIMEOUT;
 }
 
 int sd_init(void *priv)

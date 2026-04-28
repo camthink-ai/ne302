@@ -9,6 +9,8 @@ export interface SetHardwareInfoReq {
     fast_capture_skip_frames: number;
     fast_capture_resolution: number;
     fast_capture_jpeg_quality: number;
+    capture_disable_comm: boolean;
+    capture_storage_ai: boolean;
 }
 export interface SetLightConfigReq {
     mode: 'auto' | 'custom' | 'off';

@@ -42,6 +42,8 @@ static modem_info_t eg912u_modem_info = {0};
 static modem_config_t eg912u_modem_config = {0};
 #endif
 
+/// @brief 4G network interface fast mode enable flag
+static uint8_t eg912u_fast_mode_enable = 0;
 /// @brief 4G network interface event
 static osEventFlagsId_t eg912u_events = NULL;
 /// @brief 4G network interface lock
@@ -255,8 +257,10 @@ int eg912u_netif_init(void)
     } while (ret != MODEM_OK && ret != MODEM_ERR_HW_NOT_CNT && ++try_count < NETIF_4G_CAT1_TRY_CNT);
     if (ret != MODEM_OK) return ret;
 
-    ret = eg912u_update_info(1);
-    if (ret != 0) goto eg912u_netif_init_exit;
+    if (!eg912u_fast_mode_enable) {
+        ret = eg912u_update_info(1);
+        if (ret != 0) goto eg912u_netif_init_exit;
+    }
 
     eg912u_events = osEventFlagsNew(NULL);
     if (eg912u_events == NULL) {
@@ -359,10 +363,12 @@ int eg912u_netif_up(void)
     }
 #endif
 
-    ret = eg912u_update_info(1);
-    if (ret != 0) {
-        LOG_DRV_ERROR("modem update info failed(ret = %d)!", ret);
-        return ret;
+    if (!eg912u_fast_mode_enable) {
+        ret = eg912u_update_info(1);
+        if (ret != 0) {
+            LOG_DRV_ERROR("modem update info failed(ret = %d)!", ret);
+            return ret;
+        }
     }
 
     do {
@@ -552,7 +558,7 @@ int eg912u_netif_info(netif_info_t *netif_info)
     netif_info->if_name = NETIF_NAME_4G_CAT1;
     netif_info->type = NETIF_TYPE_4G;
     netif_info->state = eg912u_netif_state();
-    if (netif_info->state == NETIF_STATE_DOWN) eg912u_update_info(0);
+    if (netif_info->state == NETIF_STATE_DOWN) eg912u_update_info(eg912u_fast_mode_enable);
     else if (netif_info->state == NETIF_STATE_UP) modem_device_get_config(&eg912u_modem_config);
     netif_info->rssi = eg912u_modem_info.rssi;
     memcpy(netif_info->ip_addr, &eg912u_netif.ip_addr, sizeof(netif_info->ip_addr));
@@ -640,4 +646,10 @@ int eg912u_netif_ctrl(const char *if_name, netif_cmd_t cmd, void *param)
     }
     osMutexRelease(eg912u_mutex);
     return ret;
+}
+
+int eg912u_netif_enable_fast_mode(void)
+{
+    eg912u_fast_mode_enable = 1;
+    return AICAM_OK;
 }

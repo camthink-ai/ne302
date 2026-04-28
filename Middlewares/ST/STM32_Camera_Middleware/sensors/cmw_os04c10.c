@@ -300,7 +300,7 @@ static void CMW_OS04C10_PowerOn(CMW_OS04C10_t *io_ctx)
 {
   io_ctx->ShutdownPin(0); 
   io_ctx->EnablePin(1);
-  io_ctx->Delay(50);
+  io_ctx->Delay(5);
   io_ctx->ShutdownPin(1);
   // io_ctx->Delay(50);
 }

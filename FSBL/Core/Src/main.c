@@ -25,13 +25,17 @@
 #include "usart.h"
 #include "iwdg.h"
 #include "gpio.h"
+#include "crc.h"
 #include "xspim.h"
 #include "boot.h"
+#include "sysclk.h"
+#include "fsbl_app_common.h"
 
 /* Private typedefs ----------------------------------------------------------*/
 /* Private defines -----------------------------------------------------------*/
-#define XSPI2_MAP_ADDRESS 0x70000000
-#define NOR_FLASH_SIZE 0x10000000
+// static const sys_clk_config_t *sys_clk_config = (sys_clk_config_t *)SYS_CLK_CONFIG_SAVE_FLASH_BASE;
+// static const quick_snapshot_config_t *quick_snapshot_config = (quick_snapshot_config_t *)QUICK_SNAPSHOT_CONFIG_SAVE_FLASH_BASE;
+// static quick_snapshot_result_t *quick_snapshot_result = (quick_snapshot_result_t *)QUICK_SNAPSHOT_RESULT_PSRAM_BASE;
 /* Private macros ------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
@@ -40,15 +44,16 @@ void Error_Handler(void);
 #ifndef NO_OTP_FUSE
 static int32_t OTP_Config(void);
 #endif
-static void SystemClock_Config(void);
-static void PeriphCommonClock_Config(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+static uint32_t hw_crc32_func(void *data, size_t size)
+{
+  return HAL_CRC_Calculate(&hcrc, (uint32_t*)data, size);
+}
 /* USER CODE END 0 */
 
 /**
@@ -57,29 +62,32 @@ static void PeriphCommonClock_Config(void);
   */
 int main(void)
 {
+  sys_clk_config_t sys_clk_config = {0};
 
-  /* USER CODE BEGIN 1 */
+  /* Power on ICACHE */
+  MEMSYSCTL->MSCR |= MEMSYSCTL_MSCR_ICACTIVE_Msk;
 
-  /* USER CODE END 1 */
+  /* Disable error related to UNALIGN memory structures*/
+  SCB->CCR &= ~SCB_CCR_UNALIGN_TRP_Msk;
 
-  /* Enable I-Cache-----------------------------------------------------------*/
+  /* Set back system and CPU clock source to HSI */
+  __HAL_RCC_CPUCLK_CONFIG(RCC_CPUCLKSOURCE_HSI);
+  __HAL_RCC_SYSCLK_CONFIG(RCC_SYSCLKSOURCE_HSI);
+
   SCB_EnableICache();
 
-  // /* Enable D-Cache-----------------------------------------------------------*/
-  // SCB_EnableDCache();
+#if defined(USE_DCACHE)
+  /* Power on DCACHE */
+  MEMSYSCTL->MSCR |= MEMSYSCTL_MSCR_DCACTIVE_Msk;
+  SCB_EnableDCache();
+#endif
 
   /* MCU Configuration--------------------------------------------------------*/
   HAL_Init();
 
-  /* USER CODE BEGIN Init */
-  MX_IWDG_Init();
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* Configure the peripherals common clocks */
-  PeriphCommonClock_Config();
+  /* Configure the startup system clock */
+  SysClk_Config(SYSCLK_PROFILE_HSI_800MHZ);
+  SysClk_PeriphCommonConfig();
 
   /* FIXME : can not be set currently under boot from flash due to bootrom lock */
 #ifndef NO_OTP_FUSE
@@ -89,33 +97,39 @@ int main(void)
   }
 #endif /* NO_OTP_FUSE */
 
+  /* Initialize all configured peripherals */
+  /* USER CODE BEGIN Init */
+  MX_IWDG_Init();
+  MX_CRC_Init();
   MX_GPIO_Init();
-  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, GPIO_PIN_SET);
-
+  MX_USART2_UART_Init();
+  
   MX_XSPI1_Init();
   XSPI_PSRAM_EnableMemoryMappedMode();
 
   MX_XSPI2_Init();
   XSPI_NOR_EnableMemoryMappedMode();
-
-  /* Initialize all configured peripherals */
-  MX_USART2_UART_Init();
-  printf("FSBL START\r\n");
-  printf("\r\n-------------- CLK INFO --------------\r\n");
-  printf("CPU: %lu MHz\r\n", HAL_RCC_GetCpuClockFreq() / 1000000UL);
-  printf("SYS: %lu MHz\r\n", HAL_RCC_GetSysClockFreq() / 1000000UL);
-  printf("NPU: %lu MHz\r\n", HAL_RCC_GetNPUClockFreq() / 1000000UL);
-  printf("NPURAM: %lu MHz\r\n", HAL_RCC_GetNPURAMSClockFreq() / 1000000UL);
-  printf("HCLK: %lu MHz\r\n", HAL_RCC_GetHCLKFreq() / 1000000UL);
-  printf("-------------------------------------\r\n");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != RESET) {
-    /* IWDGRST flag is set */
-    printf("Reset by IWDG\r\n");
-    __HAL_RCC_CLEAR_RESET_FLAGS();
+  /* USER CODE END Init */
+  
+  /* Copy application from flash to SRAM/PSRAM */
+  BOOT_Copy_Application();
+  
+  /* Configure the config system clock (profile: SYSCLK_PROFILE_DEFAULT, see sysclk.h) */
+  memcpy(&sys_clk_config, (void *)SYS_CLK_CONFIG_SAVE_FLASH_BASE, sizeof(sys_clk_config_t));
+  XSPI_NOR_DisableMemoryMappedMode();
+  XSPI_NOR_EnableMemoryMappedMode();
+  if (sys_clk_config.sys_clk_profile > SYSCLK_PROFILE_MIN && sys_clk_config.sys_clk_profile < SYSCLK_PROFILE_MAX && sys_clk_config.sys_clk_profile != SYSCLK_PROFILE_HSI_800MHZ && sys_clk_config.crc32 == hw_crc32_func((void *)&sys_clk_config, sizeof(sys_clk_config_t) - sizeof(sys_clk_config.crc32))) {
+    if (sys_clk_config.sys_clk_profile <= SYSCLK_PROFILE_HSE_400MHZ) {
+      __HAL_RCC_PWR_CLK_ENABLE();
+      HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
+    }
+    SysClk_Config(sys_clk_config.sys_clk_profile);
   }
-  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /* Jump to application */
   HAL_IWDG_Refresh(&hiwdg);
-  BOOT_Application();
+  printf("FSBL: %lu ms\r\n", HAL_GetTick());
+  BOOT_Jump_Application();
   
   /* We should never get here as execution is now from user application */
   while(1)
@@ -126,525 +140,6 @@ int main(void)
 /* USER CODE BEGIN CLK 1 */
 /* USER CODE END CLK 1 */
 
-#if CPU_CLK_USE_400MHZ
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the System Power Supply
-  */
-  if (HAL_PWREx_ConfigSupply(PWR_SMPS_SUPPLY) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure LSE Drive Capability
-  */
-  HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMHIGH);
-
-  /* Enable HSI */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /* Wait HSE stabilization time before its selection as PLL source. */
-  // HAL_Delay(HSE_STARTUP_TIMEOUT);
-
-  /** Get current CPU/System buses clocks configuration and if necessary switch
- to intermediate HSI clock to ensure target clock can be set
-  */
-  HAL_RCC_GetClockConfig(&RCC_ClkInitStruct);
-  if ((RCC_ClkInitStruct.CPUCLKSource == RCC_CPUCLKSOURCE_IC1) ||
-     (RCC_ClkInitStruct.SYSCLKSource == RCC_SYSCLKSOURCE_IC2_IC6_IC11))
-  {
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_CPUCLK | RCC_CLOCKTYPE_SYSCLK);
-    RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_HSI;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-    {
-      /* Initialization Error */
-      Error_Handler();
-    }
-  }
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE
-                              |RCC_OSCILLATORTYPE_LSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL1.PLLM = 1;
-  RCC_OscInitStruct.PLL1.PLLN = 25;
-  RCC_OscInitStruct.PLL1.PLLFractional = 0;
-  RCC_OscInitStruct.PLL1.PLLP1 = 3;
-  RCC_OscInitStruct.PLL1.PLLP2 = 1;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL2.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL2.PLLM = 1;
-  RCC_OscInitStruct.PLL2.PLLN = 32;
-  RCC_OscInitStruct.PLL2.PLLFractional = 0;
-  RCC_OscInitStruct.PLL2.PLLP1 = 3;
-  RCC_OscInitStruct.PLL2.PLLP2 = 1;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL3.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL3.PLLM = 1;
-  RCC_OscInitStruct.PLL3.PLLN = 25;
-  RCC_OscInitStruct.PLL3.PLLFractional = 0;
-  RCC_OscInitStruct.PLL3.PLLP1 = 2;
-  RCC_OscInitStruct.PLL3.PLLP2 = 2;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL4.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL4.PLLM = 3;
-  RCC_OscInitStruct.PLL4.PLLN = 64;
-  RCC_OscInitStruct.PLL4.PLLFractional = 0;
-  RCC_OscInitStruct.PLL4.PLLP1 = 2;
-  RCC_OscInitStruct.PLL4.PLLP2 = 1;
-
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_CPUCLK|RCC_CLOCKTYPE_HCLK
-                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
-                              |RCC_CLOCKTYPE_PCLK2|RCC_CLOCKTYPE_PCLK5
-                              |RCC_CLOCKTYPE_PCLK4;
-  RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
-  RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
-  RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC1Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC2Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC6Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC11Selection.ClockDivider = 1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Enables the Clock Security System
-  */
-  HAL_RCCEx_EnableLSECSS();
-}
-#elif CPU_CLK_USE_200MHZ
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the System Power Supply
-  */
-  if (HAL_PWREx_ConfigSupply(PWR_SMPS_SUPPLY) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure LSE Drive Capability
-  */
-  HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMHIGH);
-
-  /* Enable HSI */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /* Wait HSE stabilization time before its selection as PLL source. */
-  // HAL_Delay(HSE_STARTUP_TIMEOUT);
-
-  /** Get current CPU/System buses clocks configuration and if necessary switch
- to intermediate HSI clock to ensure target clock can be set
-  */
-  HAL_RCC_GetClockConfig(&RCC_ClkInitStruct);
-  if ((RCC_ClkInitStruct.CPUCLKSource == RCC_CPUCLKSOURCE_IC1) ||
-     (RCC_ClkInitStruct.SYSCLKSource == RCC_SYSCLKSOURCE_IC2_IC6_IC11))
-  {
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_CPUCLK | RCC_CLOCKTYPE_SYSCLK);
-    RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_HSI;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-    {
-      /* Initialization Error */
-      Error_Handler();
-    }
-  }
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE
-                              |RCC_OSCILLATORTYPE_LSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL1.PLLM = 1;
-  RCC_OscInitStruct.PLL1.PLLN = 25;
-  RCC_OscInitStruct.PLL1.PLLFractional = 0;
-  RCC_OscInitStruct.PLL1.PLLP1 = 3;
-  RCC_OscInitStruct.PLL1.PLLP2 = 2;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL2.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL2.PLLM = 1;
-  RCC_OscInitStruct.PLL2.PLLN = 32;
-  RCC_OscInitStruct.PLL2.PLLFractional = 0;
-  RCC_OscInitStruct.PLL2.PLLP1 = 3;
-  RCC_OscInitStruct.PLL2.PLLP2 = 1;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL3.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL3.PLLM = 1;
-  RCC_OscInitStruct.PLL3.PLLN = 25;
-  RCC_OscInitStruct.PLL3.PLLFractional = 0;
-  RCC_OscInitStruct.PLL3.PLLP1 = 2;
-  RCC_OscInitStruct.PLL3.PLLP2 = 2;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL4.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL4.PLLM = 3;
-  RCC_OscInitStruct.PLL4.PLLN = 64;
-  RCC_OscInitStruct.PLL4.PLLFractional = 0;
-  RCC_OscInitStruct.PLL4.PLLP1 = 2;
-  RCC_OscInitStruct.PLL4.PLLP2 = 1;
-
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_CPUCLK|RCC_CLOCKTYPE_HCLK
-                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
-                              |RCC_CLOCKTYPE_PCLK2|RCC_CLOCKTYPE_PCLK5
-                              |RCC_CLOCKTYPE_PCLK4;
-  RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
-  RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
-  RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC1Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC2Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC6Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC11Selection.ClockDivider = 1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Enables the Clock Security System
-  */
-  HAL_RCCEx_EnableLSECSS();
-}
-#elif CPU_CLK_USE_HSI_800MHZ
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the System Power Supply
-  */
-  if (HAL_PWREx_ConfigSupply(PWR_SMPS_SUPPLY) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure LSE Drive Capability
-  */
-  HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMHIGH);
-
-  /* Enable HSI */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Get current CPU/System buses clocks configuration and if necessary switch
- to intermediate HSI clock to ensure target clock can be set
-  */
-  HAL_RCC_GetClockConfig(&RCC_ClkInitStruct);
-  if ((RCC_ClkInitStruct.CPUCLKSource == RCC_CPUCLKSOURCE_IC1) ||
-     (RCC_ClkInitStruct.SYSCLKSource == RCC_SYSCLKSOURCE_IC2_IC6_IC11))
-  {
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_CPUCLK | RCC_CLOCKTYPE_SYSCLK);
-    RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_HSI;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-    {
-      /* Initialization Error */
-      Error_Handler();
-    }
-  }
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE
-                              |RCC_OSCILLATORTYPE_LSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL1.PLLM = 2;
-  RCC_OscInitStruct.PLL1.PLLN = 25;
-  RCC_OscInitStruct.PLL1.PLLFractional = 0;
-  RCC_OscInitStruct.PLL1.PLLP1 = 1;
-  RCC_OscInitStruct.PLL1.PLLP2 = 1;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL2.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL2.PLLM = 8;
-  RCC_OscInitStruct.PLL2.PLLFractional = 0;
-  RCC_OscInitStruct.PLL2.PLLN = 125;
-  RCC_OscInitStruct.PLL2.PLLP1 = 1;
-  RCC_OscInitStruct.PLL2.PLLP2 = 1;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL3.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL3.PLLM = 8;
-  RCC_OscInitStruct.PLL3.PLLN = 225;
-  RCC_OscInitStruct.PLL3.PLLFractional = 0;
-  RCC_OscInitStruct.PLL3.PLLP1 = 1;
-  RCC_OscInitStruct.PLL3.PLLP2 = 2;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL4.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL4.PLLM = 4;
-  RCC_OscInitStruct.PLL4.PLLN = 64;
-  RCC_OscInitStruct.PLL4.PLLFractional = 0;
-  RCC_OscInitStruct.PLL4.PLLP1 = 2;
-  RCC_OscInitStruct.PLL4.PLLP2 = 1;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_CPUCLK|RCC_CLOCKTYPE_HCLK
-                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
-                              |RCC_CLOCKTYPE_PCLK2|RCC_CLOCKTYPE_PCLK5
-                              |RCC_CLOCKTYPE_PCLK4;
-  RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
-  RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
-  RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC1Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC2Selection.ClockDivider = 2;
-  RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL2;
-  RCC_ClkInitStruct.IC6Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL3;
-  RCC_ClkInitStruct.IC11Selection.ClockDivider = 1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
-#else // CPU_CLK_USE_800MHZ
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the System Power Supply
-  */
-  if (HAL_PWREx_ConfigSupply(PWR_SMPS_SUPPLY) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure LSE Drive Capability
-  */
-  HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_MEDIUMHIGH);
-
-  /* Enable HSI */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /* Wait HSE stabilization time before its selection as PLL source. */
-  // HAL_Delay(HSE_STARTUP_TIMEOUT);
-
-  /** Get current CPU/System buses clocks configuration and if necessary switch
- to intermediate HSI clock to ensure target clock can be set
-  */
-  HAL_RCC_GetClockConfig(&RCC_ClkInitStruct);
-  if ((RCC_ClkInitStruct.CPUCLKSource == RCC_CPUCLKSOURCE_IC1) ||
-     (RCC_ClkInitStruct.SYSCLKSource == RCC_SYSCLKSOURCE_IC2_IC6_IC11))
-  {
-    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_CPUCLK | RCC_CLOCKTYPE_SYSCLK);
-    RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_HSI;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-    {
-      /* Initialization Error */
-      Error_Handler();
-    }
-  }
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE
-                              |RCC_OSCILLATORTYPE_LSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL1.PLLM = 2;
-  RCC_OscInitStruct.PLL1.PLLN = 100;
-  RCC_OscInitStruct.PLL1.PLLFractional = 0;
-  RCC_OscInitStruct.PLL1.PLLP1 = 3;
-  RCC_OscInitStruct.PLL1.PLLP2 = 1;
-  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL2.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL2.PLLM = 6;
-  RCC_OscInitStruct.PLL2.PLLN = 125;
-  RCC_OscInitStruct.PLL2.PLLFractional = 0;
-  RCC_OscInitStruct.PLL2.PLLP1 = 1;
-  RCC_OscInitStruct.PLL2.PLLP2 = 1;
-  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL3.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL3.PLLM = 4;
-  RCC_OscInitStruct.PLL3.PLLN = 75;
-  RCC_OscInitStruct.PLL3.PLLFractional = 0;
-  RCC_OscInitStruct.PLL3.PLLP1 = 1;
-  RCC_OscInitStruct.PLL3.PLLP2 = 1;
-  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL4.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL4.PLLM = 3;
-  RCC_OscInitStruct.PLL4.PLLN = 64;
-  RCC_OscInitStruct.PLL4.PLLFractional = 0;
-  RCC_OscInitStruct.PLL4.PLLP1 = 2;
-  RCC_OscInitStruct.PLL4.PLLP2 = 1;
-
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_CPUCLK|RCC_CLOCKTYPE_HCLK
-                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
-                              |RCC_CLOCKTYPE_PCLK2|RCC_CLOCKTYPE_PCLK5
-                              |RCC_CLOCKTYPE_PCLK4;
-  RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
-  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
-  RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
-  RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC1Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-  RCC_ClkInitStruct.IC2Selection.ClockDivider = 2;
-  RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL2;
-  RCC_ClkInitStruct.IC6Selection.ClockDivider = 1;
-  RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL3;
-  RCC_ClkInitStruct.IC11Selection.ClockDivider = 1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Enables the Clock Security System
-  */
-  HAL_RCCEx_EnableLSECSS();
-}
-#endif
-
-/**
-  * @brief Peripherals Common Clock Configuration
-  * @retval None
-  */
-void PeriphCommonClock_Config(void)
-{
-  RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
-
-  /** Initializes the peripherals clock
-  */
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_TIM;
-  PeriphClkInitStruct.TIMPresSelection = RCC_TIMPRES_DIV1;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
 #ifndef NO_OTP_FUSE
 /**
   * @brief  User OTP fuse Configuration

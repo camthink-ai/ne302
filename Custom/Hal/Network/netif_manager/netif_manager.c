@@ -3,6 +3,7 @@
 #include "lwip/init.h"
 #include "lwip/apps/sntp.h"
 #include "lwip/apps/mdns.h"
+#include "lwip/netifapi.h"
 #if IP_NAT
 #include "lwip/ip4_nat.h"
 #endif
@@ -328,7 +329,7 @@ void netif_manager_change_default_if(void)
         if (strcmp(if_name, NETIF_NAME_WIFI_STA) == 0) default_if = sl_net_client_netif_ptr();
         else if (strcmp(if_name, NETIF_NAME_WIFI_AP) == 0) default_if = sl_net_ap_netif_ptr();
         if (default_if != NULL && default_if != netif_get_default()) {
-            netif_set_default(default_if);
+            (void)netifapi_netif_set_default(default_if);
             LOG_DRV_INFO("Set default netif: %s\r\n", if_name);
         }
     }
@@ -632,6 +633,7 @@ int nm_get_netif_info(const char *if_name, netif_info_t *netif_info)
 /// @param netif_info Network interface information pointer
 void nm_print_netif_info(const char *if_name, netif_info_t *netif_info)
 {
+    const char *name_for_print = if_name;
     if (if_name != NULL) {
         netif_info = (netif_info_t *)hal_mem_alloc_large(sizeof(netif_info_t));
         if (netif_info == NULL) return;
@@ -641,6 +643,9 @@ void nm_print_netif_info(const char *if_name, netif_info_t *netif_info)
         }
     }
     if (netif_info == NULL) return;
+    if (name_for_print == NULL) {
+        name_for_print = netif_info->if_name;
+    }
 
     printf("================== NETIF INFO ==================\r\n");
     printf("IF_NAME: %s\r\n", netif_info->if_name);
@@ -649,13 +654,17 @@ void nm_print_netif_info(const char *if_name, netif_info_t *netif_info)
     printf("TYPE: %s\r\n", netif_type_str[netif_info->type]);
     printf("FW_VERSION: %s\r\n", netif_info->fw_version);
     if (netif_info->type == NETIF_TYPE_WIRELESS) {
-        if (strcmp(if_name, NETIF_NAME_WIFI_STA) == 0) printf("BSSID: "NETIF_MAC_STR_FMT"\r\n", NETIF_MAC_PARAMETER(netif_info->wireless_cfg.bssid));
+        if (name_for_print && strcmp(name_for_print, NETIF_NAME_WIFI_STA) == 0) {
+            printf("BSSID: "NETIF_MAC_STR_FMT"\r\n", NETIF_MAC_PARAMETER(netif_info->wireless_cfg.bssid));
+        }
         printf("SSID: %s\r\n", netif_info->wireless_cfg.ssid);
         printf("PW: %s\r\n", netif_info->wireless_cfg.pw);
         printf("SECURITY: %s\r\n", netif_security_str[netif_info->wireless_cfg.security]);
         printf("ENCRYPTION: %s\r\n", netif_encryption_str[netif_info->wireless_cfg.encryption]);
         printf("CHANNEL: %d\r\n", netif_info->wireless_cfg.channel);
-        if (strcmp(if_name, NETIF_NAME_WIFI_AP) == 0) printf("MAX CLIENT NUM: %d\r\n", netif_info->wireless_cfg.max_client_num);
+        if (name_for_print && strcmp(name_for_print, NETIF_NAME_WIFI_AP) == 0) {
+            printf("MAX CLIENT NUM: %d\r\n", netif_info->wireless_cfg.max_client_num);
+        }
     } else if (netif_info->type == NETIF_TYPE_4G) {
         printf("MODEL: %s\r\n", netif_info->cellular_info.model_name);
         printf("IMEI: %s\r\n", netif_info->cellular_info.imei);

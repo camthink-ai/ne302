@@ -44,6 +44,8 @@ export default function Graphics() {
   const [fastSkipFrames, setFastSkipFrames] = useState(0);
   const [fastResolution, setFastResolution] = useState(0);
   const [fastJpegQuality, setFastJpegQuality] = useState(85);
+  const [captureDisableComm, setCaptureDisableComm] = useState(false);
+  const [captureStorageAi, setCaptureStorageAi] = useState(false);
   const [cameraSectionOpen, setCameraSectionOpen] = useState(true);
   const [captureSectionOpen, setCaptureSectionOpen] = useState(true);
   const [luxRefDialogOpen, setLuxRefDialogOpen] = useState(false);
@@ -143,6 +145,12 @@ export default function Graphics() {
       if (typeof res.data.fast_capture_jpeg_quality === 'number') {
         setFastJpegQuality(res.data.fast_capture_jpeg_quality);
       }
+      if (typeof res.data.capture_disable_comm === 'boolean') {
+        setCaptureDisableComm(res.data.capture_disable_comm);
+      }
+      if (typeof res.data.capture_storage_ai === 'boolean') {
+        setCaptureStorageAi(res.data.capture_storage_ai);
+      }
       // TODO: when ISP APIs are wired, hydrate ISP exposure state from /api/v1/isp/aec, /aec/manual, /sensor_delay, /statistics, etc.
     } catch (error) {
       console.error(error);
@@ -153,6 +161,32 @@ export default function Graphics() {
   useEffect(() => {
     initHardwareInfo();
   }, []);
+
+  const buildImageConfigRequest = (
+    overrides: Partial<{
+      brightness: number;
+      contrast: number;
+      horizontal_flip: boolean;
+      vertical_flip: boolean;
+      aec: number;
+      fast_capture_skip_frames: number;
+      fast_capture_resolution: number;
+      fast_capture_jpeg_quality: number;
+      capture_disable_comm: boolean;
+      capture_storage_ai: boolean;
+    }> = {},
+  ) => ({
+    brightness: overrides.brightness ?? brightness,
+    contrast: overrides.contrast ?? contrast,
+    horizontal_flip: overrides.horizontal_flip ?? flipHorizontal,
+    vertical_flip: overrides.vertical_flip ?? flipVertical,
+    aec: overrides.aec ?? aec,
+    fast_capture_skip_frames: overrides.fast_capture_skip_frames ?? fastSkipFrames,
+    fast_capture_resolution: overrides.fast_capture_resolution ?? fastResolution,
+    fast_capture_jpeg_quality: overrides.fast_capture_jpeg_quality ?? fastJpegQuality,
+    capture_disable_comm: overrides.capture_disable_comm ?? captureDisableComm,
+    capture_storage_ai: overrides.capture_storage_ai ?? captureStorageAi,
+  });
 
   const handleFastCaptureChange = (type: 'fast_skip_frames' | 'fast_jpeg_quality', rawValue: number) => {
     let value = rawValue;
@@ -188,16 +222,12 @@ export default function Graphics() {
     const nextQuality = type === 'fast_jpeg_quality' ? value : fastJpegQuality;
 
     try {
-      await setHardwareInfoReq({
-        brightness,
-        contrast,
-        horizontal_flip: flipHorizontal,
-        vertical_flip: flipVertical,
-        aec,
-        fast_capture_skip_frames: nextSkip,
-        fast_capture_resolution: fastResolution,
-        fast_capture_jpeg_quality: nextQuality,
-      });
+      await setHardwareInfoReq(
+        buildImageConfigRequest({
+          fast_capture_skip_frames: nextSkip,
+          fast_capture_jpeg_quality: nextQuality,
+        }),
+      );
     } catch (error) {
       console.error(error);
     }
@@ -244,16 +274,18 @@ export default function Graphics() {
     }
 
     try {
-      await setHardwareInfoReq({
-        brightness: nextBrightness,
-        contrast: nextContrast,
-        horizontal_flip: nextFlipHorizontal,
-        vertical_flip: nextFlipVertical,
-        aec: nextAec,
-        fast_capture_skip_frames: nextFastSkipFrames,
-        fast_capture_resolution: nextFastResolution,
-        fast_capture_jpeg_quality: nextFastJpegQuality,
-      });
+      await setHardwareInfoReq(
+        buildImageConfigRequest({
+          brightness: nextBrightness,
+          contrast: nextContrast,
+          horizontal_flip: nextFlipHorizontal,
+          vertical_flip: nextFlipVertical,
+          aec: nextAec,
+          fast_capture_skip_frames: nextFastSkipFrames,
+          fast_capture_resolution: nextFastResolution,
+          fast_capture_jpeg_quality: nextFastJpegQuality,
+        }),
+      );
     } catch (error) {
       console.error(error);
     }
@@ -483,6 +515,48 @@ export default function Graphics() {
                             }}
                           />
                         </div>
+                        {/*
+                        <Separator />
+                        <div className="flex justify-between gap-4 items-center">
+                          <Label>
+                            {i18n._('sys.hardware_management.capture_disable_comm')}
+                          </Label>
+                          <Switch
+                            checked={captureDisableComm}
+                            onCheckedChange={async (checked) => {
+                              setCaptureDisableComm(checked);
+                              try {
+                                await setHardwareInfoReq(
+                                  buildImageConfigRequest({ capture_disable_comm: checked }),
+                                );
+                              } catch (error) {
+                                console.error(error);
+                                setCaptureDisableComm(!checked);
+                              }
+                            }}
+                          />
+                        </div>
+                        <Separator />
+                        <div className="flex justify-between gap-4 items-center">
+                          <Label>
+                            {i18n._('sys.hardware_management.capture_storage_ai')}
+                          </Label>
+                          <Switch
+                            checked={captureStorageAi}
+                            onCheckedChange={async (checked) => {
+                              setCaptureStorageAi(checked);
+                              try {
+                                await setHardwareInfoReq(
+                                  buildImageConfigRequest({ capture_storage_ai: checked }),
+                                );
+                              } catch (error) {
+                                console.error(error);
+                                setCaptureStorageAi(!checked);
+                              }
+                            }}
+                          />
+                        </div>
+                        */}
                       </div>
                     )}
                   </div>

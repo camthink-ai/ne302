@@ -362,7 +362,7 @@ static int fset_cmd(int argc, char* argv[])
     if (argc == 3) {
         char *key = argv[1];
         char *value = argv[2];
-        storage_nvs_write(NVS_USER, key, value, strlen(value));
+        storage_nvs_write(NVS_USER, key, value, strlen(value) + 1);
         return 0;
     }
 
@@ -1176,6 +1176,6 @@ void register_cmds(void)
     system_service_pir_debug_register_commands();
 
     
-    LOG_SIMPLE("[CLI] All commands registered (%d util commands + driver commands)\r\n", 
-               (int)(sizeof(file_cmd_table) / sizeof(file_cmd_table[0])));
+    // LOG_SIMPLE("[CLI] All commands registered (%d util commands + driver commands)\r\n", 
+    //            (int)(sizeof(file_cmd_table) / sizeof(file_cmd_table[0])));
 }

@@ -5,11 +5,11 @@
 #include "aicam_error.h"
 #include "lwip/etharp.h"
 #include "lwip/dhcp.h"
+#include "lwip/tcpip.h"
+#include "lwip/netifapi.h"
 #include "Log/debug.h"
 #include "mem.h"
-#if NETIF_USB_ECM_IS_CAT1_MODULE
 #include "usb_host_ecm.h"
-#endif
 #include "usb_ecm_netif.h"
 #include "ms_modem.h"
 
@@ -38,6 +38,40 @@ static cellular_info_t usb_ecm_cellular_info = {0};
 
 static osEventFlagsId_t usb_ecm_netif_events = NULL;
 static osMutexId_t usb_ecm_netif_mutex = NULL;
+static volatile uint32_t usb_ecm_netif_link_flags = 0;
+static osMessageQueueId_t usb_ecm_tx_queue = NULL;
+static osThreadId_t usb_ecm_tx_thread = NULL;
+static volatile uint8_t usb_ecm_tx_run = 0;
+
+typedef struct {
+    uint16_t len;
+    uint8_t *buf;
+} usb_ecm_tx_item_t;
+
+static void usb_ecm_tx_worker(void *argument)
+{
+    (void)argument;
+    usb_ecm_tx_item_t item = {0};
+
+    while (usb_ecm_tx_run) {
+        if (osMessageQueueGet(usb_ecm_tx_queue, &item, NULL, osWaitForever) != osOK) continue;
+        if (item.buf == NULL || item.len == 0) continue;
+
+        if ((usb_ecm_netif_link_flags & USB_ECM_EVENT_UP) == 0) {
+            hal_mem_free(item.buf);
+            continue;
+        }
+
+        NX_PACKET packet = {0};
+        packet.nx_packet_ptr = item.buf;
+        packet.nx_packet_length = item.len;
+
+        if (usb_host_ecm_send_raw_data(&packet) == 0) {
+            (void)usb_host_ecm_wait_tx_done(50);
+        }
+        hal_mem_free(item.buf);
+    }
+}
 
 static void usb_ecm_netif_low_level_input(struct netif *netif, uint8_t *b, uint16_t len)
 {
@@ -51,7 +85,7 @@ static void usb_ecm_netif_low_level_input(struct netif *netif, uint8_t *b, uint1
     /* We allocate a pbuf chain of pbufs from the Lwip buffer pool
     * and copy the data to the pbuf chain
     */
-    printf("IN len = %d\n", len);
+    // printf("IN len = %d\n", len);
     if ((p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL)) != ((struct pbuf *)0)) {
         for (q = p, bufferoffset = 0; q != NULL; q = q->next) {
             memcpy((uint8_t *)q->payload, (uint8_t *)b + bufferoffset, q->len);
@@ -70,13 +104,28 @@ static void usb_ecm_netif_low_level_input(struct netif *netif, uint8_t *b, uint1
 static err_t usb_ecm_netif_low_level_output(struct netif *netif, struct pbuf *p)
 {
     struct pbuf *q = NULL;
-    NX_PACKET packet = {0};
 
+    if (netif == NULL || p == NULL) return ERR_ARG;
+
+    /* Do not transmit if link is down/deactivated. */
+    if ((usb_ecm_netif_link_flags & USB_ECM_EVENT_UP) == 0) return ERR_IF;
+
+    if (usb_ecm_tx_queue == NULL) return ERR_IF;
+
+    uint16_t len = (uint16_t)p->tot_len;
+    uint8_t *buf = hal_mem_alloc(len, MEM_LARGE);
+    if (buf == NULL) return ERR_MEM;
+
+    uint16_t off = 0;
     for (q = p; q != NULL; q = q->next) {
-        packet.nx_packet_ptr = (uint8_t *)q->payload;
-        packet.nx_packet_length = q->len;
-        printf("OUT len = %lu\n", (unsigned long)packet.nx_packet_length);
-        usb_host_ecm_send_raw_data(&packet);
+        memcpy(buf + off, (uint8_t *)q->payload, q->len);
+        off += (uint16_t)q->len;
+    }
+
+    usb_ecm_tx_item_t item = {.len = len, .buf = buf};
+    if (osMessageQueuePut(usb_ecm_tx_queue, &item, 0, 0) != osOK) {
+        hal_mem_free(buf);
+        return ERR_MEM;
     }
     return ERR_OK;
 }
@@ -100,6 +149,29 @@ static err_t usb_ecm_netif_ethernetif_init(struct netif *netif)
     return ERR_OK;
 }
 
+/* Run lwIP netif changes on tcpip thread — never block USBX enum/class threads on netifapi. */
+static void usb_ecm_tcpip_link_up_fn(void *ctx)
+{
+    (void)ctx;
+    netif_set_link_up(&ecm_netif);
+    if (usb_ecm_netif_events != NULL) {
+        osEventFlagsSet(usb_ecm_netif_events, USB_ECM_EVENT_UP);
+    }
+    usb_ecm_netif_link_flags |= USB_ECM_EVENT_UP;
+    usb_ecm_netif_link_flags &= ~USB_ECM_EVENT_DOWN;
+}
+
+static void usb_ecm_tcpip_link_down_fn(void *ctx)
+{
+    (void)ctx;
+    (void)netifapi_dhcp_stop(&ecm_netif);
+    netif_set_down(&ecm_netif);
+    netif_set_link_down(&ecm_netif);
+    if (usb_ecm_netif_events != NULL) {
+        osEventFlagsSet(usb_ecm_netif_events, USB_ECM_EVENT_DOWN);
+    }
+}
+
 static void usb_ecm_netif_event_callback(usb_host_ecm_event_type_t event, void *arg)
 {
     // __attribute__((unused)) err_t ret = ERR_OK;
@@ -112,15 +184,18 @@ static void usb_ecm_netif_event_callback(usb_host_ecm_event_type_t event, void *
             osEventFlagsSet(usb_ecm_netif_events, USB_ECM_EVENT_ACTIVATE);
             break;
         case USB_HOST_ECM_EVENT_UP:
-            netifapi_netif_set_link_up(&ecm_netif);
-            osEventFlagsSet(usb_ecm_netif_events, USB_ECM_EVENT_UP);
+            if (tcpip_callback(usb_ecm_tcpip_link_up_fn, NULL) != ERR_OK) {
+                LOG_DRV_ERROR("usb_ecm: tcpip_callback(link up) failed");
+            }
             break;
         case USB_HOST_ECM_EVENT_DEACTIVATE:
         case USB_HOST_ECM_EVENT_DOWN:
-            dhcp_stop(&ecm_netif);
-            netifapi_netif_set_down(&ecm_netif);
-            netifapi_netif_set_link_down(&ecm_netif);
-            osEventFlagsSet(usb_ecm_netif_events, USB_ECM_EVENT_DOWN);
+            /* Stop TX path immediately; full netif teardown runs on tcpip thread. */
+            usb_ecm_netif_link_flags |= USB_ECM_EVENT_DOWN;
+            usb_ecm_netif_link_flags &= ~USB_ECM_EVENT_UP;
+            if (tcpip_callback(usb_ecm_tcpip_link_down_fn, NULL) != ERR_OK) {
+                LOG_DRV_ERROR("usb_ecm: tcpip_callback(link down) failed");
+            }
             break;
         case USB_HOST_ECM_EVENT_DATA:
             usb_ecm_netif_low_level_input(&ecm_netif, ((NX_PACKET *)arg)->nx_packet_ptr, ((NX_PACKET *)arg)->nx_packet_length);
@@ -187,9 +262,22 @@ int usb_ecm_netif_init(void)
         goto usb_ecm_netif_init_exit;
     }
 
-    // Register lwIP netif
-    ue = netif_add(&ecm_netif, NULL, NULL, NULL, NULL, &usb_ecm_netif_ethernetif_init, &tcpip_input);
-    if (ue == NULL) {
+    usb_ecm_tx_queue = osMessageQueueNew(8, sizeof(usb_ecm_tx_item_t), NULL);
+    if (usb_ecm_tx_queue == NULL) {
+        ret = AICAM_ERROR_NO_MEMORY;
+        goto usb_ecm_netif_init_exit;
+    }
+    usb_ecm_tx_run = 1;
+    usb_ecm_tx_thread = osThreadNew(usb_ecm_tx_worker, NULL, NULL);
+    if (usb_ecm_tx_thread == NULL) {
+        usb_ecm_tx_run = 0;
+        ret = AICAM_ERROR_NO_MEMORY;
+        goto usb_ecm_netif_init_exit;
+    }
+
+    // Register lwIP netif (run on tcpip thread)
+    err_t nif_err = netifapi_netif_add(&ecm_netif, NULL, NULL, NULL, NULL, &usb_ecm_netif_ethernetif_init, &tcpip_input);
+    if (nif_err != ERR_OK) {
         ret = AICAM_ERROR;
         goto usb_ecm_netif_init_exit;
     }
@@ -210,10 +298,7 @@ int usb_ecm_netif_init(void)
 usb_ecm_netif_init_exit:
     if (ret != AICAM_OK) {
         usb_host_ecm_deinit();
-        if (ue != NULL) {
-            netif_remove(ue);
-            ue = NULL;
-        }
+        (void)netifapi_netif_remove(&ecm_netif);
         if (usb_ecm_netif_events != NULL) {
             osEventFlagsDelete(usb_ecm_netif_events);
             usb_ecm_netif_events = NULL;
@@ -221,6 +306,19 @@ usb_ecm_netif_init_exit:
         if (usb_ecm_netif_mutex != NULL) {
             osMutexDelete(usb_ecm_netif_mutex);
             usb_ecm_netif_mutex = NULL;
+        }
+        if (usb_ecm_tx_thread != NULL) {
+            (void)osThreadTerminate(usb_ecm_tx_thread);
+            usb_ecm_tx_thread = NULL;
+        }
+        usb_ecm_tx_run = 0;
+        if (usb_ecm_tx_queue != NULL) {
+            usb_ecm_tx_item_t item = {0};
+            while (osMessageQueueGet(usb_ecm_tx_queue, &item, NULL, 0) == osOK) {
+                if (item.buf != NULL) hal_mem_free(item.buf);
+            }
+            osMessageQueueDelete(usb_ecm_tx_queue);
+            usb_ecm_tx_queue = NULL;
         }
     #if NETIF_USB_ECM_IS_CAT1_MODULE
         modem_device_deinit();
@@ -269,7 +367,7 @@ int usb_ecm_netif_up(void)
         ip_addr_set_zero_ip4(&(ecm_netif.ip_addr));
         ip_addr_set_zero_ip4(&(ecm_netif.netmask));
         ip_addr_set_zero_ip4(&(ecm_netif.gw));
-        ret = dhcp_start(&ecm_netif);
+        ret = netifapi_dhcp_start(&ecm_netif);
         if (ret != ERR_OK){
             netifapi_netif_set_down(&ecm_netif);
             return AICAM_ERROR;
@@ -278,7 +376,7 @@ int usb_ecm_netif_up(void)
         do {
             event = osEventFlagsWait(usb_ecm_netif_events, USB_ECM_EVENT_DOWN, osFlagsWaitAny, 100);
             if (!(event & osFlagsError)) {
-                dhcp_stop(&ecm_netif);
+                (void)netifapi_dhcp_stop(&ecm_netif);
                 netifapi_netif_set_down(&ecm_netif);
                 return AICAM_ERROR;
             }
@@ -290,7 +388,7 @@ int usb_ecm_netif_up(void)
             diff_tick = (end_tick >= start_tick) ? (end_tick - start_tick) : (0xFFFFFFFFU - start_tick + end_tick);
         } while (diff_tick < NETIF_USB_ECM_DHCP_TIMEOUT_MS);
         if (diff_tick >= NETIF_USB_ECM_DHCP_TIMEOUT_MS) {
-            dhcp_stop(&ecm_netif);
+            (void)netifapi_dhcp_stop(&ecm_netif);
             netifapi_netif_set_down(&ecm_netif);
             return AICAM_ERROR_TIMEOUT;
         }
@@ -317,7 +415,7 @@ int usb_ecm_netif_down(void)
     ue = netif_get_by_index(ecm_netif.num + 1);
     if (ue == NULL || ue != &ecm_netif) return AICAM_ERROR_NOT_SUPPORTED;
     
-    dhcp_stop(&ecm_netif);
+    (void)netifapi_dhcp_stop(&ecm_netif);
     netifapi_netif_set_down(&ecm_netif);
     return AICAM_OK;
 }
@@ -329,15 +427,30 @@ void usb_ecm_netif_deinit(void)
     ue = netif_get_by_index(ecm_netif.num + 1);
     if (ue == NULL || ue != &ecm_netif) return;
 
-    dhcp_stop(&ecm_netif);
+    (void)netifapi_dhcp_stop(&ecm_netif);
     netifapi_netif_set_down(&ecm_netif);
     netifapi_netif_set_link_down(&ecm_netif);
-    netif_remove(&ecm_netif);
+    (void)netifapi_netif_remove(&ecm_netif);
 
 #if NETIF_USB_ECM_IS_CAT1_MODULE
     modem_device_deinit();
 #endif
     usb_host_ecm_deinit();
+
+    if (usb_ecm_tx_thread != NULL) {
+        usb_ecm_tx_run = 0;
+        (void)osThreadTerminate(usb_ecm_tx_thread);
+        usb_ecm_tx_thread = NULL;
+    }
+    if (usb_ecm_tx_queue != NULL) {
+        usb_ecm_tx_item_t item = {0};
+        while (osMessageQueueGet(usb_ecm_tx_queue, &item, NULL, 0) == osOK) {
+            if (item.buf != NULL) hal_mem_free(item.buf);
+        }
+        osMessageQueueDelete(usb_ecm_tx_queue);
+        usb_ecm_tx_queue = NULL;
+    }
+
     if (usb_ecm_netif_events != NULL) {
         osEventFlagsDelete(usb_ecm_netif_events);
         usb_ecm_netif_events = NULL;

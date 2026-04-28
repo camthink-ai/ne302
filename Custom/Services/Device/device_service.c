@@ -277,8 +277,10 @@ static void init_default_camera_config(camera_config_t *config)
     config->image_config.fast_capture_skip_frames = image_config.fast_capture_skip_frames;
     config->image_config.fast_capture_resolution = image_config.fast_capture_resolution;
     config->image_config.fast_capture_jpeg_quality = image_config.fast_capture_jpeg_quality;
+    config->image_config.capture_disable_comm = image_config.capture_disable_comm;
+    config->image_config.capture_storage_ai = image_config.capture_storage_ai;
 
-    LOG_SVC_DEBUG("Image configuration updated: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, aec=%d, startup_skip=%u, fast_skip=%u, fast_res=%u, fast_jpeg_q=%u",
+    LOG_SVC_DEBUG("Image configuration updated: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, aec=%d, startup_skip=%u, fast_skip=%u, fast_res=%u, fast_jpeg_q=%u, cap_dis_comm=%d, cap_stor_ai=%d",
                 config->image_config.brightness,
                 config->image_config.contrast,
                 config->image_config.horizontal_flip,
@@ -287,7 +289,9 @@ static void init_default_camera_config(camera_config_t *config)
                 config->image_config.startup_skip_frames,
                 config->image_config.fast_capture_skip_frames,
                 config->image_config.fast_capture_resolution,
-                config->image_config.fast_capture_jpeg_quality);
+                config->image_config.fast_capture_jpeg_quality,
+                config->image_config.capture_disable_comm,
+                config->image_config.capture_storage_ai);
 }
 
 /**
@@ -966,7 +970,7 @@ aicam_result_t device_service_update_info(const device_info_config_t *info)
 
 aicam_bool_t device_service_storage_is_sd_connected(void)
 {
-    if (!g_device_service.initialized) {
+    if (!g_device_service.initialized || sd_wait_ready_for_open(1000) != AICAM_OK) {
         return AICAM_FALSE;
     }
     
@@ -1601,7 +1605,8 @@ aicam_result_t device_service_camera_get_jpeg_params(jpegc_params_t *jpeg_params
     }
 
     if (!g_device_service.jpeg_device) {
-        return AICAM_ERROR_NOT_FOUND;
+        g_device_service.jpeg_device = device_find_pattern(JPEG_DEVICE_NAME, DEV_TYPE_VIDEO);
+        if (!g_device_service.jpeg_device) return AICAM_ERROR_NOT_FOUND;
     }
     aicam_result_t ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_GET_ENC_PARAM, (uint8_t *)jpeg_params, sizeof(jpegc_params_t));
     if (ret != AICAM_OK) {
@@ -1620,6 +1625,7 @@ aicam_result_t device_service_camera_free_jpeg_buffer(uint8_t *buffer)
         return AICAM_ERROR_NOT_FOUND;
     }
     aicam_result_t ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_RETURN_ENC_BUFFER, buffer, 0);
+    if (ret != AICAM_OK) ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_FREE_ENC_BUFFER, buffer, 0);
     if (ret != AICAM_OK) {
         LOG_SVC_ERROR("Failed to free JPEG buffer: %d", ret);
         return ret;
@@ -2179,11 +2185,13 @@ aicam_result_t device_service_reset_to_factory_defaults(void)
         LOG_SVC_INFO("AI model cleared");
     }
 
-
+    // 3. reset sysclk
+    sys_clk_config_t sys_clk_config = {0};
+    fsbl_app_write_sys_clk_config(&sys_clk_config);
 
     LOG_SVC_INFO("Device reset to factory defaults completed, restarting system...");
     
-    // 3. Restart system
+    // 4. Restart system
     result = restart_system();
     if (result != AICAM_OK) {
         LOG_SVC_ERROR("Failed to restart system: %d", result);

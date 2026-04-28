@@ -18,8 +18,8 @@ static void n6_comm_task(void *pvParameters)
         if (ret != HAL_OK) {
             ret = HAL_UARTEx_ReceiveToIdle_DMA(&hlpuart2, n6_comm_rx_buffer, (N6_COMM_MAX_LEN - 1));
             if (ret != HAL_OK) {
-                HAL_UART_Abort(&hlpuart2);
-                vTaskDelay(pdMS_TO_TICKS(200));
+                HAL_UART_AbortReceive(&hlpuart2);
+                vTaskDelay(pdMS_TO_TICKS(10));
             }
         } else {
             event = xEventGroupWaitBits(n6_comm_event_group, N6_COMM_EVENT_RX_DONE | N6_COMM_EVENT_ERR, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -31,8 +31,8 @@ static void n6_comm_task(void *pvParameters)
                 }
                 ret = HAL_UARTEx_ReceiveToIdle_DMA(&hlpuart2, n6_comm_rx_buffer, (N6_COMM_MAX_LEN - 1));
                 if (ret != HAL_OK) {
-                    HAL_UART_Abort(&hlpuart2);
-                    vTaskDelay(pdMS_TO_TICKS(200));
+                    HAL_UART_AbortReceive(&hlpuart2);
+                    vTaskDelay(pdMS_TO_TICKS(10));
                 }
             }
             if (event & N6_COMM_EVENT_ERR) {

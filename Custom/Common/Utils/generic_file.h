@@ -43,6 +43,8 @@ typedef struct {
     int open_count;  
 } file_instance_t;
 
+FS_Type_t file_get_current_type(void);
+
 void* file_fopen(const char *path, const char *mode);
 
 int file_fclose(void *fd);

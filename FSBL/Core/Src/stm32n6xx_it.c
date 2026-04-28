@@ -55,9 +55,8 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern DMA_HandleTypeDef handle_GPDMA1_Channel4;
-extern DMA_HandleTypeDef handle_GPDMA1_Channel3;
 extern UART_HandleTypeDef huart2;
+extern UART_HandleTypeDef huart9;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -216,34 +215,6 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief This function handles GPDMA1 Channel 3 global interrupt.
-  */
-void GPDMA1_Channel3_IRQHandler(void)
-{
-  /* USER CODE BEGIN GPDMA1_Channel3_IRQn 0 */
-
-  /* USER CODE END GPDMA1_Channel3_IRQn 0 */
-  HAL_DMA_IRQHandler(&handle_GPDMA1_Channel3);
-  /* USER CODE BEGIN GPDMA1_Channel3_IRQn 1 */
-
-  /* USER CODE END GPDMA1_Channel3_IRQn 1 */
-}
-
-/**
-  * @brief This function handles GPDMA1 Channel 4 global interrupt.
-  */
-void GPDMA1_Channel4_IRQHandler(void)
-{
-  /* USER CODE BEGIN GPDMA1_Channel4_IRQn 0 */
-
-  /* USER CODE END GPDMA1_Channel4_IRQn 0 */
-  HAL_DMA_IRQHandler(&handle_GPDMA1_Channel4);
-  /* USER CODE BEGIN GPDMA1_Channel4_IRQn 1 */
-
-  /* USER CODE END GPDMA1_Channel4_IRQn 1 */
-}
-
-/**
   * @brief This function handles USART2 global interrupt.
   */
 void USART2_IRQHandler(void)
@@ -255,6 +226,16 @@ void USART2_IRQHandler(void)
   /* USER CODE BEGIN USART2_IRQn 1 */
 
   /* USER CODE END USART2_IRQn 1 */
+}
+
+/**
+  * @brief This function handles UART9 global interrupt.
+  */
+void UART9_IRQHandler(void)
+{
+  /* USER CODE BEGIN UART9_IRQn 0 */
+  HAL_UART_IRQHandler(&huart9);
+  /* USER CODE END UART9_IRQn 0 */
 }
 
 /* USER CODE BEGIN 1 */

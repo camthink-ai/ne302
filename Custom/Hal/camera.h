@@ -92,6 +92,8 @@ typedef enum {
     CAM_CMD_RETURN_PIPE2_BUFFER,
     CAM_CMD_SET_STARTUP_SKIP_FRAMES,    // Set frames to skip on startup for stabilization
     CAM_CMD_GET_STARTUP_SKIP_FRAMES,    // Get current startup skip frames setting
+    CAM_CMD_UNSHARE_PIPE1_BUFFER,
+    CAM_CMD_UNSHARE_PIPE2_BUFFER,
 } CAM_CMD_E;
 
 typedef enum {
@@ -190,6 +192,8 @@ typedef struct {
 } camera_t;
 
 int camera_register(void);
+int camera_deinit_but_not_unregister(void);
+void camera_free_unshared_buffer(uint8_t *buffer);
 int camera_unregister(void);
 
 /**

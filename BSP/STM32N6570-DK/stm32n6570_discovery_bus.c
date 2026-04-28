@@ -225,7 +225,7 @@ int32_t BSP_I2C1_Init(void)
       if (ret == BSP_ERROR_NONE)
       {
 #endif /* (USE_HAL_I2C_REGISTER_CALLBACKS == 0) */
-        if (MX_I2C1_Init(&hbus_i2c1, I2C_GetTiming(HAL_RCC_GetPCLK1Freq(), BUS_I2C1_FREQUENCY)) != HAL_OK)
+        if (BSP_MX_I2C1_Init(&hbus_i2c1, I2C_GetTiming(HAL_RCC_GetPCLK1Freq(), BUS_I2C1_FREQUENCY)) != HAL_OK)
         {
           ret = BSP_ERROR_BUS_FAILURE;
         }
@@ -270,7 +270,7 @@ int32_t BSP_I2C1_DeInit(void)
   * @param  timing I2C timing
   * @retval HAL status
   */
-__weak HAL_StatusTypeDef MX_I2C1_Init(I2C_HandleTypeDef *hI2c, uint32_t timing)
+__weak HAL_StatusTypeDef BSP_MX_I2C1_Init(I2C_HandleTypeDef *hI2c, uint32_t timing)
 {
   HAL_StatusTypeDef status = HAL_OK;
 
@@ -699,7 +699,7 @@ int32_t BSP_I2C2_Init(void)
       if (ret == BSP_ERROR_NONE)
       {
 #endif /* (USE_HAL_I2C_REGISTER_CALLBACKS == 0) */
-        if (MX_I2C2_Init(&hbus_i2c2, I2C_GetTiming(HAL_RCC_GetPCLK1Freq(), BUS_I2C2_FREQUENCY)) != HAL_OK)
+        if (MX_I2C2_Init(&hbus_i2c2, 0x00300B29) != HAL_OK)
         {
           ret = BSP_ERROR_BUS_FAILURE;
         }
@@ -776,6 +776,12 @@ __weak HAL_StatusTypeDef MX_I2C2_Init(I2C_HandleTypeDef *hI2c, uint32_t timing)
       {
         status = HAL_ERROR;
       }
+    }
+    /** I2C Fast mode Plus enable
+    */
+    if (HAL_I2CEx_ConfigFastModePlus(hI2c, I2C_FASTMODEPLUS_ENABLE) != HAL_OK)
+    {
+      status = HAL_ERROR;
     }
   }
 
@@ -1252,7 +1258,17 @@ static uint32_t I2C_Compute_SCLL_SCLH (uint32_t clock_src_freq, uint32_t I2C_spe
   */
 static void I2C2_MspInit(I2C_HandleTypeDef *phi2c)
 {
-  GPIO_InitTypeDef gpio_init_structure;
+  GPIO_InitTypeDef gpio_init_structure = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+
+  /** Initializes the peripherals clock
+  */
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_I2C2;
+  PeriphClkInitStruct.I2c2ClockSelection = RCC_I2C2CLKSOURCE_CLKP;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+  {
+    while (1);
+  }
 
   /* Prevent unused argument(s) compilation warning */
   UNUSED(phi2c);

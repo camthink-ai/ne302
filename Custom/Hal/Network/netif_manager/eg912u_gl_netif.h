@@ -18,6 +18,8 @@ struct netif *eg912u_netif_ptr(void);
 
 int eg912u_netif_ctrl(const char *if_name, netif_cmd_t cmd, void *param);
 
+int eg912u_netif_enable_fast_mode(void);
+
 #ifdef __cplusplus
 }
 #endif

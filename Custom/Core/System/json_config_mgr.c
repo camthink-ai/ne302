@@ -125,7 +125,9 @@
              .startup_skip_frames = 10,  // Default frames to skip for camera stabilization
              .fast_capture_skip_frames = 10,
              .fast_capture_resolution = 0,   // 0: 1280x720
-             .fast_capture_jpeg_quality = 60
+             .fast_capture_jpeg_quality = 60,
+             .capture_disable_comm = AICAM_FALSE,
+             .capture_storage_ai = AICAM_FALSE
          },
          .light_config = {
              .connected = AICAM_FALSE,
@@ -712,6 +714,48 @@
          return result;
      }
 
+     return AICAM_OK;
+ }
+
+ aicam_result_t json_config_sync_ai_pipe_nvs_from_input_size(uint32_t input_width, uint32_t input_height)
+ {
+     if (input_width == 0U || input_height == 0U)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
+     uint32_t nvs_w = 0U;
+     uint32_t nvs_h = 0U;
+     aicam_result_t rw = json_config_nvs_read_uint32(NVS_KEY_AI_PIPE_WIDTH, &nvs_w);
+     aicam_result_t rh = json_config_nvs_read_uint32(NVS_KEY_AI_PIPE_HEIGHT, &nvs_h);
+     if (rw == AICAM_OK && rh == AICAM_OK && nvs_w == input_width && nvs_h == input_height)
+     {
+         return AICAM_OK;
+     }
+
+     aicam_result_t wret = json_config_nvs_write_uint32(NVS_KEY_AI_PIPE_WIDTH, input_width);
+     if (wret != AICAM_OK)
+     {
+         LOG_CORE_ERROR("Failed to write AI pipe width to NVS: %d", wret);
+         return wret;
+     }
+     wret = json_config_nvs_write_uint32(NVS_KEY_AI_PIPE_HEIGHT, input_height);
+     if (wret != AICAM_OK)
+     {
+         LOG_CORE_ERROR("Failed to write AI pipe height to NVS: %d", wret);
+         return wret;
+     }
+
+     if (rw == AICAM_OK && rh == AICAM_OK)
+     {
+         LOG_CORE_INFO("NVS AI pipe size updated from %ux%u to %ux%u",
+                       (unsigned)nvs_w, (unsigned)nvs_h,
+                       (unsigned)input_width, (unsigned)input_height);
+     }
+     else
+     {
+         LOG_CORE_INFO("NVS AI pipe size set to %ux%u", (unsigned)input_width, (unsigned)input_height);
+     }
      return AICAM_OK;
  }
 

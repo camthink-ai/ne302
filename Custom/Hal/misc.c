@@ -11,10 +11,17 @@
 
 static uint8_t key_read(void);
 static int light_get_value(uint8_t *rate);
-static int battery_get_value(uint8_t *rate);
+static int battery_get_value(void);
 
+static uint8_t bat_tread_stack[1024 * 2] ALIGN_32 IN_PSRAM;
 static uint8_t led_tread_stack[1024 * 2] ALIGN_32 IN_PSRAM;
 static uint8_t key_tread_stack[1024 * 16] ALIGN_32 IN_PSRAM;
+const osThreadAttr_t batTask_attributes = {
+    .name = "batTask",
+    .priority = (osPriority_t) osPriorityLow,
+    .stack_mem = bat_tread_stack,
+    .stack_size = sizeof(bat_tread_stack),
+};
 const osThreadAttr_t ledTask_attributes = {
     .name = "ledTask",
     .priority = (osPriority_t) osPriorityNormal,
@@ -29,7 +36,7 @@ const osThreadAttr_t keyTask_attributes = {
     .stack_size = sizeof(key_tread_stack),
 };
 
-static osThreadId_t led_processId, key_processId;
+static osThreadId_t led_processId, key_processId, bat_processId;
 static misc_t g_key, g_flash, g_ind, g_light, g_battery, g_io, g_ind_ext;
 
 gpio_group_t io_groups[] = {
@@ -162,8 +169,8 @@ static int misc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsigne
                     if(light_get_value(ubuf) < 0)
                         ret = AICAM_ERROR_NOT_FOUND;
                 }else if(strcmp(misc->dev->name, BATTERY_DEVICE_NAME) == 0){
-                    if(battery_get_value(ubuf) < 0)
-                        ret = AICAM_ERROR_NOT_FOUND;
+                    battery_data_t *data = (battery_data_t *)misc->data;
+                    *(uint8_t *)ubuf = data->rate;
                 }else{
                     ret = AICAM_ERROR_NOT_FOUND;
                 }
@@ -678,28 +685,46 @@ __attribute__((unused)) static void light_unregister(void)
     }
 }
 
-static int battery_get_value(uint8_t *rate)
+static int battery_get_value(void)
 {
-    uint32_t voltage;
-    if(!g_battery.is_init)
-        return -1;
+    uint8_t rate = 0;
+    uint32_t voltage = 0;
+
     pwr_manager_acquire(g_battery.pwr_handle);
     osDelay(100);
     ADC_get_value(&voltage, 2);
     pwr_manager_release(g_battery.pwr_handle);
 
     voltage *= 4;
-    LOG_SIMPLE("battery get voltage :%ld \r\n",voltage);
+    LOG_SIMPLE("batv: %ld \r\n",voltage);
     if (voltage < BATTERY_MIN_VOLTAGE / 2) {
         // maybe typec inserted
-        *rate = 255;
+        rate = 255;
     } else {
         voltage = MIN(MAX(voltage, BATTERY_MIN_VOLTAGE), BATTERY_MAX_VOLTAGE);
-        *rate = (uint8_t)((voltage - BATTERY_MIN_VOLTAGE) * 100 / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE));
+        rate = (uint8_t)((voltage - BATTERY_MIN_VOLTAGE) * 100 / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE));
     }
+
+    osMutexAcquire(g_battery.mtx_id, osWaitForever);
+    ((battery_data_t *)g_battery.data)->voltage = voltage;
+    ((battery_data_t *)g_battery.data)->rate = rate;
+    osMutexRelease(g_battery.mtx_id);
     return 0;
 }
 
+static void batteryProcess(void *argument)
+{
+    uint8_t times = 0;
+
+    while (g_battery.is_init) {
+        if (times == 0) osDelay(500);
+        else osDelay(15000);
+        battery_get_value();
+        times++;
+    }
+    bat_processId = NULL;
+    osThreadExit();
+}
 
 static int battery_init(void *priv)
 {
@@ -708,7 +733,9 @@ static int battery_init(void *priv)
     MX_ADC2_Init();
     battery->type = MISC_TYPE_ADC;
     battery->mtx_id = osMutexNew(NULL);
+    battery->data = hal_mem_alloc_fast(sizeof(battery_data_t));
     battery->is_init = true;
+    bat_processId = osThreadNew(batteryProcess, NULL, &batTask_attributes);
     return 0;
 }
 
@@ -723,6 +750,10 @@ static int battery_deinit(void *priv)
     if (battery->pwr_handle != 0) {
         pwr_manager_release(battery->pwr_handle);
         battery->pwr_handle = 0;
+    }
+    if (battery->data != NULL) {
+        hal_mem_free(battery->data);
+        battery->data = NULL;
     }
     MX_ADC2_DeInit();
     return 0;

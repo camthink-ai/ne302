@@ -89,6 +89,20 @@ static void iperf_server_recv(int client_sock, uint8_t *recv_buf, uint32_t rlen,
     }
 }
 
+static int iperf_wait_socket_writable(int sock, uint32_t timeout_ms)
+{
+    fd_set writefds;
+    struct timeval tv;
+
+    FD_ZERO(&writefds);
+    FD_SET(sock, &writefds);
+
+    tv.tv_sec = timeout_ms / 1000U;
+    tv.tv_usec = (timeout_ms % 1000U) * 1000U;
+
+    return select(sock + 1, NULL, &writefds, NULL, &tv);
+}
+
 static void iperf_server(void *args)
 {
     int server_sock = -1, client_sock = -1, ret = 0;
@@ -240,9 +254,41 @@ static void iperf_client(void *args)
         if (iperf_status[0] == 2) break;
 
         if (iperf_arg->is_udp) {
+            ret = iperf_wait_socket_writable(client_sock, 200);
+            if (ret == 0) {
+                LOG_SIMPLE("send delay!");
+                osDelay(2);
+                continue;
+            } else if (ret < 0) {
+                LOG_SIMPLE("Select failed!(errno = %d)!", errno);
+                goto iperf_client_end;
+            }
+
             ret = sendto(client_sock, send_buf, iperf_arg->buf_size, 0, (struct sockaddr *)&addr, sizeof(struct sockaddr));
         } else {
-            ret = send(client_sock, send_buf, iperf_arg->buf_size, 0);
+            uint32_t remain = (uint32_t)iperf_arg->buf_size;
+            uint8_t *p = send_buf;
+
+            while (remain > 0) {
+                if (iperf_status[0] == 2) break;
+
+                ret = iperf_wait_socket_writable(client_sock, 200);
+                if (ret == 0) {
+                    LOG_SIMPLE("send delay!");
+                    osDelay(2);
+                    continue;
+                } else if (ret < 0) {
+                    LOG_SIMPLE("Select failed!(errno = %d)!", errno);
+                    goto iperf_client_end;
+                }
+
+                ret = send(client_sock, p, remain, 0);
+                if (ret <= 0) break;
+
+                all_slen += (uint32_t)ret;
+                p += ret;
+                remain -= (uint32_t)ret;
+            }
         }
         if (ret <= 0) {
             if (errno != EAGAIN) {
@@ -251,7 +297,9 @@ static void iperf_client(void *args)
             }
             LOG_SIMPLE("send delay!");
             osDelay(2);
-        } else all_slen += ret;
+        } else if (iperf_arg->is_udp) {
+            all_slen += (uint32_t)ret;
+        }
 
         now_tick = sys_now();
         diff_tick = now_tick < last_tick ? ((portMAX_DELAY - last_tick) + now_tick) : (now_tick - last_tick);

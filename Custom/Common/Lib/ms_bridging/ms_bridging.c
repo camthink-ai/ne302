@@ -373,6 +373,8 @@ int ms_bridging_request(ms_bridging_handler_t *handler, ms_bridging_frame_cmd_t 
             memcpy(*data_out, frame.data, frame.header.len);
             *len_out = frame.header.len;
             MS_BR_FREE(frame.data);
+        } else if (ret != MS_BR_OK) {
+            MS_BR_LOGE("ms_bridging_request failed: %d", ret);
         }
     } while (retry_times++ < MS_BR_RETRY_TIMES && ret != MS_BR_OK);
     

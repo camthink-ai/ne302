@@ -265,7 +265,9 @@
       "lux_ref_ll_lum2": "2nd ref luminance",
       "fast_capture_skip_frames": "Skip frames",
       "fast_capture_resolution": "Resolution",
-      "fast_capture_jpeg_quality": "JPEG quality"
+      "fast_capture_jpeg_quality": "JPEG quality",
+      "capture_disable_comm": "Local storage only after capture",
+      "capture_storage_ai": "Save AI-drawn result image to storage"
     },
     "system_management": {
       "communication_title": "Communications",

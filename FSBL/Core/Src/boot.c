@@ -54,6 +54,8 @@ static int boot_flash_write(uint32_t offset, void *data, size_t size)
 static int boot_flash_read(uint32_t offset, void *data, size_t size)
 {
     memcpy(data, (const void *)(FLASH_BASE + offset), size);
+    XSPI_NOR_DisableMemoryMappedMode();
+    XSPI_NOR_EnableMemoryMappedMode();
     return 0;
 }
 
@@ -92,38 +94,19 @@ static uint32_t BOOT_GetApplicationVectorTable(void)
 }
 
 /**
-  *  @addtogroup BOOT_LRUN_Exported_Functions Boot LRUN exported functions
-  * @{
-  */
-BOOTStatus_TypeDef BOOT_Application(void)
-{
-  BOOTStatus_TypeDef retr;
-  printf("BOOT_Application\r\n");
-  init_system_state(boot_flash_read, boot_flash_write, boot_flash_erase);
-  verify_fsbl_version(FSBL_VERSION_STRING);
-
-  retr = CopyApplication();
-  printf("CopyApplication end\r\n");
-  if (BOOT_OK == retr)
-  {
-    /* jump on the application */
-    retr = JumpToApplication();
-  }
-  return retr;
-}
-
-/**
   * @brief  This function copy the data from source to destination
   * @return @ref BOOTStatus_TypeDef
   */
-BOOTStatus_TypeDef CopyApplication(void)
+BOOTStatus_TypeDef BOOT_Copy_Application(void)
 {
   BOOTStatus_TypeDef retr = BOOT_OK;
   uint8_t *source;
   uint8_t *destination;
   uint32_t img_size;
-  uint32_t start_tick, end_tick;
+  // uint32_t start_tick, end_tick;
 
+  /* Initialize the system state */
+  init_system_state(boot_flash_read, boot_flash_write, boot_flash_erase);
   /* this case correspond to copy the SW from external memory into internal memory */
   destination = (uint8_t *)SRAM_APP_BASE;
 
@@ -131,12 +114,12 @@ BOOTStatus_TypeDef CopyApplication(void)
     /* manage the copy in mapped mode */
   source = FLASH_BASE + (uint8_t*)get_active_partition(FIRMWARE_APP) + OTA_HEADER_SIZE;
   img_size = BOOT_GetApplicationSize((uint32_t) source);
-  printf("Application size: %ld flash address: %p sram address: %p\r\n", img_size, source, destination);
+  // printf("Application size: %ld flash address: %p sram address: %p\r\n", img_size, source, destination);
   /* copy form source to destination in mapped mode */
-  start_tick = HAL_GetTick();
+  // start_tick = HAL_GetTick();
   memcpy(destination, source, img_size);
-  end_tick = HAL_GetTick();
-  printf("Copy time: %ld ms\r\n", end_tick - start_tick);
+  // end_tick = HAL_GetTick();
+  // printf("Copy time: %ld ms\r\n", end_tick - start_tick);
 
   return retr;
 }
@@ -145,7 +128,7 @@ BOOTStatus_TypeDef CopyApplication(void)
   * @brief  This function jumps to the application through its vector table
   * @return @ref BOOTStatus_TypeDef
   */
-BOOTStatus_TypeDef JumpToApplication(void)
+BOOTStatus_TypeDef BOOT_Jump_Application(void)
 {
   uint32_t primask_bit;
   typedef  void (*pFunction)(void);

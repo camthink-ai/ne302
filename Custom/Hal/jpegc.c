@@ -14,10 +14,18 @@
 #define JPEG_USE_SOFT_CONV 0
 static jpegc_t g_jpegc = {0};
 
+/* Event flags for jpegcProcess() (event-driven, no osDelay polling) */
+#define JPEGC_EVT_KICK            (1u << 0)
+#define JPEGC_EVT_ENC_IN_EMPTY    (1u << 1)
+#define JPEGC_EVT_ENC_OUT_FULL    (1u << 2)
+#define JPEGC_EVT_ENC_DONE        (1u << 3)
+#define JPEGC_EVT_DEC_DONE        (1u << 4)
+#define JPEGC_EVT_ERROR           (1u << 5)
+
 static uint8_t jpegc_tread_stack[1024 * 4] ALIGN_32 IN_PSRAM;
 const osThreadAttr_t jpegcTask_attributes = {
     .name = "jpegcTask",
-    .priority = (osPriority_t) osPriorityNormal,
+    .priority = (osPriority_t) osPriorityHigh,
     .stack_mem = jpegc_tread_stack,
     .stack_size = sizeof(jpegc_tread_stack),
 };
@@ -483,6 +491,9 @@ void HAL_JPEG_GetDataCallback(JPEG_HandleTypeDef *hjpeg, uint32_t NbData)
 
             HAL_JPEG_Pause(hjpeg, JPEG_PAUSE_RESUME_INPUT);
             Input_Is_Paused = 1;
+            if (g_jpegc.evt_id) {
+                osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_ENC_IN_EMPTY);
+            }
         }else{
             HAL_JPEG_ConfigInputBuffer(hjpeg,Jpeg_IN_BufferTab.DataBuffer + NbData, Jpeg_IN_BufferTab.DataBufferSize - NbData);
         }
@@ -540,6 +551,9 @@ void HAL_JPEG_DataReadyCallback (JPEG_HandleTypeDef *hjpeg, uint8_t *pDataOut, u
         HAL_JPEG_ConfigOutputBuffer(hjpeg, Jpeg_OUT_BufferTab.DataBuffer, ENC_CHUNK_SIZE_OUT);
         HAL_JPEG_Pause(hjpeg, JPEG_PAUSE_RESUME_OUTPUT);
         Output_Is_Paused = 1;
+        if (g_jpegc.evt_id) {
+            osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_ENC_OUT_FULL);
+        }
     }else if(g_jpegc.mode == JPEG_MODE_DEC){
 #if JPEG_USE_SOFT_CONV
         DE_OUT_BufferTab.State = JPEG_BUFFER_FULL;
@@ -549,6 +563,9 @@ void HAL_JPEG_DataReadyCallback (JPEG_HandleTypeDef *hjpeg, uint8_t *pDataOut, u
         {
             HAL_JPEG_Pause(hjpeg, JPEG_PAUSE_RESUME_OUTPUT);
             Output_Is_Paused = 1;
+        }
+        if (g_jpegc.evt_id) {
+            osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_KICK);
         }
 #else
         FrameBufferAddress += OutDataLength;
@@ -594,6 +611,9 @@ void HAL_JPEG_InfoReadyCallback(JPEG_HandleTypeDef *hjpeg, JPEG_ConfTypeDef *pIn
 void HAL_JPEG_EncodeCpltCallback(JPEG_HandleTypeDef *hjpeg)
 {
     Jpeg_HWEncodingEnd = 1;
+    if (g_jpegc.evt_id) {
+        osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_ENC_DONE);
+    }
 }
 
 /**
@@ -604,6 +624,9 @@ void HAL_JPEG_EncodeCpltCallback(JPEG_HandleTypeDef *hjpeg)
 void HAL_JPEG_DecodeCpltCallback(JPEG_HandleTypeDef *hjpeg)
 {
     Jpeg_HWDecodingEnd = 1;
+    if (g_jpegc.evt_id) {
+        osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_DEC_DONE);
+    }
 }
 
 /**
@@ -613,7 +636,11 @@ void HAL_JPEG_DecodeCpltCallback(JPEG_HandleTypeDef *hjpeg)
   */
 void HAL_JPEG_ErrorCallback(JPEG_HandleTypeDef *hjpeg)
 {
-    Error_Handler();
+    printf("JPEG ErrorCallback\r\n");
+    // Error_Handler();
+    if (g_jpegc.evt_id) {
+        osEventFlagsSet(g_jpegc.evt_id, JPEGC_EVT_ERROR);
+    }
 }
 
 void jpegc_lock(void)
@@ -637,16 +664,43 @@ static void jpegcProcess(void *argument)
     jpegc->mode = JPEG_MODE_IDLE;
     jpegc->is_init = true;
     while (jpegc->is_init) {
+        /* Wait until something meaningful happens (callbacks set event flags). */
+        jpegc_mode_e mode_snapshot;
+        osMutexAcquire(jpegc->mtx_id, osWaitForever);
+        mode_snapshot = jpegc->mode;
+        osMutexRelease(jpegc->mtx_id);
+
+        if (mode_snapshot == JPEG_MODE_IDLE) {
+            (void)osEventFlagsWait(jpegc->evt_id,
+                                   JPEGC_EVT_KICK,
+                                   osFlagsWaitAny,
+                                   osWaitForever);
+            continue;
+        }
+
+        uint32_t wait_mask = 0;
+        if (mode_snapshot == JPEG_MODE_ENC) {
+            wait_mask = JPEGC_EVT_KICK | JPEGC_EVT_ENC_IN_EMPTY | JPEGC_EVT_ENC_OUT_FULL | JPEGC_EVT_ENC_DONE | JPEGC_EVT_ERROR;
+        } else if (mode_snapshot == JPEG_MODE_DEC) {
+            wait_mask = JPEGC_EVT_KICK | JPEGC_EVT_DEC_DONE | JPEGC_EVT_ERROR;
+#if JPEG_USE_SOFT_CONV
+            wait_mask |= JPEGC_EVT_KICK;
+#endif
+        } else {
+            wait_mask = JPEGC_EVT_KICK | JPEGC_EVT_ERROR;
+        }
+
+        (void)osEventFlagsWait(jpegc->evt_id, wait_mask, osFlagsWaitAny, 200);
+
         osMutexAcquire(jpegc->mtx_id, osWaitForever);
         if(jpegc->mode == JPEG_MODE_ENC){
-            // osSemaphoreAcquire(jpegc->sem_id, osWaitForever);
+            /* Service pending input/output once we're woken up */
             JPEG_EncodeInputHandler(&hjpeg);
             encode_processing_end = JPEG_EncodeOutputHandler(&hjpeg);
             if(encode_processing_end == 1){
                 jpegc->mode = JPEG_MODE_ENC_COMPLETE;
                 osSemaphoreRelease(jpegc->sem_enc);
             }
-            osDelay(1);
         }else if(jpegc->mode == JPEG_MODE_DEC){
 #if JPEG_USE_SOFT_CONV
             JPEG_DecodeInputHandler(&hjpeg);
@@ -667,9 +721,6 @@ static void jpegcProcess(void *argument)
                 LOG_DRV_DEBUG("jepgc_decode size:%d, width:%d, height:%d, Quality:%d, Subsampling:%d\r\n",decode_size, jpegc->dec_info.ImageWidth, jpegc->dec_info.ImageHeight, jpegc->dec_info.ImageQuality, jpegc->dec_info.ChromaSubsampling);
                 osSemaphoreRelease(g_jpegc.sem_dec);
             }
-            osDelay(1);
-        }else{
-            osDelay(20);
         }
         osMutexRelease(jpegc->mtx_id);
     }
@@ -748,7 +799,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             if(jpegc->enc_output_buffer == NULL){
                 jpegc->enc_output_buffer = (unsigned char *)hal_mem_alloc_aligned(required_size, 32, MEM_LARGE);
                 jpegc->enc_output_buffer_capacity = (jpegc->enc_output_buffer != NULL) ? required_size : 0;
-                LOG_DRV_INFO("jpegc enc output buffer addr:0x%x, size:%d \r\n", jpegc->enc_output_buffer, required_size);
+                // LOG_DRV_INFO("jpegc enc output buffer addr:0x%x, size:%d \r\n", jpegc->enc_output_buffer, required_size);
             }
             if(jpegc->enc_output_buffer == NULL){
                 ret = AICAM_ERROR_NO_MEMORY;
@@ -801,7 +852,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             break;
         
         case JPEGC_CMD_INPUT_ENC_BUFFER:
-            if(jpegc->mode != JPEG_MODE_IDLE || ubuf == NULL || (uint32_t)ubuf % 32 != 0){
+            if(jpegc->mode != JPEG_MODE_IDLE || ubuf == NULL || (uint32_t)ubuf % 32 != 0 || jpegc->enc_output_buffer == NULL){
                 ret = AICAM_ERROR_INVALID_PARAM;
                 break;
             }
@@ -809,8 +860,12 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             jpegc->mode = JPEG_MODE_ENC;
             HAL_JPEG_Abort(&hjpeg);
             if(JPEG_Encode_DMA(&hjpeg, jpegc) != 0){
+                jpegc->mode = JPEG_MODE_IDLE;
                 ret = AICAM_ERROR;
                 break;
+            }
+            if (jpegc->evt_id) {
+                osEventFlagsSet(jpegc->evt_id, JPEGC_EVT_KICK);
             }
             ret = AICAM_OK;
             break;
@@ -846,7 +901,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             break;
 
         case JPEGC_CMD_INPUT_DEC_BUFFER:
-            if(jpegc->mode != JPEG_MODE_IDLE || ubuf == NULL){
+            if(jpegc->mode != JPEG_MODE_IDLE || ubuf == NULL || jpegc->dec_output_buffer == NULL){
                 ret = AICAM_ERROR_INVALID_PARAM;
                 break;
             }
@@ -855,8 +910,12 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             jpegc->dec_input_buffer_size = arg;
             HAL_JPEG_Abort(&hjpeg);
             if(JPEG_Decode_DMA(&hjpeg, jpegc) != 0){
+                jpegc->mode = JPEG_MODE_IDLE;
                 ret = AICAM_ERROR;
                 break;
+            }
+            if (jpegc->evt_id) {
+                osEventFlagsSet(jpegc->evt_id, JPEGC_EVT_KICK);
             }
             ret = AICAM_OK;
             break;
@@ -915,6 +974,26 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
                 ret = AICAM_ERROR_INVALID_PARAM;
             }
             break;
+        case JPEGC_CMD_UNSHARE_ENC_BUFFER:
+            /* Detach encoder-owned output buffer so caller manages its lifetime.
+             * Valid after JPEGC_CMD_OUTPUT_ENC_BUFFER returns a pointer. */
+            if (jpegc->mode == JPEG_MODE_ENC) {
+                ret = AICAM_ERROR_BUSY;
+                break;
+            }
+            if (jpegc->enc_output_buffer != NULL && jpegc->enc_output_buffer == ubuf) {
+                jpegc->enc_output_buffer = NULL;
+                ret = AICAM_OK;
+            } else {
+                ret = AICAM_ERROR_INVALID_PARAM;
+            }
+            break;
+        case JPEGC_CMD_FREE_ENC_BUFFER:
+            if (ubuf != NULL){
+                hal_mem_free(ubuf);
+            }
+            ret = AICAM_OK;
+            break;
         default:
             ret = AICAM_ERROR_NOT_SUPPORTED;
             break;
@@ -928,6 +1007,7 @@ static int jpegc_init(void *priv)
     LOG_DRV_DEBUG("jpegc_init \r\n");
     jpegc_t *jpegc = (jpegc_t *)priv;
     jpegc->mtx_id = osMutexNew(NULL);
+    jpegc->evt_id = osEventFlagsNew(NULL);
     jpegc->sem_id = osSemaphoreNew(1, 0, NULL);
     jpegc->sem_enc = osSemaphoreNew(1, 0, NULL);
     jpegc->sem_dec = osSemaphoreNew(1, 0, NULL);
@@ -963,6 +1043,9 @@ static int jpegc_deinit(void *priv)
     jpegc_t *jpegc = (jpegc_t *)priv;
 
     jpegc->is_init = false;
+    if (jpegc->evt_id) {
+        osEventFlagsSet(jpegc->evt_id, JPEGC_EVT_KICK);
+    }
     osSemaphoreRelease(jpegc->sem_id);
     osDelay(100);
     if (jpegc->jpegc_processId != NULL && osThreadGetId() != jpegc->jpegc_processId) {
@@ -973,6 +1056,11 @@ static int jpegc_deinit(void *priv)
     if (jpegc->sem_id != NULL) {
         osSemaphoreDelete(jpegc->sem_id);
         jpegc->sem_id = NULL;
+    }
+
+    if (jpegc->evt_id != NULL) {
+        osEventFlagsDelete(jpegc->evt_id);
+        jpegc->evt_id = NULL;
     }
 
     if (jpegc->mtx_id != NULL) {

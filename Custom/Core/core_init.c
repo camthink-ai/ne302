@@ -32,7 +32,7 @@ aicam_result_t core_system_init(void)
     g_core_system_info.state = CORE_STATE_INITIALIZING;
     g_core_system_info.init_time = osKernelGetTickCount();
     
-    printf("[CORE] Starting L2 Core System initialization...\r\n");
+    // printf("[CORE] Starting L2 Core System initialization...\r\n");
     
     // Stage 1: Basic stage (Log system)
     aicam_result_t status = core_init_basic_stage();
@@ -91,7 +91,7 @@ aicam_result_t core_system_init(void)
     // }
     
     g_core_system_info.state = CORE_STATE_INITIALIZED;
-    printf("[CORE] L2 Core System initialization completed successfully\r\n");
+    // printf("[CORE] L2 Core System initialization completed successfully\r\n");
     
     return AICAM_OK;
 }
@@ -297,7 +297,7 @@ void core_system_handle_error(aicam_result_t error, const char* source, const ch
 
 aicam_result_t core_init_basic_stage(void)
 {
-    printf("[CORE] Initializing basic stage...\r\n");
+    // printf("[CORE] Initializing basic stage...\r\n");
     
     // Initialize log system first 
     aicam_result_t status = init_stage_with_timeout(debug_system_init, "Debug System", CORE_INIT_TIMEOUT_MS);
@@ -311,7 +311,7 @@ aicam_result_t core_init_basic_stage(void)
 
 aicam_result_t core_init_config_stage(void)
 {
-    printf("[CORE] Initializing configuration stage...\r\n");
+    // printf("[CORE] Initializing configuration stage...\r\n");
 
     aicam_result_t status = init_stage_with_timeout(json_config_mgr_init, "Configuration Manager", CORE_INIT_TIMEOUT_MS);
     if (status != AICAM_OK) {
@@ -319,20 +319,20 @@ aicam_result_t core_init_config_stage(void)
     }
     update_module_status("config_mgr", true);
     
-    printf("[CORE] Configuration stage initialization completed\r\n");
+    // printf("[CORE] Configuration stage initialization completed\r\n");
     
     return AICAM_OK;
 }
 
 aicam_result_t core_init_memory_stage(void)
 {
-    printf("[CORE] Initializing memory stage...\r\n");
+    // printf("[CORE] Initializing memory stage...\r\n");
     
     aicam_result_t status = init_stage_with_timeout(buffer_mgr_init, "Buffer Manager", CORE_INIT_TIMEOUT_MS);
     
     if (status == AICAM_OK) {
         update_module_status("buffer_mgr", true);
-        printf("[CORE] Memory stage initialization completed\r\n");
+        // printf("[CORE] Memory stage initialization completed\r\n");
     }
     
     return AICAM_OK;
@@ -340,13 +340,13 @@ aicam_result_t core_init_memory_stage(void)
 
 aicam_result_t core_init_communication_stage(void)
 {
-    printf("[CORE] Initializing communication stage...\r\n");
+    // printf("[CORE] Initializing communication stage...\r\n");
     
     aicam_result_t status = init_stage_with_timeout(event_bus_init, "Event Bus", CORE_INIT_TIMEOUT_MS);
     
     if (status == AICAM_OK) {
         update_module_status("event_bus", true);
-        printf("[CORE] Communication stage initialization completed\r\n");
+        // printf("[CORE] Communication stage initialization completed\r\n");
     }
     
     return status;
@@ -354,7 +354,7 @@ aicam_result_t core_init_communication_stage(void)
 
 aicam_result_t core_init_services_stage(void)
 {
-    printf("[CORE] Initializing services stage...\r\n");
+    // printf("[CORE] Initializing services stage...\r\n");
     
     //TODO: init timer manager
     
@@ -367,13 +367,13 @@ aicam_result_t core_init_services_stage(void)
 
 aicam_result_t core_init_security_stage(void)
 {
-    printf("[CORE] Initializing security stage...\r\n");
+    // printf("[CORE] Initializing security stage...\r\n");
     
     aicam_result_t status = init_stage_with_timeout(auth_mgr_init, "Authentication Manager", CORE_INIT_TIMEOUT_MS);
     
     if (status == AICAM_OK) {
         update_module_status("auth_mgr", true);
-        printf("[CORE] Security stage initialization completed\r\n");
+        // printf("[CORE] Security stage initialization completed\r\n");
     }
     
     return status;
@@ -389,7 +389,7 @@ static aicam_result_t init_stage_with_timeout(aicam_result_t (*init_func)(void),
         return AICAM_ERROR_INVALID_PARAM;
     }
     
-    printf("[CORE] Initializing %s...\r\n", stage_name);
+    // printf("[CORE] Initializing %s...\r\n", stage_name);
     
     uint32_t start_time = osKernelGetTickCount();
     
@@ -398,7 +398,7 @@ static aicam_result_t init_stage_with_timeout(aicam_result_t (*init_func)(void),
     uint32_t elapsed_time = osKernelGetTickCount() - start_time;
     
     if (status == AICAM_OK) {
-        printf("[CORE] %s initialized successfully (took %lu ms)\r\n", stage_name, elapsed_time);
+        // printf("[CORE] %s initialized successfully (took %lu ms)\r\n", stage_name, elapsed_time);
     } else {
         printf("[CORE] %s initialization failed: %d (took %lu ms)\r\n", stage_name, status, elapsed_time);
         

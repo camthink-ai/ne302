@@ -43,6 +43,8 @@ typedef enum {
     JPEGC_CMD_OUTPUT_DEC_BUFFER,
     JPEGC_CMD_RETURN_ENC_BUFFER,
     JPEGC_CMD_RETURN_DEC_BUFFER,
+    JPEGC_CMD_UNSHARE_ENC_BUFFER,       // unshare the enc buffer to the caller, need reset the enc params after use
+    JPEGC_CMD_FREE_ENC_BUFFER,          // free the unshared enc buffer
 } JPEGC_CMD_E;
 
 typedef struct
@@ -73,6 +75,7 @@ typedef struct {
     device_t *dev;
     jpegc_mode_e mode;
     osMutexId_t mtx_id;
+    osEventFlagsId_t evt_id;
     osSemaphoreId_t sem_id;
     osSemaphoreId_t sem_enc;
     osSemaphoreId_t sem_dec;

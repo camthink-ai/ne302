@@ -3,6 +3,7 @@
 #include "xspim.h"
 #include "common_utils.h"
 #include "upgrade_manager.h"
+#include "crc.h"
 
 #define LFS_LOCK(sys)   do{ if ((sys)->thread_safe && (sys)->lock) (sys)->lock(); }while(0)
 #define LFS_UNLOCK(sys) do{ if ((sys)->thread_safe && (sys)->unlock) (sys)->unlock(); }while(0)
@@ -485,6 +486,10 @@ int storage_flash_read(uint32_t offset, void *data, size_t size)
 {
     storage_lock();
     memcpy(data, (const void *)(FS_BASE_MEM_START + offset), size);
+    // To reduce power consumption, switch back to XSPI memory-mapped mode after reading.
+    // Disable task scheduling during the switch to avoid timing issues caused by task preemption.
+    // XSPI_NOR_DisableMemoryMappedMode();
+    // XSPI_NOR_EnableMemoryMappedMode();
     storage_unlock();
     return 0;
 }
@@ -539,6 +544,41 @@ int storage_flash_erase(uint32_t offset, size_t num_blk)
     return 0;
 }
 
+int storage_get_disk_info(storage_disk_info_t *info)
+{
+    if (info == NULL) {
+        return -1;
+    }
+
+    memset(info, 0, sizeof(*info));
+    strcpy(info->fs_type, "littlefs");
+    info->mounted = g_storage.lfs_sys.mounted;
+
+    if (!g_storage.is_init || !g_storage.lfs_sys.mounted) {
+        return 0;
+    }
+
+    lfs_mem_system_t *sys = &g_storage.lfs_sys;
+    LFS_LOCK(sys);
+
+    lfs_ssize_t used_blocks = lfs_fs_size(&sys->lfs);
+    if (used_blocks < 0) {
+        LFS_UNLOCK(sys);
+        return -2;
+    }
+
+    size_t total_bytes = sys->mem_dev.block_count * sys->mem_dev.block_size;
+    size_t used_bytes = (size_t)used_blocks * sys->mem_dev.block_size;
+    size_t free_bytes = (used_bytes < total_bytes) ? (total_bytes - used_bytes) : 0U;
+
+    LFS_UNLOCK(sys);
+
+    info->total_KBytes = (uint32_t)(total_bytes / 1024U);
+    info->free_KBytes = (uint32_t)(free_bytes / 1024U);
+
+    return 0;
+}
+
 static int storage_flash_erase4K(uint32_t offset, size_t size)
 {
     (void)size; //NVS and LFS only use 4K erase
@@ -569,6 +609,56 @@ static void nvs_lock(void *mutex_id)
 static void nvs_unlock(void *mutex_id)
 {
     osMutexRelease(mutex_id);
+}
+
+static int sysclk_nor_flash_read(uint32_t address, void *data, size_t size)
+{
+    /*
+     * SYS_CLK_CONFIG_SAVE_FLASH_BASE (and other persisted slots) live in the
+     * memory-mapped flash window (e.g. 0x7000_0000). Reading via XSPI command
+     * mode can block for seconds due to peripheral/busy timeouts and also
+     * disrupt other users of the memory-mapped region. Prefer a plain memcpy.
+     */
+    if (data == (void *)0 || size == 0U)
+        return -1;
+
+    volatile const uint8_t *src = (volatile const uint8_t *)(uintptr_t)address;
+    uint8_t *dst = (uint8_t *)data;
+    for (size_t i = 0; i < size; i++)
+        dst[i] = src[i];
+    return 0;
+}
+
+static int sysclk_nor_flash_write(uint32_t address, void *data, size_t size)
+{
+    /* Reuse proven storage layer write (handles lock + XSPI mode switch) */
+    if (data == (void *)0 || size == 0U)
+        return -1;
+    if (address < FLASH_BASE)
+        return -1;
+    uint32_t offset = address - FLASH_BASE;
+    return storage_flash_write(offset, data, size);
+}
+
+static int sysclk_nor_flash_erase(uint32_t address, size_t size)
+{
+    /* Reuse storage layer erase (yields during long erase loops) */
+    if (size == 0U)
+        return -1;
+    if (address < FLASH_BASE)
+        return -1;
+    if ((address - FLASH_BASE) % FLASH_BLOCK_SIZE != 0U) 
+        return -1;
+    if (size % FLASH_BLOCK_SIZE != 0U)
+        return -1;
+    uint32_t offset = address - FLASH_BASE;
+    size_t num_blk = size / FLASH_BLOCK_SIZE;
+    return storage_flash_erase(offset, num_blk);
+}
+
+static uint32_t sysclk_hal_crc32(void *data, size_t size)
+{
+    return HAL_CRC_Calculate(&hcrc, (uint32_t *)data, (uint32_t)size);
 }
 
 static int storage_nvs_init(nvs_fs_t *nvs, uint32_t flash_offset, size_t sector_size, size_t sector_count) 
@@ -618,6 +708,18 @@ int storage_init(void *priv)
     storage_t *storage = (storage_t *)priv;
     storage->mtx_id = osMutexNew(NULL);
     storage->sem_id = osSemaphoreNew(1, 0, NULL);
+    
+    common_flash_ops_t ops = {
+        .flash_read = sysclk_nor_flash_read,
+        .flash_write = sysclk_nor_flash_write,
+        .flash_erase = sysclk_nor_flash_erase,
+        .crc32 = sysclk_hal_crc32,
+    };
+    ret = fsbl_app_common_init(&ops);
+    if(ret != 0){
+        printf("fsbl_app_common_init failed...\r\n");
+        return ret;
+    }
 
     init_system_state(storage_flash_read, storage_flash_write, storage_flash_erase);
 

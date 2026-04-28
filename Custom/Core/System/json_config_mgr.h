@@ -342,6 +342,8 @@ typedef struct {
     uint32_t fast_capture_skip_frames;       // frames to skip for fast capture (number of skipped frames for snapshot capture)
     uint32_t fast_capture_resolution;       // 0: 1280x720, 1: 1920x1080, 2: 2688x1520
     uint32_t fast_capture_jpeg_quality;     // fast capture JPEG encoding quality (0-100)
+    aicam_bool_t capture_disable_comm;      // after capture: local storage only (no comm upload)
+    aicam_bool_t capture_storage_ai;        // capture extra save draw AI result picture to storage switch
 } image_config_t;
 
 /**
@@ -736,6 +738,14 @@ aicam_bool_t json_config_get_ai_1_active(void);
  * @return aicam_result_t Operation result
  */
 aicam_result_t json_config_set_ai_1_active(aicam_bool_t ai_1_active);
+
+/**
+ * @brief Persist AI pipe input size to NVS when it differs from stored values
+ * @param input_width Model input width (must be non-zero)
+ * @param input_height Model input height (must be non-zero)
+ * @return aicam_result_t AICAM_OK if already matching or write succeeded
+ */
+aicam_result_t json_config_sync_ai_pipe_nvs_from_input_size(uint32_t input_width, uint32_t input_height);
 
 /* ==================== Power Mode Configuration API ==================== */
 
