@@ -393,7 +393,13 @@ static int rtc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsigned
 
 int rtc_register_wakeup_ex(rtc_wakeup_t *rtc_wakeup)
 {
-    return register_wakeup_ex(&g_rtc.sched_manager, 1, rtc_wakeup->name, rtc_wakeup->type, rtc_wakeup->trigger_sec, 
+    return register_wakeup_ex(&g_rtc.sched_manager, 1, rtc_wakeup->name, rtc_wakeup->type, rtc_wakeup->trigger_sec,
+                        rtc_wakeup->day_offset, rtc_wakeup->repeat, rtc_wakeup->weekdays, rtc_wakeup->callback, rtc_wakeup->arg);
+}
+
+int rtc_register_wakeup_ex_locked(rtc_wakeup_t *rtc_wakeup)
+{
+    return register_wakeup_ex_locked(&g_rtc.sched_manager, 1, rtc_wakeup->name, rtc_wakeup->type, rtc_wakeup->trigger_sec,
                         rtc_wakeup->day_offset, rtc_wakeup->repeat, rtc_wakeup->weekdays, rtc_wakeup->callback, rtc_wakeup->arg);
 }
 

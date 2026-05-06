@@ -107,7 +107,7 @@ static uint64_t calculate_wakeup_trigger(wakeup_job_t *job, uint64_t now)
     return UINT64_MAX;
 }
 // Process wakeup jobs
-static void process_wakeup_jobs(scheduler_t *sched, scheduler_manager_t *mgr) 
+static void process_wakeup_jobs(scheduler_t *sched, scheduler_manager_t *mgr)
 {
     uint64_t now = mgr->get_time() + (mgr->timezone * 3600);
     wakeup_job_t **prev = &mgr->wake_jobs;
@@ -115,18 +115,24 @@ static void process_wakeup_jobs(scheduler_t *sched, scheduler_manager_t *mgr)
 
     while (job) {
         if (job->sched == sched && job->next_trigger <= now) {
-            // Execute callback
+            if (job->repeat == REPEAT_ONCE) {
+                // Remove from list BEFORE callback so the callback can safely
+                // register new jobs without corrupting the traversal.
+                *prev = job->next;
+                wakeup_job_t *once_job = job;
+                job = *prev;
+
+                if (once_job->callback) once_job->callback(once_job->arg);
+                buffer_free(once_job);
+                continue;
+            }
+
+            // Execute callback for non-ONCE jobs
             if (job->callback) job->callback(job->arg);
 
             // Calculate next trigger time
             uint64_t next_trigger = UINT64_MAX;
             switch (job->repeat) {
-                case REPEAT_ONCE:
-                    // Trigger only once, delete task
-                    *prev = job->next;
-                    buffer_free(job);
-                    job = *prev;
-                    continue;
                 case REPEAT_DAILY:
                 case REPEAT_WEEKLY:
                     next_trigger = calculate_wakeup_trigger(job, now + 1);  // Pass now+1 to prevent infinite loop
@@ -137,6 +143,8 @@ static void process_wakeup_jobs(scheduler_t *sched, scheduler_manager_t *mgr)
                         job->next_trigger += job->interval;
                     } while (job->next_trigger <= now);
                     next_trigger = job->next_trigger;
+                    break;
+                default:
                     break;
             }
             job->next_trigger = next_trigger;
@@ -242,7 +250,8 @@ static void process_schedule_jobs(scheduler_t *sched, scheduler_manager_t *mgr)
 }
 
 // Register wakeup job
-int register_wakeup_ex(scheduler_manager_t *mgr, int sched_id, 
+// NOTE: Keep register_wakeup_ex_locked() in sync when modifying this function
+int register_wakeup_ex(scheduler_manager_t *mgr, int sched_id,
                       const char *name, wakeup_type_t type,
                       uint32_t day_sec, int16_t day_offset,
                       repeat_type_t repeat, uint8_t weekdays,
@@ -284,6 +293,47 @@ int register_wakeup_ex(scheduler_manager_t *mgr, int sched_id,
     update_scheduler_wakeup(sched, mgr);
 
     UNLOCK(mgr);
+    return 0;
+}
+
+// Internal: register without locking (caller must hold lock)
+// NOTE: Keep in sync with register_wakeup_ex() above — only difference is no LOCK/UNLOCK
+int register_wakeup_ex_locked(scheduler_manager_t *mgr, int sched_id,
+                              const char *name, wakeup_type_t type,
+                              uint32_t day_sec, int16_t day_offset,
+                              repeat_type_t repeat, uint8_t weekdays,
+                              void (*cb)(void*), void *arg)
+{
+    scheduler_t *sched = find_scheduler(mgr, sched_id);
+    if (!sched) return -1;
+
+    wakeup_job_t *job = buffer_calloc(1, sizeof(*job));
+    memset(job, 0, sizeof(*job));
+    strncpy(job->name, name, sizeof(job->name)-1);
+    job->sched = sched;
+    job->type = type;
+    job->repeat = repeat;
+    job->callback = cb;
+    job->arg = arg;
+
+    uint64_t now = mgr->get_time() + (mgr->timezone * 3600);
+
+    if (type == WAKEUP_TYPE_ABSOLUTE) {
+        job->trigger_sec = day_sec % 86400;
+        job->day_offset = day_offset;
+        if (repeat == REPEAT_WEEKLY) {
+            job->weekdays = weekdays;
+        }
+        job->next_trigger = calculate_wakeup_trigger(job, now);
+    } else if (type == WAKEUP_TYPE_INTERVAL) {
+        job->interval = day_sec;
+        job->next_trigger = now + job->interval;
+    }
+
+    job->next = mgr->wake_jobs;
+    mgr->wake_jobs = job;
+    update_scheduler_wakeup(sched, mgr);
+
     return 0;
 }
 

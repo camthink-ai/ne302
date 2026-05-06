@@ -1,6 +1,7 @@
 /**
  * @file webhook_service.c
  * @brief Webhook service implementation — HTTP(S) POST of capture JPEG images
+ *        Payload format matches MQTT JSON structure (metadata + device_info + ai_result + base64 image)
  */
 
 #include "webhook_service.h"
@@ -10,14 +11,20 @@
 #include "ms_network.h"
 #include "debug.h"
 #include "cmsis_os2.h"
+#include "tx_api.h"
 #include "buffer_mgr.h"
+#include "common_utils.h"
+#include "mqtt_service.h"
+#include "nn.h"
+#include "cJSON.h"
+#include "device_service.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 /* ==================== Configuration ==================== */
 
-#define WEBHOOK_TASK_STACK      (4096 * 2)
+#define WEBHOOK_TASK_STACK      (4096 * 4)
 #define WEBHOOK_TASK_PRIORITY   osPriorityBelowNormal
 #define WEBHOOK_TIMEOUT_MS      15000
 #define WEBHOOK_BOUNDARY        "----NE301WebhookBoundary"
@@ -144,8 +151,8 @@ static aicam_result_t webhook_build_tls_config(network_tls_config_t *tls_config,
 typedef struct {
     uint8_t *jpeg_data;
     uint32_t jpeg_size;
-    char trigger_type[32];
-    char timestamp[32];
+    mqtt_image_metadata_t metadata;
+    char *ai_result_json;   /* pre-serialized JSON string (heap), NULL if no AI result */
 } webhook_push_msg_t;
 
 /* ==================== State ==================== */
@@ -157,16 +164,30 @@ static struct {
     osMutexId_t mutex;
     osMessageQueueId_t queue;
     osThreadId_t task_handle;
-    uint8_t task_stack[WEBHOOK_TASK_STACK] __attribute__((aligned(32)));
     uint32_t push_count;
     uint32_t fail_count;
 } g_webhook;
+
+static uint8_t webhook_task_stack[WEBHOOK_TASK_STACK] __attribute__((aligned(32))) IN_PSRAM;
+
+#define WEBHOOK_QUEUE_COUNT 8
+/* Queue passes heap-allocated pointers (1 ULONG each) — well within TX_16_ULONG limit */
+static TX_QUEUE webhook_queue_cb __attribute__((aligned(8)));
+static uint8_t webhook_queue_mem[WEBHOOK_QUEUE_COUNT * sizeof(ULONG)] __attribute__((aligned(8)));
+static const osMessageQueueAttr_t webhook_queue_attr = {
+    .name = "webhook_q",
+    .cb_mem = &webhook_queue_cb,
+    .cb_size = sizeof(webhook_queue_cb),
+    .mq_mem = webhook_queue_mem,
+    .mq_size = sizeof(webhook_queue_mem),
+};
 
 /* ==================== Forward Declarations ==================== */
 
 static void webhook_push_task(void *arg);
 static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_size,
-                                       const char *trigger_type, const char *timestamp);
+                                       const mqtt_image_metadata_t *metadata,
+                                       const char *ai_result_json);
 static aicam_result_t webhook_build_auth_header(const webhook_config_t *cfg,
                                                   char *header, uint32_t size);
 
@@ -184,7 +205,7 @@ aicam_result_t webhook_service_init(void *config)
         return AICAM_ERROR;
     }
 
-    g_webhook.queue = osMessageQueueNew(4, sizeof(webhook_push_msg_t), NULL);
+    g_webhook.queue = osMessageQueueNew(WEBHOOK_QUEUE_COUNT, sizeof(webhook_push_msg_t *), &webhook_queue_attr);
     if (!g_webhook.queue) {
         LOG_SVC_ERROR("Webhook: Failed to create queue");
         return AICAM_ERROR;
@@ -207,16 +228,18 @@ aicam_result_t webhook_service_start(void)
     osThreadAttr_t attr = {
         .name = "webhook_push",
         .stack_size = WEBHOOK_TASK_STACK,
-        .stack_mem = g_webhook.task_stack,
+        .stack_mem = webhook_task_stack,
         .priority = WEBHOOK_TASK_PRIORITY,
     };
     g_webhook.task_handle = osThreadNew(webhook_push_task, NULL, &attr);
     if (!g_webhook.task_handle) {
         LOG_SVC_ERROR("Webhook: Failed to create push task");
+        printf("[WEBHOOK] ERROR: Failed to create push task\r\n");
         g_webhook.running = AICAM_FALSE;
         return AICAM_ERROR;
     }
 
+    printf("[WEBHOOK] service started, task handle=%p\r\n", (void*)g_webhook.task_handle);
     LOG_SVC_INFO("Webhook service started");
     return AICAM_OK;
 }
@@ -227,9 +250,9 @@ aicam_result_t webhook_service_stop(void)
 
     g_webhook.running = AICAM_FALSE;
 
-    /* Send a NULL message to wake up the task so it can exit */
-    webhook_push_msg_t stop_msg = {0};
-    osMessageQueuePut(g_webhook.queue, &stop_msg, 0, 0);
+    /* Send a NULL pointer to wake up the task so it can exit */
+    webhook_push_msg_t *stop_ptr = NULL;
+    osMessageQueuePut(g_webhook.queue, &stop_ptr, 0, 0);
 
     if (g_webhook.task_handle) {
         osThreadJoin(g_webhook.task_handle);
@@ -277,24 +300,50 @@ aicam_bool_t webhook_service_is_enabled(void)
 
 aicam_result_t webhook_service_push_capture(
     const uint8_t *jpeg_data, uint32_t jpeg_size,
-    const char *trigger_type, const char *timestamp)
+    const mqtt_image_metadata_t *metadata,
+    const mqtt_ai_result_t *ai_result)
 {
     if (!jpeg_data || jpeg_size == 0) return AICAM_ERROR_INVALID_PARAM;
 
     webhook_config_t cfg;
     if (json_config_get_webhook_config(&cfg) != AICAM_OK || !cfg.enable) {
-        return AICAM_OK;
+        LOG_SVC_DEBUG("Webhook: disabled, skipping push");
+        return AICAM_ERROR;
     }
 
-    webhook_push_msg_t msg = {0};
-    msg.jpeg_data = (uint8_t *)jpeg_data;
-    msg.jpeg_size = jpeg_size;
-    if (trigger_type) strncpy(msg.trigger_type, trigger_type, sizeof(msg.trigger_type) - 1);
-    if (timestamp) strncpy(msg.timestamp, timestamp, sizeof(msg.timestamp) - 1);
+    webhook_push_msg_t *msg = buffer_calloc(1, sizeof(webhook_push_msg_t));
+    if (!msg) {
+        LOG_SVC_WARN("Webhook: failed to allocate push message");
+        return AICAM_ERROR;
+    }
+    msg->jpeg_data = (uint8_t *)jpeg_data;
+    msg->jpeg_size = jpeg_size;
+
+    if (metadata) {
+        memcpy(&msg->metadata, metadata, sizeof(*metadata));
+    }
+
+    /* Serialize AI result to JSON now — the nn_result_t pointers won't be valid later */
+    if (ai_result && ai_result->ai_result.is_valid) {
+        cJSON *ai_root = cJSON_CreateObject();
+        if (ai_root) {
+            cJSON_AddStringToObject(ai_root, "model_name", ai_result->model_name);
+            cJSON_AddStringToObject(ai_root, "model_version", ai_result->model_version);
+            cJSON_AddNumberToObject(ai_root, "inference_time_ms", ai_result->inference_time_ms);
+            cJSON_AddNumberToObject(ai_root, "confidence_threshold", ai_result->confidence_threshold);
+            cJSON_AddNumberToObject(ai_root, "nms_threshold", ai_result->nms_threshold);
+            cJSON *ai_res = nn_create_ai_result_json(&ai_result->ai_result);
+            if (ai_res) cJSON_AddItemToObject(ai_root, "ai_result", ai_res);
+            msg->ai_result_json = cJSON_PrintUnformatted(ai_root);
+            cJSON_Delete(ai_root);
+        }
+    }
 
     osStatus_t status = osMessageQueuePut(g_webhook.queue, &msg, 0, 0);
     if (status != osOK) {
         LOG_SVC_WARN("Webhook: queue full, dropping push");
+        if (msg->ai_result_json) cJSON_free(msg->ai_result_json);
+        buffer_free(msg);
         return AICAM_ERROR;
     }
 
@@ -336,7 +385,7 @@ aicam_result_t webhook_service_test_push(void)
         0xD9
     };
 
-    return webhook_do_push(test_jpeg, sizeof(test_jpeg), "test", "test");
+    return webhook_do_push(test_jpeg, sizeof(test_jpeg), NULL, NULL);
 }
 
 /* ==================== Push Task ==================== */
@@ -344,36 +393,72 @@ aicam_result_t webhook_service_test_push(void)
 static void webhook_push_task(void *arg)
 {
     (void)arg;
-    LOG_SVC_INFO("Webhook push task started");
+    printf("[WEBHOOK] push task started (stack=%d)\r\n", WEBHOOK_TASK_STACK);
+    LOG_SVC_INFO("Webhook push task started (stack=%d)", WEBHOOK_TASK_STACK);
 
     while (g_webhook.running) {
-        webhook_push_msg_t msg;
+        webhook_push_msg_t *msg = NULL;
         osStatus_t status = osMessageQueueGet(g_webhook.queue, &msg, NULL, osWaitForever);
         if (status != osOK) continue;
 
-        /* NULL data = stop signal */
-        if (!msg.jpeg_data) break;
+        /* NULL pointer = stop signal */
+        if (!msg) break;
 
-        aicam_result_t ret = webhook_do_push(msg.jpeg_data, msg.jpeg_size,
-                                              msg.trigger_type, msg.timestamp);
+        LOG_SVC_INFO("Webhook task: processing %lu bytes",
+                     (unsigned long)msg->jpeg_size);
+
+        aicam_result_t ret = webhook_do_push(msg->jpeg_data, msg->jpeg_size,
+                                              &msg->metadata, msg->ai_result_json);
 
         /* Free the JPEG buffer (caller transferred ownership) */
-        buffer_free(msg.jpeg_data);
+        buffer_free(msg->jpeg_data);
+        /* Free the AI result JSON string */
+        if (msg->ai_result_json) cJSON_free(msg->ai_result_json);
+        /* Free the message struct */
+        buffer_free(msg);
 
         if (ret == AICAM_OK) {
             g_webhook.push_count++;
         } else {
             g_webhook.fail_count++;
         }
+        LOG_SVC_INFO("Webhook task: done (total=%lu, fail=%lu)",
+                     (unsigned long)g_webhook.push_count, (unsigned long)g_webhook.fail_count);
     }
 
-    LOG_SVC_INFO("Webhook push task exited");
+    LOG_SVC_WARN("Webhook push task exited");
 }
 
 /* ==================== HTTP Push Implementation ==================== */
 
+static const char *trigger_type_str(aicam_capture_trigger_t t)
+{
+    switch (t) {
+        case AICAM_CAPTURE_TRIGGER_RTC:      return "rtc";
+        case AICAM_CAPTURE_TRIGGER_PIR:      return "pir";
+        case AICAM_CAPTURE_TRIGGER_WEB:      return "web";
+        case AICAM_CAPTURE_TRIGGER_REMOTE:   return "remote";
+        case AICAM_CAPTURE_TRIGGER_GPIO:     return "gpio";
+        case AICAM_CAPTURE_TRIGGER_BUTTON:   return "button";
+        case AICAM_CAPTURE_TRIGGER_SCHEDULE: return "schedule";
+        default:                             return "unknown";
+    }
+}
+
+static const char *image_format_str(mqtt_image_format_t f)
+{
+    switch (f) {
+        case MQTT_IMAGE_FORMAT_JPEG: return "jpeg";
+        case MQTT_IMAGE_FORMAT_PNG:  return "png";
+        case MQTT_IMAGE_FORMAT_BMP:  return "bmp";
+        case MQTT_IMAGE_FORMAT_RAW:  return "raw";
+        default:                     return "unknown";
+    }
+}
+
 static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_size,
-                                       const char *trigger_type, const char *timestamp)
+                                       const mqtt_image_metadata_t *metadata,
+                                       const char *ai_result_json)
 {
     webhook_config_t cfg;
     if (json_config_get_webhook_config(&cfg) != AICAM_OK || !cfg.enable) {
@@ -386,14 +471,61 @@ static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_si
         return AICAM_ERROR;
     }
 
-    LOG_SVC_INFO("Webhook: pushing %lu bytes to %s (trigger=%s)",
-                 (unsigned long)jpeg_size, cfg.url, trigger_type ? trigger_type : "N/A");
+    LOG_SVC_INFO("Webhook: pushing %lu bytes to %s",
+                 (unsigned long)jpeg_size, cfg.url);
 
-    /* Build multipart/form-data body */
-    uint32_t body_size = 512 + jpeg_size + 256;
+    /* Build JSON part matching MQTT structure (metadata + device_info + ai_result) */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return AICAM_ERROR_NO_MEMORY;
+
+    if (metadata) {
+        cJSON *meta = cJSON_CreateObject();
+        if (meta) {
+            cJSON_AddStringToObject(meta, "image_id", metadata->image_id);
+            cJSON_AddNumberToObject(meta, "timestamp", (double)metadata->timestamp);
+            cJSON_AddStringToObject(meta, "format", image_format_str(metadata->format));
+            cJSON_AddNumberToObject(meta, "width", metadata->width);
+            cJSON_AddNumberToObject(meta, "height", metadata->height);
+            cJSON_AddNumberToObject(meta, "size", metadata->size);
+            cJSON_AddNumberToObject(meta, "quality", metadata->quality);
+            cJSON_AddStringToObject(meta, "trigger_type", trigger_type_str(metadata->trigger_type));
+            cJSON_AddItemToObject(root, "metadata", meta);
+        }
+    }
+
+    device_info_config_t *dev_info = (device_info_config_t *)buffer_calloc(1, sizeof(device_info_config_t));
+    if (dev_info) {
+        if (device_service_get_info(dev_info) == AICAM_OK) {
+            cJSON *dev = cJSON_CreateObject();
+            if (dev) {
+                cJSON_AddStringToObject(dev, "device_name", dev_info->device_name);
+                cJSON_AddStringToObject(dev, "serial_number", dev_info->serial_number);
+                cJSON_AddItemToObject(root, "device_info", dev);
+            }
+        }
+        buffer_free(dev_info);
+    }
+
+    if (ai_result_json) {
+        cJSON *ai = cJSON_Parse(ai_result_json);
+        cJSON_AddItemToObject(root, "ai_result", ai ? ai : cJSON_CreateNull());
+    } else {
+        cJSON_AddItemToObject(root, "ai_result", cJSON_CreateNull());
+    }
+
+    char *meta_json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!meta_json) return AICAM_ERROR_NO_MEMORY;
+
+    /* Build multipart/form-data body:
+       Part 1: metadata (JSON matching MQTT structure)
+       Part 2: image (raw JPEG binary) */
+    uint32_t meta_json_len = strlen(meta_json);
+    uint32_t body_size = 512 + meta_json_len + jpeg_size + 128;
     uint8_t *body = (uint8_t *)buffer_calloc(1, body_size);
     if (!body) {
-        LOG_SVC_ERROR("Webhook: failed to alloc body buffer (%lu bytes)", (unsigned long)body_size);
+        LOG_SVC_ERROR("Webhook: failed to alloc body (%lu)", (unsigned long)body_size);
+        cJSON_free(meta_json);
         return AICAM_ERROR_NO_MEMORY;
     }
 
@@ -403,40 +535,34 @@ static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_si
     pos += snprintf((char *)body + pos, body_size - pos,
         "--%s\r\n"
         "Content-Disposition: form-data; name=\"metadata\"\r\n"
-        "Content-Type: application/json\r\n\r\n"
-        "{\"trigger_type\":\"%s\",\"timestamp\":\"%s\"}\r\n",
-        WEBHOOK_BOUNDARY,
-        trigger_type ? trigger_type : "unknown",
-        timestamp ? timestamp : "");
+        "Content-Type: application/json\r\n\r\n",
+        WEBHOOK_BOUNDARY);
+    memcpy(body + pos, meta_json, meta_json_len);
+    pos += meta_json_len;
+    cJSON_free(meta_json);
+    pos += snprintf((char *)body + pos, body_size - pos, "\r\n");
 
-    /* Image part */
+    /* Image binary part */
     pos += snprintf((char *)body + pos, body_size - pos,
         "--%s\r\n"
         "Content-Disposition: form-data; name=\"image\"; filename=\"capture.jpg\"\r\n"
         "Content-Type: image/jpeg\r\n\r\n",
         WEBHOOK_BOUNDARY);
 
-    if (pos + jpeg_size + 64 > body_size) {
+    if ((uint32_t)pos + jpeg_size + 64 > body_size) {
         LOG_SVC_ERROR("Webhook: body buffer too small");
         buffer_free(body);
         return AICAM_ERROR_NO_MEMORY;
     }
-
     memcpy(body + pos, jpeg_data, jpeg_size);
     pos += jpeg_size;
-
     pos += snprintf((char *)body + pos, body_size - pos,
         "\r\n--%s--\r\n", WEBHOOK_BOUNDARY);
-
-    /* Build Content-Type header with boundary */
-    char content_type[64];
-    snprintf(content_type, sizeof(content_type),
-             "multipart/form-data; boundary=%s", WEBHOOK_BOUNDARY);
 
     /* Determine if HTTPS */
     aicam_bool_t use_https = (strncmp(cfg.url, "https://", 8) == 0);
 
-    /* Build TLS config: custom CA from NVS if available, else built-in bundle */
+    /* Build TLS config */
     network_tls_config_t tls_config;
     char *custom_ca_cert = NULL;
 
@@ -447,6 +573,10 @@ static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_si
             return AICAM_ERROR;
         }
     }
+
+    char content_type[64];
+    snprintf(content_type, sizeof(content_type),
+             "multipart/form-data; boundary=%s", WEBHOOK_BOUNDARY);
 
     /* Create HTTP client */
     http_client_config_t http_cfg = {

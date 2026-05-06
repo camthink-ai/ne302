@@ -351,6 +351,9 @@ aicam_result_t system_controller_unregister_trigger(system_controller_t *control
 
 /* ==================== Simplified System Service ==================== */
 
+aicam_result_t system_controller_get_next_capture_at(
+    system_controller_t *controller, uint64_t *next_capture_at);
+
 /**
  * @brief System service context handle
  */

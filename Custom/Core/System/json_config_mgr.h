@@ -76,6 +76,8 @@ typedef struct {
      uint32_t time_node_count;
      uint32_t time_node[10]; // 10 time nodes
      uint8_t weekdays[10]; // 0: all days, 1: Monday, 2: Tuesday, 3: Wednesday, 4: Thursday, 5: Friday, 6: Saturday, 7: Sunday
+     aicam_timer_interval_mode_t interval_mode; // 0=normal (immediate), 1=scheduled (from start_time)
+     uint32_t start_time;                       // Seconds since midnight, only for scheduled mode
  } timer_trigger_config_t;
 
  typedef struct {

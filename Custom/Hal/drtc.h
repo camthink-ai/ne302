@@ -72,6 +72,7 @@ void rtc_set_timezone(int timezone_offset_hours);
 int rtc_get_timezone(void);
 int8_t usr_set_rtc_alarm(uint64_t wake_time);
 int rtc_register_wakeup_ex(rtc_wakeup_t *rtc_wakeup);
+int rtc_register_wakeup_ex_locked(rtc_wakeup_t *rtc_wakeup);
 int rtc_register_schedule_ex(rtc_schedule_t *rtc_schedule);
 int rtc_unregister_task_by_name(const char *name);
 int rtc_get_next_wakeup_time(int sched_id, uint64_t *next_wakeup);

@@ -316,6 +316,8 @@
  #define NVS_KEY_TIMER_NODE_COUNT    "timer_node_count"
  #define NVS_KEY_TIMER_NODE_PREFIX   "timer_node_"
  #define NVS_KEY_TIMER_WEEKDAYS_PREFIX "timer_weekdays_"
+ #define NVS_KEY_TIMER_INTERVAL_MODE  "timer_iv_mode"
+ #define NVS_KEY_TIMER_START_TIME     "timer_start_t"
  // Video Stream
  #define NVS_KEY_RTSP_URL            "rtsp_url"
  #define NVS_KEY_RTSP_ENABLE         "rtsp_en"

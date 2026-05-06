@@ -165,6 +165,15 @@ aicam_result_t json_config_save_work_mode_config_to_nvs(const work_mode_config_t
             LOG_CORE_ERROR("Failed to save timer weekday %d to NVS", i);
     }
 
+    // Save timer interval mode and start time
+    result = json_config_nvs_write_uint8(NVS_KEY_TIMER_INTERVAL_MODE, config->timer_trigger.interval_mode);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save timer interval mode to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_TIMER_START_TIME, config->timer_trigger.start_time);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save timer start time to NVS");
+
     result = json_config_nvs_write_string(NVS_KEY_RTSP_URL, config->video_stream_mode.rtsp_server_url);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save rtsp url to NVS");
@@ -2381,6 +2390,19 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         if (result != AICAM_OK)
             json_config_nvs_write_uint8(key_name, config->work_mode_config.timer_trigger.weekdays[i]);
     }
+
+    // Load timer interval mode and start time
+    result = json_config_nvs_read_uint8(NVS_KEY_TIMER_INTERVAL_MODE, &temp_uint8);
+    if (result == AICAM_OK)
+        config->work_mode_config.timer_trigger.interval_mode = temp_uint8;
+    else
+        json_config_nvs_write_uint8(NVS_KEY_TIMER_INTERVAL_MODE, config->work_mode_config.timer_trigger.interval_mode);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_TIMER_START_TIME, &temp_uint32);
+    if (result == AICAM_OK)
+        config->work_mode_config.timer_trigger.start_time = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_TIMER_START_TIME, config->work_mode_config.timer_trigger.start_time);
 
     result = json_config_nvs_read_string(NVS_KEY_RTSP_URL, config->work_mode_config.video_stream_mode.rtsp_server_url, sizeof(config->work_mode_config.video_stream_mode.rtsp_server_url));
     if (result != AICAM_OK)

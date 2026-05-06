@@ -140,13 +140,20 @@ typedef struct {
 } query_result_t;
 
 
-int register_wakeup_ex(scheduler_manager_t *mgr, int sched_id, 
+int register_wakeup_ex(scheduler_manager_t *mgr, int sched_id,
                       const char *name, wakeup_type_t type,
                       uint32_t day_sec, int16_t day_offset,
                       repeat_type_t repeat, uint8_t weekdays,
                       void (*cb)(void*), void *arg);
 
-int register_schedule_ex(scheduler_manager_t *mgr, int sched_id, 
+// Register without locking — caller must already hold scheduler lock (for use within callbacks)
+int register_wakeup_ex_locked(scheduler_manager_t *mgr, int sched_id,
+                              const char *name, wakeup_type_t type,
+                              uint32_t day_sec, int16_t day_offset,
+                              repeat_type_t repeat, uint8_t weekdays,
+                              void (*cb)(void*), void *arg);
+
+int register_schedule_ex(scheduler_manager_t *mgr, int sched_id,
                         const char *name, schedule_period_t *periods, int period_count,
                         void (*enter)(void*), void (*exit)(void*), void *arg);
 

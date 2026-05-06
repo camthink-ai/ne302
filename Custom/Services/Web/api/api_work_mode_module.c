@@ -660,8 +660,27 @@ static aicam_result_t work_mode_triggers_get_handler(http_handler_context_t* ctx
         cJSON_AddItemToArray(weekdays, cJSON_CreateNumber(config.timer_trigger.weekdays[i]));
     }
     cJSON_AddItemToObject(timer_trigger, "weekdays", weekdays);
+
+    // Interval mode and start time
+    cJSON_AddStringToObject(timer_trigger, "interval_mode",
+        config.timer_trigger.interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED
+            ? "scheduled" : "normal");
+    char* start_time_str = get_time_node_string(config.timer_trigger.start_time);
+    cJSON_AddStringToObject(timer_trigger, "start_time", start_time_str);
+    buffer_free(start_time_str);
+
+    // Next capture time (read-only)
+    uint64_t next_capture_at = 0;
+    system_controller_t* ctrl = get_system_controller();
+    if (ctrl) {
+        system_controller_get_next_capture_at(ctrl, &next_capture_at);
+    }
+    if (next_capture_at > 0) {
+        cJSON_AddNumberToObject(timer_trigger, "next_capture_at", (double)next_capture_at);
+    }
+
     cJSON_AddItemToObject(response, "timer_trigger", timer_trigger);
-    
+
     // PIR trigger configuration
     cJSON* pir_trigger = cJSON_CreateObject();
     cJSON_AddBoolToObject(pir_trigger, "enable", config.pir_trigger.enable);
@@ -816,8 +835,31 @@ static aicam_result_t work_mode_triggers_set_handler(http_handler_context_t* ctx
                 }
             }
         }
+
+        // Parse interval_mode (new field)
+        cJSON* interval_mode_item = cJSON_GetObjectItem(timer_trigger, "interval_mode");
+        if (interval_mode_item && cJSON_IsString(interval_mode_item)) {
+            const char* mode_str = cJSON_GetStringValue(interval_mode_item);
+            if (strcmp(mode_str, "scheduled") == 0) {
+                config.timer_trigger.interval_mode = AICAM_TIMER_INTERVAL_MODE_SCHEDULED;
+            } else {
+                config.timer_trigger.interval_mode = AICAM_TIMER_INTERVAL_MODE_NORMAL;
+            }
+        } else {
+            config.timer_trigger.interval_mode = AICAM_TIMER_INTERVAL_MODE_NORMAL;
+        }
+
+        // Parse start_time (new field, "HH:MM" format)
+        cJSON* start_time_item = cJSON_GetObjectItem(timer_trigger, "start_time");
+        if (start_time_item && cJSON_IsString(start_time_item)) {
+            config.timer_trigger.start_time = parse_time_node(cJSON_GetStringValue(start_time_item));
+        } else if (start_time_item && cJSON_IsNumber(start_time_item)) {
+            config.timer_trigger.start_time = (uint32_t)cJSON_GetNumberValue(start_time_item);
+        } else {
+            config.timer_trigger.start_time = 0;
+        }
     }
-    
+
     // Parse PIR trigger settings
     cJSON* pir_trigger = cJSON_GetObjectItem(request, "pir_trigger");
     if (pir_trigger && cJSON_IsObject(pir_trigger)) {

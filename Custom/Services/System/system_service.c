@@ -879,10 +879,10 @@ static aicam_result_t unregister_pir_runtime_callback(void);
          LOG_SVC_ERROR("Invalid controller in timer trigger callback");
          return;
      }
-     
+
      controller->timer_task_count++;
      LOG_SVC_INFO("Timer trigger activated (count: %lu)", controller->timer_task_count);
-     
+
      // Call the registered capture callback if available
      if (controller->capture_callback) {
          controller->capture_callback(CAPTURE_TRIGGER_RTC, controller->capture_callback_user_data);
@@ -890,11 +890,108 @@ static aicam_result_t unregister_pir_runtime_callback(void);
      else {
          LOG_SVC_ERROR("No capture callback registered");
      }
-     
+
      // Update activity time to prevent power mode timeout during capture
      system_controller_update_activity(controller);
  }
- 
+
+// Register RTC trigger without locking (for use within scheduler callbacks that already hold the lock)
+static aicam_result_t register_rtc_trigger_locked(system_controller_t *controller,
+                                                   wakeup_type_t type,
+                                                   const char *name,
+                                                   uint64_t trigger_sec,
+                                                   int16_t day_offset,
+                                                   uint8_t weekdays,
+                                                   repeat_type_t repeat,
+                                                   timer_trigger_callback_t callback,
+                                                   void *user_data)
+{
+    if (!controller || !controller->is_initialized || !name || !callback) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    rtc_wakeup_t wakeup = {0};
+    strncpy(wakeup.name, name, sizeof(wakeup.name) - 1);
+    wakeup.type = type;
+    wakeup.repeat = repeat;
+    wakeup.trigger_sec = trigger_sec;
+    wakeup.day_offset = day_offset;
+    wakeup.weekdays = weekdays;
+    wakeup.callback = (void(*)(void*))callback;
+    wakeup.arg = user_data;
+
+    int result = rtc_register_wakeup_ex_locked(&wakeup);
+    if (result != 0) {
+        LOG_SVC_ERROR("Failed to register RTC trigger (locked): %d", result);
+        return AICAM_ERROR;
+    }
+    return AICAM_OK;
+}
+
+/**
+ * @brief Calculate next trigger for scheduled_interval mode (continuous 24-hour cycle)
+ * Schedule is a continuous cycle anchored at start_time with fixed interval, wrapping past midnight.
+ * Example: start=8:00, interval=7min → points are 8:00, 8:07, ..., 23:59, 0:06, ..., 7:55, 8:00, ...
+ * @return Seconds-since-midnight of next trigger
+ */
+static uint32_t calculate_next_scheduled_interval_trigger(
+    uint32_t start_time_sec, uint32_t interval_sec, uint32_t now_sec)
+{
+    if (interval_sec == 0) return start_time_sec;
+
+    // Position within the 24-hour cycle relative to anchor
+    uint32_t cycle_now = (now_sec - start_time_sec + 86400) % 86400;
+    // Next interval boundary within the cycle
+    uint32_t cycle_next = (cycle_now / interval_sec + 1) * interval_sec;
+
+    if (cycle_next >= 86400) {
+        // Wrap around: next trigger is at start_time (cycle boundary resets)
+        return start_time_sec;
+    }
+    return (start_time_sec + cycle_next) % 86400;
+}
+
+/**
+ * @brief Scheduled interval timer callback — fires capture, then re-registers next
+ * @note Called from within scheduler_handle_event which holds the scheduler lock,
+ *       so we must use _locked variants and skip unregister (REPEAT_ONCE auto-deletes).
+ */
+static void scheduled_interval_timer_callback(void *user_data)
+{
+    system_controller_t *controller = (system_controller_t *)user_data;
+    if (!controller || !controller->is_initialized) return;
+
+    controller->timer_task_count++;
+    LOG_SVC_INFO("Scheduled interval timer triggered (count: %lu)", controller->timer_task_count);
+
+    // Perform capture
+    if (controller->capture_callback) {
+        controller->capture_callback(CAPTURE_TRIGGER_RTC, controller->capture_callback_user_data);
+    }
+
+    // Calculate and register next trigger
+    const timer_trigger_config_t *tc = &controller->work_config.timer_trigger;
+    RTC_TIME_S now_rtc = rtc_get_time();
+    uint32_t now_sec = now_rtc.hour * 3600 + now_rtc.minute * 60 + now_rtc.second;
+    uint32_t next = calculate_next_scheduled_interval_trigger(tc->start_time, tc->interval_sec, now_sec);
+
+    // REPEAT_ONCE job is already auto-deleted by process_wakeup_jobs — no unregister needed.
+    // Use unique name for the new job to avoid collisions.
+    snprintf(controller->timer_task_name, sizeof(controller->timer_task_name),
+             "tiv_%lu", (unsigned long)rtc_get_timeStamp() % 100000);
+
+    // Determine if next trigger is tomorrow (next <= now_sec means it wrapped past midnight)
+    uint8_t day_offset = (next <= now_sec) ? 1 : 0;
+
+    register_rtc_trigger_locked(controller,
+        WAKEUP_TYPE_ABSOLUTE, controller->timer_task_name,
+        next, day_offset, 0x7F, REPEAT_ONCE,
+        scheduled_interval_timer_callback, controller);
+    LOG_SVC_INFO("Scheduled interval: next trigger at %lu sec (day_offset=%u)", next, day_offset);
+
+    system_controller_update_activity(controller);
+}
+
  /**
   * @brief Apply timer trigger configuration
   * @param controller System controller handle
@@ -929,16 +1026,31 @@ static aicam_result_t unregister_pir_runtime_callback(void);
      
      switch (timer_config->capture_mode) {
          case AICAM_TIMER_CAPTURE_MODE_INTERVAL:
-             // Interval mode: capture at regular intervals
-             result = system_controller_register_rtc_trigger(controller,
-                                                            WAKEUP_TYPE_INTERVAL,
-                                                            controller->timer_task_name,
-                                                            timer_config->interval_sec,   //interval_sec
-                                                            0,  // day_offset
-                                                            0,  // weekdays
-                                                            REPEAT_INTERVAL,
-                                                            timer_trigger_callback,
-                                                            controller);   //user_data
+             if (timer_config->interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED &&
+                 timer_config->start_time > 0 && timer_config->interval_sec > 0) {
+                 // Scheduled interval: continuous 24-hour cycle anchored at start_time
+                 RTC_TIME_S now_rtc = rtc_get_time();
+                 uint32_t now_sec = now_rtc.hour * 3600 + now_rtc.minute * 60 + now_rtc.second;
+                 uint32_t next = calculate_next_scheduled_interval_trigger(
+                     timer_config->start_time, timer_config->interval_sec, now_sec);
+
+                 uint8_t day_offset = (next <= now_sec) ? 1 : 0;
+                 result = system_controller_register_rtc_trigger(controller,
+                     WAKEUP_TYPE_ABSOLUTE, controller->timer_task_name,
+                     next, day_offset, 0x7F, REPEAT_ONCE,
+                     scheduled_interval_timer_callback, controller);
+                 LOG_SVC_INFO("Scheduled interval: first trigger at %lu sec (day_offset=%u)", next, day_offset);
+             } else {
+                 // Normal interval mode (unchanged behavior)
+                 result = system_controller_register_rtc_trigger(controller,
+                                                                WAKEUP_TYPE_INTERVAL,
+                                                                controller->timer_task_name,
+                                                                timer_config->interval_sec,
+                                                                0, 0,
+                                                                REPEAT_INTERVAL,
+                                                                timer_trigger_callback,
+                                                                controller);
+             }
              break;
              
          case AICAM_TIMER_CAPTURE_MODE_ABSOLUTE:
@@ -1189,7 +1301,60 @@ aicam_result_t system_service_trigger_capture(capture_trigger_type_t trigger_typ
     
     LOG_SVC_INFO("Manually triggering capture: type=%d", trigger_type);
     controller->capture_callback(trigger_type, controller->capture_callback_user_data);
-    
+
+    return AICAM_OK;
+}
+
+aicam_result_t system_controller_get_next_capture_at(
+    system_controller_t *controller, uint64_t *next_capture_at)
+{
+    if (!controller || !next_capture_at) return AICAM_ERROR_INVALID_PARAM;
+    *next_capture_at = 0;
+
+    if (!controller->timer_trigger_active) return AICAM_OK;
+
+    const timer_trigger_config_t *tc = &controller->work_config.timer_trigger;
+    if (!tc->enable) return AICAM_OK;
+
+    RTC_TIME_S now_rtc = rtc_get_time();
+    uint64_t now_ts = rtc_get_timeStamp();
+    uint32_t now_sec = now_rtc.hour * 3600 + now_rtc.minute * 60 + now_rtc.second;
+
+    switch (tc->capture_mode) {
+    case AICAM_TIMER_CAPTURE_MODE_INTERVAL:
+        if (tc->interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED && tc->start_time > 0) {
+            uint32_t next = calculate_next_scheduled_interval_trigger(
+                tc->start_time, tc->interval_sec, now_sec);
+            // If next <= now_sec, it means the trigger wraps to tomorrow
+            if (next <= now_sec) {
+                *next_capture_at = now_ts - now_sec + 86400 + next;
+            } else {
+                *next_capture_at = now_ts - now_sec + next;
+            }
+        } else {
+            // Normal interval: next is interval_sec from now
+            *next_capture_at = now_ts + tc->interval_sec;
+        }
+        break;
+    case AICAM_TIMER_CAPTURE_MODE_ABSOLUTE:
+        if (tc->time_node_count > 0) {
+            uint32_t earliest = UINT32_MAX;
+            for (int i = 0; i < tc->time_node_count && i < 10; i++) {
+                if (tc->time_node[i] > now_sec && tc->time_node[i] < earliest) {
+                    earliest = tc->time_node[i];
+                }
+            }
+            if (earliest != UINT32_MAX) {
+                *next_capture_at = now_ts - now_sec + earliest;
+            } else {
+                // All past today — first node tomorrow
+                *next_capture_at = now_ts - now_sec + 86400 + tc->time_node[0];
+            }
+        }
+        break;
+    default:
+        break;
+    }
     return AICAM_OK;
 }
 
@@ -1214,7 +1379,7 @@ aicam_result_t system_controller_register_io_trigger(system_controller_t *contro
      
      return AICAM_OK;
  }
- 
+
  aicam_result_t system_controller_register_rtc_trigger(system_controller_t *controller,
                                                       wakeup_type_t type,
                                                       const char *name,
@@ -3519,23 +3684,23 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
 
     // Step 4.5: Webhook push (non-blocking, fire-and-forget)
     if (webhook_service_is_enabled() && jpeg_buffer) {
-        static const char *wh_trigger_names[] = {
-            "IO", "RTC_WAKEUP", "PIR", "BUTTON", "REMOTE", "WUFI", "RTC", "WEB"
-        };
-        const char *wh_trigger = (trigger_type < sizeof(wh_trigger_names)/sizeof(wh_trigger_names[0]))
-            ? wh_trigger_names[trigger_type] : "UNKNOWN";
-        char wh_ts[32];
-        snprintf(wh_ts, sizeof(wh_ts), "%llu", (unsigned long long)rtc_get_timeStamp());
-        webhook_service_push_capture(jpeg_buffer, (uint32_t)jpeg_size, wh_trigger, wh_ts);
+        aicam_result_t wh_ret = webhook_service_push_capture(
+            jpeg_buffer, (uint32_t)jpeg_size, &metadata, ai_result_ptr);
+        if (wh_ret == AICAM_OK) {
+            // Ownership transferred to webhook task — skip cleanup in Step 5
+            jpeg_buffer = NULL;
+        }
     }
 
     // Step 5: Cleanup
     step_start_time = rtc_get_uptime_ms();
     LOG_SVC_INFO("[TIMING] Step 5: Cleaning up...");
-    if (jpeg_copy && jpeg_buffer == jpeg_copy) {
-        buffer_free(jpeg_buffer);
-    } else {
-        device_service_camera_free_jpeg_buffer(jpeg_buffer);
+    if (jpeg_buffer) {
+        if (jpeg_copy && jpeg_buffer == jpeg_copy) {
+            buffer_free(jpeg_buffer);
+        } else {
+            device_service_camera_free_jpeg_buffer(jpeg_buffer);
+        }
     }
     jpeg_buffer = NULL;
     jpeg_copy = NULL;

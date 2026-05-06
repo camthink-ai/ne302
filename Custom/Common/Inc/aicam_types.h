@@ -296,6 +296,14 @@ typedef enum {
     AICAM_TIMER_CAPTURE_MODE_ABSOLUTE = 2
 } aicam_timer_capture_mode_t;
 
+/**
+ * @brief Interval mode for timer capture (only used with INTERVAL capture mode)
+ */
+typedef enum {
+    AICAM_TIMER_INTERVAL_MODE_NORMAL = 0,     // Start immediately on save
+    AICAM_TIMER_INTERVAL_MODE_SCHEDULED = 1,  // Start from daily start_time
+} aicam_timer_interval_mode_t;
+
 /* ==================== Common Structure Definitions ==================== */
 
 /**

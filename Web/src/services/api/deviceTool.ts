@@ -69,6 +69,19 @@ export interface PirConfigReq {
     pulse_count: number; // 1-4
     window_time_s: number; // 0-3
   };
+  timer_trigger?: {
+    enable: boolean;
+    capture_mode: string;
+    interval_sec: number;
+    time_node_count: number;
+    time_node: string[];
+    weekdays: number[];
+    interval_mode: 'normal' | 'scheduled';
+    start_time: string;
+  };
+  remote_trigger?: {
+    enable: boolean;
+  };
 }
 const deviceTool = {
   // Whether to enable video stream
