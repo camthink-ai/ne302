@@ -10,11 +10,6 @@ PROJECT_NAME = ne301
 # ==============================================
 include version.mk
 
-# ==============================================
-# Load user configuration (optional)
-# ==============================================
--include .make.env
-
 # Directories
 BUILD_DIR = build
 PKG_SCRIPT_DIR = Script
@@ -62,6 +57,8 @@ FLASH_ADDR_AI_3_BASE = 0x71800000
 FLASH_ADDR_AI_3_END = 0x71FFFFFF
 FLASH_ADDR_LITTLEFS_BASE = 0x72000000
 FLASH_ADDR_LITTLEFS_END = 0x75FFFFFF
+FLASH_ADDR_WIFI_FW_BASE = 0x77C00000
+FLASH_ADDR_WIFI_FW_END = 0x77FFFFFF
 
 
 # Parallel build (auto-detect CPU cores)
@@ -93,11 +90,7 @@ BIN = $(CP) -O binary
 PACKER = python $(PKG_SCRIPT_DIR)/ota_packer.py
 FLASHER = STM32_Programmer_CLI
 SIGNER = STM32_SigningTool_CLI
-
-# External Loader paths (Linux vs Windows)
-EL_LINUX = "$(shell dirname "$(shell which $(FLASHER))" 2>/dev/null)/ExternalLoader/MX66UW1G45G_STM32N6570-DK.stldr"
-EL_WINDOWS ?= "D:/STM32CubeCLT_1.18.0/STM32CubeProgrammer/bin/ExternalLoader/MX66UW1G45G_STM32N6570-DK.stldr"
-EL = $(EL_LINUX)
+EL = "$(shell dirname "$(shell which $(FLASHER))" 2>/dev/null)/ExternalLoader/MX66UW1G45G_STM32N6570-DK.stldr"
 
 ######################################
 # Common Compiler Configuration
@@ -240,6 +233,35 @@ pkg: $(foreach proj, fsbl app web model,pkg-$(proj))
 	@echo "========================================="
 
 ######################################
+# Pack to HEX
+######################################
+.PHONY: pack-hex
+pack-hex: wakecore
+	@echo "========================================="
+	@echo "Packing firmware to HEX files..."
+	@echo "========================================="
+	@python $(PKG_SCRIPT_DIR)/pack_to_hex.py
+	@echo ""
+	@echo "Packing WakeCore..."
+	@python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wakecore || echo "Warning: WakeCore not found, skipping..."
+	@echo "========================================="
+	@echo "HEX files created:"
+	@echo "  - $(BUILD_DIR)/ne301_Main.hex (Main firmware, without WiFi)"
+	@echo "  - $(BUILD_DIR)/ne301_Main_WiFi.hex (Main firmware, with WiFi)"
+	@echo "  - $(BUILD_DIR)/ne301_WakeCore.hex (WakeCore)"
+	@echo "========================================="
+
+.PHONY: pack-hex-wakecore
+pack-hex-wakecore: wakecore
+	@echo "========================================="
+	@echo "Packing WakeCore to HEX file..."
+	@echo "========================================="
+	@python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wakecore
+	@echo "========================================="
+	@echo "HEX file created: $(BUILD_DIR)/ne301_WakeCore.hex"
+	@echo "========================================="
+
+######################################
 # Generic Flash Template
 ######################################
 define flash_project
@@ -367,149 +389,6 @@ rebuild-web: clean-web web
 rebuild-model: clean-model model
 
 ######################################
-# Remote Flash (Linux -> Windows)
-######################################
-# Windows配置(可通过.make.env覆盖)
-WIN_HOST ?= 192.168.100.1
-WIN_USER ?= admin
-WIN_BUILD_DIR ?= /f/ne301_build/
-WIN_BUILD_DIR_WIN ?= F:/ne301_build
-WIN_SSH_PORT ?= 22
-SSH_KEY ?= ~/.ssh/id_ed25519_windows
-
-# rsync传输选项
-RSYNC_OPTS = -avz --progress
-SSH_OPTS = -p $(WIN_SSH_PORT)  -i $(SSH_KEY)
-
-# Remote flash file names (must match pkg-* output)
-REMOTE_APP_BIN = $(APP_NAME)_signed_v$(APP_VERSION)$(if $(APP_EFFECTIVE_SUFFIX),_$(APP_EFFECTIVE_SUFFIX))_pkg.bin
-REMOTE_WEB_BIN = $(WEB_NAME)_v$(WEB_VERSION)$(if $(WEB_EFFECTIVE_SUFFIX),_$(WEB_EFFECTIVE_SUFFIX))_pkg.bin
-REMOTE_MODEL_BIN = $(MODEL_NAME)_v$(MODEL_VERSION)$(if $(MODEL_EFFECTIVE_SUFFIX),_$(MODEL_EFFECTIVE_SUFFIX))_pkg.bin
-
-.PHONY: transfer-to-windows
-transfer-to-windows: pkg
-	@echo "========================================="
-	@echo "Transferring binaries to Windows..."
-	@echo "Target: $(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)"
-	@echo "========================================="
-	@mkdir -p $(BUILD_DIR)
-	@rsync $(RSYNC_OPTS) -e "ssh $(SSH_OPTS)" \
-		$(BUILD_DIR)/$(FSBL_NAME)_signed.bin \
-		$(BUILD_DIR)/$(REMOTE_APP_BIN) \
-		$(BUILD_DIR)/$(REMOTE_WEB_BIN) \
-		$(BUILD_DIR)/$(REMOTE_MODEL_BIN) \
-		$(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)/
-	@echo "Transfer complete!"
-
-.PHONY: flash-remote
-flash-remote: transfer-to-windows
-	@echo "========================================="
-	@echo "Flashing on Windows host..."
-	@echo "========================================="
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) powershell -Command "\
-		cd '$(WIN_BUILD_DIR_WIN)'; \
-		Write-Host 'Flashing FSBL...'; \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(WIN_BUILD_DIR_WIN)/$(FSBL_NAME)_signed.bin' $(FLASH_ADDR_FSBL); \
-		Write-Host 'Flashing App...'; \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(WIN_BUILD_DIR_WIN)/$(REMOTE_APP_BIN)' $(FLASH_ADDR_APP); \
-		Write-Host 'Flashing Web...'; \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(WIN_BUILD_DIR_WIN)/$(REMOTE_WEB_BIN)' $(FLASH_ADDR_WEB); \
-		Write-Host 'Flashing Model...'; \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(WIN_BUILD_DIR_WIN)/$(REMOTE_MODEL_BIN)' $(FLASH_ADDR_MODEL); \
-		Write-Host 'Flash complete!'; \
-	"
-	@echo "========================================="
-	@echo "Remote flash complete!"
-	@echo "========================================="
-
-
-.PHONY: flash-remote-fsbl
-flash-remote-fsbl: pkg-fsbl
-	@echo "Transferring FSBL to Windows..."
-	@rsync $(RSYNC_OPTS) -e "ssh $(SSH_OPTS)" \
-		$(BUILD_DIR)/$(FSBL_NAME)_signed.bin \
-		$(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)/
-
-	@echo "Flashing FSBL on Windows..."
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) powershell -Command "\
-		cd '$(WIN_BUILD_DIR_WIN)'; \
-		Write-Host 'Flashing FSBL...'; \
-		if (!(Test-Path '$(FSBL_NAME)_signed.bin')) { \
-			Write-Error 'ERROR: FSBL file not found!'; exit 1; \
-		} \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(FSBL_NAME)_signed.bin' $(FLASH_ADDR_FSBL); \
-		Write-Host 'FSBL Flash complete!'; \
-	"
-
-	@echo "Remote FSBL flash complete!"
-
-
-.PHONY: flash-remote-app
-flash-remote-app: pkg-app
-	@echo "Transferring App to Windows..."
-	@rsync $(RSYNC_OPTS) -e "ssh $(SSH_OPTS)" \
-		$(BUILD_DIR)/$(REMOTE_APP_BIN) \
-		$(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)/
-
-	@echo "Flashing App on Windows..."
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) powershell -Command "\
-		cd '$(WIN_BUILD_DIR_WIN)'; \
-		Write-Host 'Flashing App...'; \
-		if (!(Test-Path '$(REMOTE_APP_BIN)')) { \
-			Write-Error 'ERROR: App file not found!'; exit 1; \
-		} \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(REMOTE_APP_BIN)' $(FLASH_ADDR_APP); \
-		Write-Host 'App Flash complete!'; \
-	"
-
-	@echo "Remote App flash complete!"
-
-.PHONY: flash-remote-web
-flash-remote-web: pkg-web
-	@echo "Transferring Web to Windows..."
-	@rsync $(RSYNC_OPTS) -e "ssh $(SSH_OPTS)" \
-		$(BUILD_DIR)/$(REMOTE_WEB_BIN) \
-		$(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)/
-
-	@echo "Flashing Web on Windows..."
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) powershell -Command "\
-		cd '$(WIN_BUILD_DIR_WIN)'; \
-		Write-Host 'Flashing Web...'; \
-		if (!(Test-Path '$(REMOTE_WEB_BIN)')) { \
-			Write-Error 'ERROR: Web file not found!'; exit 1; \
-		} \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(REMOTE_WEB_BIN)' $(FLASH_ADDR_WEB); \
-		Write-Host 'Web Flash complete!'; \
-	"
-	@echo "Remote Web flash complete!"
-
-.PHONY: flash-remote-model
-flash-remote-model: pkg-model
-	@echo "Transferring Model to Windows..."
-	@rsync $(RSYNC_OPTS) -e "ssh $(SSH_OPTS)" \
-		$(BUILD_DIR)/$(REMOTE_MODEL_BIN) \
-		$(WIN_USER)@$(WIN_HOST):$(WIN_BUILD_DIR)/
-
-	@echo "Flashing Model on Windows..."
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) powershell -Command "\
-		cd '$(WIN_BUILD_DIR_WIN)'; \
-		Write-Host 'Flashing Model...'; \
-		if (!(Test-Path '$(REMOTE_MODEL_BIN)')) { \
-			Write-Error 'ERROR: Model file not found!'; exit 1; \
-		} \
-		STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el '$(EL_WINDOWS)' -hardRst -w '$(REMOTE_MODEL_BIN)' $(FLASH_ADDR_MODEL); \
-		Write-Host 'Model Flash complete!'; \
-	"
-	@echo "Remote Model flash complete!"
-
-.PHONY: test-windows-connection
-test-windows-connection:
-	@echo "Testing connection to Windows host..."
-	@echo "Host: $(WIN_USER)@$(WIN_HOST):$(WIN_SSH_PORT)"
-	@ssh $(SSH_OPTS) $(WIN_USER)@$(WIN_HOST) 'echo "Connection successful!"'
-	@echo "Test connection complete!"
-
-######################################
 # Info & Help
 ######################################
 .PHONY: info
@@ -561,10 +440,8 @@ help:
 	@echo "Sign:     make sign[-fsbl|-app]"
 	@echo "Flash:    make flash[-fsbl|-app|-web|-model|-wakecore]"
 	@echo "Package:  make pkg[-fsbl|-app|-web|-model]"
-	@echo "Remote:   make flash-remote[-fsbl|-app]  # Linux->Windows"
-	@echo "          make transfer-to-windows        # Transfer only"
-	@echo "          make test-windows-connection    # Test SSH connection"
-	@echo "          ./Script/test_remote_flash.sh   # Full configuration test"
+	@echo "Pack HEX: make pack-hex  # Pack all firmware (Main, Main+WiFi, WakeCore) to HEX files"
+	@echo "          make pack-hex-wakecore  # Pack WakeCore to separate HEX file only"
 	@echo "Erase:    make erase-[nvs|ota|app1|app2|ai-default|ai-1|ai-2|ai-3|littlefs]"
 	@echo "          make erase-all  # Erase all partitions (except FSBL)"
 	@echo "          make erase-chip           # Erase entire chip (WARNING!)"
@@ -578,9 +455,10 @@ help:
 	@echo "  make web          # Build Web"
 	@echo "  make model        # Build AI model"
 	@echo "  make wakecore     # Build STM32U0 WakeCore"
-	@echo "  make flash        # Flash all to device (local)"
-	@echo "  make flash-remote # Build, transfer and flash on Windows"
+	@echo "  make flash        # Flash all to device"
 	@echo "  make pkg          # Package all for OTA"
+	@echo "  make pack-hex     # Pack all firmware (Main, Main+WiFi, WakeCore) to HEX files"
+	@echo "  make pack-hex-wakecore  # Pack WakeCore to separate HEX file only"
 	@echo "  make sign         # Sign all for app and fsbl"
 	@echo "  make sign-fsbl    # Sign FSBL only"
 	@echo "  make pkg-fsbl 	   # Package signed FSBL only"
@@ -596,15 +474,9 @@ help:
 	@echo "  make distclean    # Deep clean (including dependencies)"
 	@echo "  make -j20         # Parallel build with 20 jobs"
 	@echo ""
-	@echo "Remote Flash (Linux->Windows):"
-	@echo "  1. Configure .make.env with Windows host info"
-	@echo "  2. make test-windows-connection  # Test SSH"
-	@echo "  3. make flash-remote             # Build and flash"
-	@echo ""
 	@echo "Tips:"
 	@echo "  - Parallel build is auto-enabled (detect CPU cores)"
 	@echo "  - Use erase commands carefully to avoid data loss"
-	@echo "  - Remote flash requires SSH access to Windows"
 	@echo ""
 	@echo "Use 'make info' for configuration details"
 	@echo "========================================="
@@ -614,5 +486,4 @@ help:
 ######################################
 $(BUILD_DIR):
 	@mkdir -p $@
-
 
