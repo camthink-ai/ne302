@@ -1027,7 +1027,7 @@ static void scheduled_interval_timer_callback(void *user_data)
      switch (timer_config->capture_mode) {
          case AICAM_TIMER_CAPTURE_MODE_INTERVAL:
              if (timer_config->interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED &&
-                 timer_config->start_time > 0 && timer_config->interval_sec > 0) {
+                 timer_config->interval_sec > 0) {
                  // Scheduled interval: continuous 24-hour cycle anchored at start_time
                  RTC_TIME_S now_rtc = rtc_get_time();
                  uint32_t now_sec = now_rtc.hour * 3600 + now_rtc.minute * 60 + now_rtc.second;
@@ -1322,7 +1322,7 @@ aicam_result_t system_controller_get_next_capture_at(
 
     switch (tc->capture_mode) {
     case AICAM_TIMER_CAPTURE_MODE_INTERVAL:
-        if (tc->interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED && tc->start_time > 0) {
+        if (tc->interval_mode == AICAM_TIMER_INTERVAL_MODE_SCHEDULED) {
             uint32_t next = calculate_next_scheduled_interval_trigger(
                 tc->start_time, tc->interval_sec, now_sec);
             // If next <= now_sec, it means the trigger wraps to tomorrow

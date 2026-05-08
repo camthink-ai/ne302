@@ -443,14 +443,14 @@ int ms_network_connect(ms_network_handle_t network, const char *host, uint16_t p
     if (network->tls_enable_flag) {
         // Reset TLS session
         mbedtls_ssl_session_reset(&network->ssl);
-        // Set TLS configuration
-        if (network->is_verify_hostname) {
-            ret = mbedtls_ssl_set_hostname(&network->ssl, host);
-            if (ret != 0) {
-                LOG_DRV_ERROR("TLS set hostname failed(ret = %d).", ret);
-                ret = NET_ERR_TLS;
-                goto ms_network_connect_end;
-            }
+        // Always set SNI — required by most modern servers even when hostname
+        // verification is disabled.  Without SNI the server cannot select the
+        // correct certificate and may send a fatal alert.
+        ret = mbedtls_ssl_set_hostname(&network->ssl, host);
+        if (ret != 0) {
+            LOG_DRV_ERROR("TLS set hostname failed(ret = %d).", ret);
+            ret = NET_ERR_TLS;
+            goto ms_network_connect_end;
         }
         // TLS handshake
         if (timeout_ms < MS_NETWORK_DEFAULT_TIMEOUT_MS) {
