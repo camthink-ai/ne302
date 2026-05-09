@@ -3574,51 +3574,38 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                      (unsigned long)step_duration);
     }
 
-    step_start_time = rtc_get_uptime_ms();
-    LOG_SVC_INFO("[TIMING] Step 3.1: Checking MQTT network connection...");
-    uint32_t current_flags = service_get_ready_flags();
+    aicam_result_t upload_result = AICAM_ERROR;
+    aicam_bool_t mqtt_available = mqtt_service_is_running();
 
-    if (g_fast_fail_mqtt_policy) {
+    step_start_time = rtc_get_uptime_ms();
+
+    if (!mqtt_available) {
+        LOG_SVC_INFO("[TIMING] Step 3.1 SKIPPED: MQTT service not running — skip to webhook/SD");
+    } else if (g_fast_fail_mqtt_policy) {
         if (!mqtt_service_is_connected()) {
-            LOG_SVC_ERROR("[TIMING] Step 3.1 FAST-FAIL: MQTT not connected (flags=0x%08X)", current_flags);
-            if (jpeg_copy && jpeg_buffer == jpeg_copy) {
-                buffer_free(jpeg_buffer);
-            } else {
-                device_service_camera_free_jpeg_buffer(jpeg_buffer);
-            }
-            jpeg_buffer = NULL;
-            jpeg_copy = NULL;
-            return AICAM_ERROR_UNAVAILABLE;
+            LOG_SVC_INFO("[TIMING] Step 3.1 FAST-FAIL: MQTT not connected — skip MQTT, try webhook/SD");
+            mqtt_available = AICAM_FALSE;
         }
     } else {
-        LOG_SVC_INFO("[TIMING] Step 3.1: Current service flags: 0x%08X, MQTT_NET_CONNECTED: %s", 
+        LOG_SVC_INFO("[TIMING] Step 3.1: Checking MQTT network connection...");
+        uint32_t current_flags = service_get_ready_flags();
+        LOG_SVC_INFO("[TIMING] Step 3.1: Current service flags: 0x%08X, MQTT_NET_CONNECTED: %s",
                      current_flags, (current_flags & MQTT_NET_CONNECTED) ? "YES" : "NO");
         aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 15000);
         if (result != AICAM_OK) {
-            LOG_SVC_ERROR("[TIMING] Step 3.1 FAILED: Failed to wait for MQTT network connected: %d (timeout: 15s)", result);
-            LOG_SVC_ERROR("[TIMING] Step 3.1: Final service flags: 0x%08X", service_get_ready_flags());
-            if (jpeg_copy && jpeg_buffer == jpeg_copy) {
-                buffer_free(jpeg_buffer);
-            } else {
-                device_service_camera_free_jpeg_buffer(jpeg_buffer);
-            }
-            jpeg_buffer = NULL;
-            jpeg_copy = NULL;
-            return AICAM_ERROR_TIMEOUT;
+            LOG_SVC_INFO("[TIMING] Step 3.1 FAILED: MQTT network not ready: %d — skip MQTT, try webhook/SD", result);
+            LOG_SVC_INFO("[TIMING] Step 3.1: Final service flags: 0x%08X", service_get_ready_flags());
+            mqtt_available = AICAM_FALSE;
         }
     }
 
     step_end_time = rtc_get_uptime_ms();
     step_duration = step_end_time - step_start_time;
-    LOG_SVC_INFO("[TIMING] Step 3.1 COMPLETED: MQTT network ready (duration: %lu ms)", 
-                 (unsigned long)step_duration);
+    LOG_SVC_INFO("[TIMING] Step 3.1 COMPLETED: duration: %lu ms", (unsigned long)step_duration);
 
     // Step 4: Check MQTT connection and upload
     step_start_time = rtc_get_uptime_ms();
-    LOG_SVC_INFO("[TIMING] Step 4: Checking MQTT connection and uploading...");
-    aicam_result_t upload_result = AICAM_ERROR;
-    
-    if (mqtt_service_is_connected()) {
+    if (mqtt_available && mqtt_service_is_connected()) {
         LOG_SVC_INFO("[TIMING] MQTT connected - uploading image");
         
         // Determine upload method based on image size
@@ -3677,10 +3664,14 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         }
         step_end_time = rtc_get_uptime_ms();
         step_duration = step_end_time - step_start_time;
-        LOG_SVC_INFO("[TIMING] Step 4 COMPLETED: MQTT upload finished (duration: %lu ms)", 
+        LOG_SVC_INFO("[TIMING] Step 4 COMPLETED: MQTT upload finished (duration: %lu ms)",
+                     (unsigned long)step_duration);
+    } else {
+        step_end_time = rtc_get_uptime_ms();
+        step_duration = step_end_time - step_start_time;
+        LOG_SVC_INFO("[TIMING] Step 4 SKIPPED: MQTT not available (duration: %lu ms)",
                      (unsigned long)step_duration);
     }
-
 
     // Step 4.5: Webhook push (non-blocking, fire-and-forget)
     if (webhook_service_is_enabled() && jpeg_buffer) {

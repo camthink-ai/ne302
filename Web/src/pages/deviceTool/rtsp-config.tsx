@@ -64,7 +64,7 @@ export default function RtspConfig() {
   const deviceIp = window.location.hostname;
 
   const streamUrl = config.enabled
-    ? `rtsp://${config.auth_mode === 'digest' && config.username ? `${config.username}:****@` : ''}${deviceIp}:${config.port}/live/stream`
+    ? `rtsp://${config.auth_mode === 'digest' && config.username ? `${config.username}:${config.password}@` : ''}${deviceIp}:${config.port}/live/stream`
     : '';
 
   const fetchConfig = async () => {

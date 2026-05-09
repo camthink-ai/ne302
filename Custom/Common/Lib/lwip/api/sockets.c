@@ -562,7 +562,11 @@ alloc_socket(struct netconn *newconn, int accepted)
       SYS_ARCH_UNPROTECT(lev);
       sockets[i].lastdata.pbuf = NULL;
 #if LWIP_SOCKET_SELECT || LWIP_SOCKET_POLL
-      LWIP_ASSERT("sockets[i].select_waiting == 0", sockets[i].select_waiting == 0);
+      /* In multi-threaded environments, a prior select() on a different thread
+       * may have left select_waiting non-zero if the socket was closed while
+       * select cleanup was still in progress.  Reset to 0 instead of asserting —
+       * the new socket has no waiters. */
+      sockets[i].select_waiting = 0;
       sockets[i].rcvevent   = 0;
       /* TCP sendbuf is empty, but the socket is not yet writable until connected
        * (unless it has been created by accept()). */

@@ -159,6 +159,46 @@ aicam_result_t rtsp_service_start(void)
         return AICAM_OK;
     }
 
+    /* Defensive cleanup: if a stale server task exists from a failed prior
+     * stop, wait for it to exit.  The task closes all sockets itself before
+     * returning, so we don't touch any sockets here.  Use polling instead
+     * of osThreadJoin to avoid blocking forever if the task is stuck. */
+    if (g_rtsp_ctx.server_task_handle) {
+        LOG_SVC_WARN("RTSP: stale server task found, cleaning up");
+        g_rtsp_ctx.running = AICAM_FALSE;
+        uint32_t wait_start = osKernelGetTickCount();
+        do {
+            osDelay(100);
+            osThreadState_t state = osThreadGetState(g_rtsp_ctx.server_task_handle);
+            if (state == osThreadTerminated || state == osThreadInactive) {
+                break;
+            }
+        } while ((osKernelGetTickCount() - wait_start) < 3000);
+        osThreadTerminate(g_rtsp_ctx.server_task_handle);
+        g_rtsp_ctx.server_task_handle = NULL;
+    }
+
+    /* Safety net: if listen_socket is somehow still open, close it now.
+     * This can happen if the previous task was killed before cleanup. */
+    if (g_rtsp_ctx.listen_socket >= 0) {
+        LOG_SVC_WARN("RTSP: stale listen socket %d found, closing", g_rtsp_ctx.listen_socket);
+        close(g_rtsp_ctx.listen_socket);
+        g_rtsp_ctx.listen_socket = -1;
+    }
+    if (g_rtsp_ctx.hub_subscribed && g_rtsp_ctx.hub_subscriber_id >= 0) {
+        video_hub_unsubscribe(g_rtsp_ctx.hub_subscriber_id);
+        g_rtsp_ctx.hub_subscriber_id = VIDEO_HUB_INVALID_SUBSCRIBER_ID;
+        g_rtsp_ctx.hub_subscribed = AICAM_FALSE;
+    }
+    osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
+    for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
+        if (g_rtsp_ctx.clients[i].in_use) {
+            g_rtsp_ctx.clients[i].playing = AICAM_FALSE;
+            rtsp_release_client(&g_rtsp_ctx.clients[i]);
+        }
+    }
+    osMutexRelease(g_rtsp_ctx.mutex);
+
     rtsp_load_config();
 
     video_stream_mode_config_t vs_config;
@@ -193,10 +233,29 @@ aicam_result_t rtsp_service_start(void)
     addr.sin_port = htons(g_rtsp_ctx.listen_port);
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        LOG_SVC_ERROR("RTSP: Failed to bind port %lu", (unsigned long)g_rtsp_ctx.listen_port);
+        int bind_errno = errno;
+        LOG_SVC_ERROR("RTSP: Failed to bind port %lu (errno=%d, sock=%d)",
+                      (unsigned long)g_rtsp_ctx.listen_port, bind_errno, sock);
         close(sock);
+        /* If port is still in transition (TIME_WAIT despite SO_REUSEADDR),
+         * retry once after a short delay. */
+        if (bind_errno == EADDRINUSE || bind_errno == EHOSTDOWN) {
+            LOG_SVC_INFO("RTSP: retrying bind in 500ms...");
+            osDelay(500);
+            sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock >= 0) {
+                setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+                if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+                    LOG_SVC_INFO("RTSP: bind retry succeeded");
+                    goto bind_ok;
+                }
+                LOG_SVC_ERROR("RTSP: bind retry also failed (errno=%d)", errno);
+                close(sock);
+            }
+        }
         return AICAM_ERROR;
     }
+bind_ok:
 
     if (listen(sock, RTSP_MAX_CLIENTS) < 0) {
         LOG_SVC_ERROR("RTSP: Failed to listen");
@@ -263,34 +322,70 @@ aicam_result_t rtsp_service_stop(void)
 
     g_rtsp_ctx.running = AICAM_FALSE;
 
-    if (g_rtsp_ctx.listen_socket >= 0) {
-        close(g_rtsp_ctx.listen_socket);
-        g_rtsp_ctx.listen_socket = -1;
-    }
-
-    osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
-    for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
-        if (g_rtsp_ctx.clients[i].in_use) {
-            if (g_rtsp_ctx.clients[i].playing) {
-                g_rtsp_ctx.clients[i].playing = AICAM_FALSE;
-            }
-            rtsp_release_client(&g_rtsp_ctx.clients[i]);
-        }
-    }
-    osMutexRelease(g_rtsp_ctx.mutex);
-
+    /* Unsubscribe from video hub so rtsp_on_frame stops being called */
     if (g_rtsp_ctx.hub_subscribed && g_rtsp_ctx.hub_subscriber_id >= 0) {
         video_hub_unsubscribe(g_rtsp_ctx.hub_subscriber_id);
         g_rtsp_ctx.hub_subscriber_id = VIDEO_HUB_INVALID_SUBSCRIBER_ID;
         g_rtsp_ctx.hub_subscribed = AICAM_FALSE;
     }
 
-    g_rtsp_ctx.service_state = SERVICE_STATE_INITIALIZED;
+    /* Mark all clients as not playing / not in use so rtsp_on_frame
+     * (which may still be executing on the hub thread) stops sending
+     * data to sockets we're about to close. */
+    osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
+    for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
+        g_rtsp_ctx.clients[i].playing = AICAM_FALSE;
+        g_rtsp_ctx.clients[i].in_use = AICAM_FALSE;
+    }
+    osMutexRelease(g_rtsp_ctx.mutex);
 
+    /* Wait for the server task to exit (up to 3 s).
+     * The task closes all sockets itself after exiting the select loop,
+     * so we must NOT close them here — that would be a double-close. */
     if (g_rtsp_ctx.server_task_handle) {
-        osThreadJoin(g_rtsp_ctx.server_task_handle);
+        uint32_t wait_start = osKernelGetTickCount();
+        do {
+            osDelay(100);
+            osThreadState_t state = osThreadGetState(g_rtsp_ctx.server_task_handle);
+            if (state == osThreadTerminated || state == osThreadInactive) {
+                break;
+            }
+        } while ((osKernelGetTickCount() - wait_start) < 3000);
+
+        osThreadTerminate(g_rtsp_ctx.server_task_handle);
         g_rtsp_ctx.server_task_handle = NULL;
     }
+
+    /* Defensive: if the task was killed before it could close sockets,
+     * close any that are still open.  The task sets each variable to -1
+     * BEFORE calling close(), so if a variable is still >= 0 the task
+     * never got to it. */
+    if (g_rtsp_ctx.listen_socket >= 0) {
+        LOG_SVC_WARN("RTSP stop: task left listen socket %d open, closing",
+                     g_rtsp_ctx.listen_socket);
+        close(g_rtsp_ctx.listen_socket);
+        g_rtsp_ctx.listen_socket = -1;
+    }
+
+    osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
+    for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
+        if (g_rtsp_ctx.clients[i].rtp_socket >= 0) {
+            close(g_rtsp_ctx.clients[i].rtp_socket);
+            g_rtsp_ctx.clients[i].rtp_socket = -1;
+        }
+        if (g_rtsp_ctx.clients[i].tcp_socket >= 0) {
+            close(g_rtsp_ctx.clients[i].tcp_socket);
+            g_rtsp_ctx.clients[i].tcp_socket = -1;
+        }
+        g_rtsp_ctx.clients[i].session_id[0] = '\0';
+    }
+    osMutexRelease(g_rtsp_ctx.mutex);
+
+    /* Give lwIP's TCP timer a chance to process any pending PCB cleanup
+     * (PCBs freed by close() are removed on the next tcp_tmr cycle). */
+    osDelay(200);
+
+    g_rtsp_ctx.service_state = SERVICE_STATE_INITIALIZED;
 
     LOG_SVC_INFO("RTSP service stopped");
     return AICAM_OK;
@@ -859,6 +954,45 @@ static void rtsp_server_task(void *arg)
             rtsp_handle_client_data(to_check[i]);
         }
     }
+
+    /* Task is exiting — close all sockets HERE, from the same thread that
+     * called select().  lwIP's select_waiting is only decremented inside
+     * select() itself, so close() from ANY other thread will leave
+     * select_waiting != 0 on the socket slot.  When alloc_socket() later
+     * reuses that slot it asserts "select_waiting == 0".  Closing from this
+     * thread guarantees select() has fully returned before we close.
+     *
+     * Set the variable to -1 BEFORE calling close().  If the stop function
+     * terminates this task mid-cleanup, the stop function sees -1 and
+     * doesn't attempt a double-close on the same fd. */
+    {
+        int fd = g_rtsp_ctx.listen_socket;
+        g_rtsp_ctx.listen_socket = -1;
+        if (fd >= 0) {
+            LOG_SVC_INFO("RTSP server task: closing listen socket %d", fd);
+            close(fd);
+        }
+    }
+
+    osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
+    for (int i = 0; i < RTSP_MAX_CLIENTS; i++) {
+        if (g_rtsp_ctx.clients[i].in_use) {
+            g_rtsp_ctx.clients[i].playing = AICAM_FALSE;
+            /* Take local copies, set to -1, then close — same pattern as
+             * listen socket above, prevents double-close if task is killed. */
+            int tcp_fd = g_rtsp_ctx.clients[i].tcp_socket;
+            int rtp_fd = g_rtsp_ctx.clients[i].rtp_socket;
+            g_rtsp_ctx.clients[i].tcp_socket = -1;
+            g_rtsp_ctx.clients[i].rtp_socket = -1;
+            g_rtsp_ctx.clients[i].in_use = AICAM_FALSE;
+            g_rtsp_ctx.clients[i].session_id[0] = '\0';
+            osMutexRelease(g_rtsp_ctx.mutex);
+            if (rtp_fd >= 0) close(rtp_fd);
+            if (tcp_fd >= 0) close(tcp_fd);
+            osMutexAcquire(g_rtsp_ctx.mutex, osWaitForever);
+        }
+    }
+    osMutexRelease(g_rtsp_ctx.mutex);
 
     LOG_SVC_INFO("RTSP server task exited");
 }

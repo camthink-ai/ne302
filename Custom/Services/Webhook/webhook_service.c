@@ -256,6 +256,9 @@ aicam_result_t webhook_service_stop(void)
 
     if (g_webhook.task_handle) {
         osThreadJoin(g_webhook.task_handle);
+        /* osThreadJoin only waits but does NOT release the ThreadX TCB.
+         * osThreadTerminate calls tx_thread_delete to free kernel resources. */
+        osThreadTerminate(g_webhook.task_handle);
         g_webhook.task_handle = NULL;
     }
 

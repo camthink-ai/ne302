@@ -38,7 +38,7 @@ static aicam_result_t rtsp_config_get_handler(http_handler_context_t* ctx)
     cJSON_AddNumberToObject(response, "port", vs_config.rtsp_port);
     cJSON_AddStringToObject(response, "auth_mode", vs_config.rtsp_auth_mode[0] ? vs_config.rtsp_auth_mode : "none");
     cJSON_AddStringToObject(response, "username", vs_config.rtsp_username[0] ? vs_config.rtsp_username : "");
-    cJSON_AddStringToObject(response, "password", vs_config.rtsp_password[0] ? "******" : "");
+    cJSON_AddStringToObject(response, "password", vs_config.rtsp_password[0] ? vs_config.rtsp_password : "");
 
     char *json_str = cJSON_Print(response);
     cJSON_Delete(response);
@@ -75,6 +75,15 @@ static aicam_result_t rtsp_config_set_handler(http_handler_context_t* ctx)
     json_config_get_video_stream_mode(&vs_config);
 
     aicam_bool_t was_enabled = vs_config.rtsp_enable;
+
+    /* Snapshot old values before modification */
+    uint16_t old_port = vs_config.rtsp_port;
+    char old_auth_mode[sizeof(vs_config.rtsp_auth_mode)];
+    char old_username[sizeof(vs_config.rtsp_username)];
+    char old_password[sizeof(vs_config.rtsp_password)];
+    strncpy(old_auth_mode, vs_config.rtsp_auth_mode, sizeof(old_auth_mode));
+    strncpy(old_username, vs_config.rtsp_username, sizeof(old_username));
+    strncpy(old_password, vs_config.rtsp_password, sizeof(old_password));
 
     /* Update fields if provided */
     cJSON *enabled = cJSON_GetObjectItem(request, "enabled");
@@ -130,6 +139,19 @@ static aicam_result_t rtsp_config_set_handler(http_handler_context_t* ctx)
         rtsp_service_start();
     } else if (!vs_config.rtsp_enable && was_enabled) {
         rtsp_service_stop();
+    } else if (vs_config.rtsp_enable && was_enabled) {
+        /* Already running — check if runtime config changed (port, auth) */
+        aicam_bool_t config_changed =
+            (vs_config.rtsp_port != old_port) ||
+            (strncmp(vs_config.rtsp_auth_mode, old_auth_mode, sizeof(vs_config.rtsp_auth_mode)) != 0) ||
+            (strncmp(vs_config.rtsp_username, old_username, sizeof(vs_config.rtsp_username)) != 0) ||
+            (strncmp(vs_config.rtsp_password, old_password, sizeof(vs_config.rtsp_password)) != 0);
+
+        if (config_changed) {
+            LOG_SVC_INFO("RTSP: runtime config changed, restarting service");
+            rtsp_service_stop();
+            rtsp_service_start();
+        }
     }
 
     cJSON *response = cJSON_CreateObject();

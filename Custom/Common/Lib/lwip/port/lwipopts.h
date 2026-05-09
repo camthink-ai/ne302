@@ -88,6 +88,13 @@
 
 #define LWIP_TCPIP_CORE_LOCKING           1
 
+/* Enable SO_REUSEADDR so that servers (RTSP, HTTP) can rebind a port
+ * immediately after restart, even if a previous connection left a PCB
+ * in TIME_WAIT state on that port.  Without this, setsockopt(SO_REUSEADDR)
+ * is a no-op and repeated start/stop of the RTSP service on port 554
+ * fails with EADDRINUSE. */
+#define SO_REUSE                           1
+
 #define LWIP_NETIF_LINK_CALLBACK          1
 #define LWIP_NETIF_STATUS_CALLBACK        1
 #define LWIP_NETIF_EXT_STATUS_CALLBACK    1
