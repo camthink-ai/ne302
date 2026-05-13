@@ -107,6 +107,8 @@ BOOTStatus_TypeDef BOOT_Copy_Application(void)
 
   /* Initialize the system state */
   init_system_state(boot_flash_read, boot_flash_write, boot_flash_erase);
+  // Verify FSBL version to ensure compatibility
+  verify_fsbl_version(FSBL_VERSION_STRING);
   /* this case correspond to copy the SW from external memory into internal memory */
   destination = (uint8_t *)SRAM_APP_BASE;
 

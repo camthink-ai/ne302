@@ -135,7 +135,7 @@ void SysClk_Config(SysClk_Profile_t profile)
     RCC_OscInitStruct.PLL1.PLLN = 25;
     RCC_OscInitStruct.PLL1.PLLFractional = 0;
     RCC_OscInitStruct.PLL1.PLLP1 = 3;
-    RCC_OscInitStruct.PLL1.PLLP2 = 2;
+    RCC_OscInitStruct.PLL1.PLLP2 = 1;
     RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_ON;
     RCC_OscInitStruct.PLL2.PLLSource = RCC_PLLSOURCE_HSE;
     RCC_OscInitStruct.PLL2.PLLM = 1;
@@ -169,19 +169,19 @@ void SysClk_Config(SysClk_Profile_t profile)
         | RCC_CLOCKTYPE_PCLK4;
     RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
     RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
     RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
     RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
     RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
     RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    RCC_ClkInitStruct.IC1Selection.ClockDivider = 1;
+    RCC_ClkInitStruct.IC1Selection.ClockDivider = 2;
     RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
     RCC_ClkInitStruct.IC2Selection.ClockDivider = 1;
     RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    RCC_ClkInitStruct.IC6Selection.ClockDivider = 1;
+    RCC_ClkInitStruct.IC6Selection.ClockDivider = 2;
     RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
-    RCC_ClkInitStruct.IC11Selection.ClockDivider = 1;
+    RCC_ClkInitStruct.IC11Selection.ClockDivider = 2;
 
     if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
     {

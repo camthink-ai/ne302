@@ -1465,6 +1465,7 @@ sl_status_t sli_wifi_select_option(const uint8_t configuration)
 
   // Check for a specific response to ensure successful option selection
   if ((configuration != LOAD_NWP_FW) && (configuration != LOAD_DEFAULT_NWP_FW_ACTIVE_LOW)) {
+    // printf("sli opt 1\r\n");
     uint32_t timestamp = sl_si91x_host_get_timestamp();
     while (sl_si91x_host_elapsed_time(timestamp) < 300) {
       status = sl_si91x_bus_read_memory(SLI_HOST_INTF_REG_OUT, 2, (uint8_t *)&read_value);
@@ -1479,6 +1480,7 @@ sl_status_t sli_wifi_select_option(const uint8_t configuration)
       }
     }
   } else {
+    // printf("sli opt 2\r\n");
     // Check up to 3 seconds for firmware load or upgrade status
     uint32_t timestamp               = sl_si91x_host_get_timestamp();
     uint16_t default_nwp_fw_selected = 0;

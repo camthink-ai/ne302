@@ -198,14 +198,16 @@ int quick_storage_read_snapshot_config(qs_snapshot_config_t *snapshot_config)
     uint8_t temp_u8 = 0;
     uint32_t temp_u32 = 0;
 
-    result = json_config_nvs_read_bool(NVS_KEY_AI_ENABLE, &temp_bool);
-    if (result == AICAM_OK) snapshot_config->ai_enabled = (uint8_t)temp_bool;
+    // result = json_config_nvs_read_bool(NVS_KEY_AI_ENABLE, &temp_bool);
+    // if (result == AICAM_OK) snapshot_config->ai_enabled = (uint8_t)temp_bool;
+    // Match application layer: AI enabled by default
+    snapshot_config->ai_enabled = AICAM_TRUE;
 
     if (snapshot_config->ai_enabled) {
         result = json_config_nvs_read_bool(NVS_KEY_AI_1_ACTIVE, &temp_bool);
         if (result == AICAM_OK) snapshot_config->ai_1_active = (uint8_t)temp_bool;
 
-        /* AI 管道尺寸：读取失败或无效时保持 0，等待模型信息后再设置 */
+        /* AI pipe dimensions: keep 0 if read fails or invalid; set after model info is known */
         result = json_config_nvs_read_uint32(NVS_KEY_AI_PIPE_WIDTH, &temp_u32);
         if (result == AICAM_OK) snapshot_config->ai_pipe_width = temp_u32;
 

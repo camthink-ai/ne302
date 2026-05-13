@@ -20,8 +20,8 @@ extern "C" {
 typedef struct {
     uint8_t ai_enabled;
     uint8_t ai_1_active;
-    uint32_t ai_pipe_width;   /**< 0 或无效表示未从 NVS 解析到可靠值，须待模型信息后再定 AI 管道 */
-    uint32_t ai_pipe_height;  /**< 同上 */
+    uint32_t ai_pipe_width;   /**< 0 or invalid: no reliable value from NVS; AI pipe sized after model info */
+    uint32_t ai_pipe_height;  /**< Same as ai_pipe_width */
     uint32_t confidence_threshold;
     uint32_t nms_threshold;
 

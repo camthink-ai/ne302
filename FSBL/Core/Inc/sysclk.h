@@ -9,13 +9,13 @@
  * --- SYSCLK_PROFILE_HSE_400MHZ（HSE 作 PLL 参考）---
  *   PLL1: 48M/1*25/(3*1) = 400 MHz -> IC1(CPU) = 400 MHz；IC2/IC6/IC11 均选 PLL1、分频 1 -> SYS 相关域 400 MHz
  *   HCLK: AHB 预分频 /2 -> 200 MHz；APB1/2/4/5 均为 /1 -> 与 HCLK 同频（200 MHz）
- *   PLL2: 512 MHz（外设 PLL）；PLL3: 150 MHz；PLL4: 512 MHz
+ *   PLL2: 512 MHz（外设 PLL）；PLL3: 300 MHz；PLL4: 512 MHz
  *   末尾使能 LSE CSS
  *
  * --- SYSCLK_PROFILE_HSE_200MHZ ---
  *   PLL1: 48M/1*25/(3*2) = 200 MHz -> CPU / IC2/IC6/IC11 均为 200 MHz（分频均为 1）
  *   HCLK: /1 -> 200 MHz；APB 均为 /1 -> 200 MHz
- *   PLL2/3/4 与 400MHz 方案相同（512 / 150 / 512 MHz）
+ *   PLL2/3/4（512 / 300 / 512 MHz）
  *   末尾使能 LSE CSS
  *
  * --- SYSCLK_PROFILE_HSI_800MHZ（HSI 作 PLL 参考，无 HSE 锁相）---

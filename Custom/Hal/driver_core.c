@@ -87,6 +87,7 @@ bool driver_core_init(void)
     // cat1_register();
     system_top_register();
     i2c_tool_register();
+    codec_register();
     tft_st7789vw_register_commands();
     sensor_exemple_register_commands();
 

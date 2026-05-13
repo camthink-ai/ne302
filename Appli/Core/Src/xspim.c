@@ -780,7 +780,7 @@ int32_t XSPI_PSRAM_EnableMemoryMappedMode(void)
     XSPI_MemoryMappedTypeDef sMemMappedCfg = {0};
     Configure_APMemory();
 
-        /*Configure Memory Mapped mode*/
+    /*Configure Memory Mapped mode*/
 
     HAL_XSPI_SetClockPrescaler(&hxspi1, 0);// change, XSPI1/PSRAM CLK: 200MHz
 
