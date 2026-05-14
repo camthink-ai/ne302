@@ -28,8 +28,7 @@
 #include "nn.h"
 #include "quick_snapshot.h"
 #include "cJSON.h"
-#include "webhook_service.h"
- 
+#include "webhook_service.h" 
  
  /* ==================== System Controller Implementation ==================== */
  
@@ -3674,32 +3673,60 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     }
 
     // Step 4.5: Webhook push (non-blocking, fire-and-forget)
-    if (webhook_service_is_enabled() && jpeg_buffer) {
-        /* Webhook task uses buffer_free() to release jpeg_data, so the buffer
-         * must be a buffer_calloc allocation.  If jpeg_buffer is still the
-         * camera driver's buffer (jpeg_copy == NULL), make a heap copy and
-         * return the camera buffer immediately. */
-        if (!jpeg_copy) {
-            uint8_t *wh_buf = buffer_calloc(1, jpeg_size);
-            if (wh_buf) {
-                memcpy(wh_buf, jpeg_buffer, jpeg_size);
-                device_service_camera_free_jpeg_buffer(jpeg_buffer);
-                jpeg_buffer = wh_buf;
-                jpeg_copy = wh_buf;
-            } else {
-                LOG_SVC_WARN("Webhook: failed to copy jpeg for push");
-            }
-        }
+    {
+        aicam_bool_t wh_enabled = webhook_service_is_enabled();
+        LOG_SVC_INFO("[TIMING] Step 4.5: webhook enabled=%d, jpeg_buffer=%p, jpeg_copy=%p",
+                     wh_enabled, (void *)jpeg_buffer, (void *)jpeg_copy);
 
-        // Only push if buffer is confirmed to be a buffer_calloc allocation
-        if (jpeg_buffer && jpeg_copy && jpeg_buffer == jpeg_copy) {
-            aicam_result_t wh_ret = webhook_service_push_capture(
-                jpeg_buffer, (uint32_t)jpeg_size, &metadata, ai_result_ptr);
-            if (wh_ret == AICAM_OK) {
-                // Ownership transferred to webhook task — skip cleanup in Step 5
-                jpeg_buffer = NULL;
+        if (wh_enabled && jpeg_buffer) {
+            /* Webhook task uses buffer_free() to release jpeg_data, so the buffer
+             * must be a buffer_calloc allocation.  If jpeg_buffer is still the
+             * camera driver's buffer (jpeg_copy == NULL), make a heap copy and
+             * return the camera buffer immediately. */
+            if (!jpeg_copy) {
+                LOG_SVC_INFO("[TIMING] Step 4.5: copying jpeg (%d bytes) for webhook push", jpeg_size);
+                uint8_t *wh_buf = buffer_calloc(1, jpeg_size);
+                if (wh_buf) {
+                    memcpy(wh_buf, jpeg_buffer, jpeg_size);
+                    device_service_camera_free_jpeg_buffer(jpeg_buffer);
+                    jpeg_buffer = wh_buf;
+                    jpeg_copy = wh_buf;
+                } else {
+                    LOG_SVC_WARN("Webhook: failed to copy jpeg for push (size=%d)", jpeg_size);
+                }
             }
+
+            // Only push if buffer is confirmed to be a buffer_calloc allocation
+            LOG_SVC_INFO("[TIMING] Step 4.5: buffer check: jpeg_buffer=%p, jpeg_copy=%p, equal=%d",
+                         (void *)jpeg_buffer, (void *)jpeg_copy,
+                         (jpeg_buffer && jpeg_copy && jpeg_buffer == jpeg_copy));
+            if (jpeg_buffer && jpeg_copy && jpeg_buffer == jpeg_copy) {
+                aicam_result_t wh_ret = webhook_service_push_capture(
+                    jpeg_buffer, (uint32_t)jpeg_size, &metadata, ai_result_ptr);
+                LOG_SVC_INFO("[TIMING] Step 4.5: push_capture returned %d", wh_ret);
+                if (wh_ret == AICAM_OK) {
+                    // Ownership transferred to webhook task — skip cleanup in Step 5
+                    jpeg_buffer = NULL;
+                }
+            }
+        } else {
+            LOG_SVC_INFO("[TIMING] Step 4.5 SKIPPED: enabled=%d, jpeg_buffer=%p",
+                         wh_enabled, (void *)jpeg_buffer);
         }
+    }
+
+    // Step 4.6: Wait for webhook push to complete (needed for sleep wake-up)
+    if (!jpeg_buffer && webhook_service_is_enabled()) {
+        step_start_time = rtc_get_uptime_ms();
+        /* Worst case: 10s network wait + 15s HTTP timeout = 25s */
+        aicam_result_t wh_wait = webhook_service_wait_pending(30000);
+        step_end_time = rtc_get_uptime_ms();
+        step_duration = step_end_time - step_start_time;
+        LOG_SVC_INFO("[TIMING] Step 4.6: Webhook wait %s (duration: %lu ms)",
+                     wh_wait == AICAM_OK ? "completed" : "timed out",
+                     (unsigned long)step_duration);
+    } else if (jpeg_buffer) {
+        LOG_SVC_INFO("[TIMING] Step 4.6 SKIPPED: push was not queued (jpeg_buffer=%p)", (void *)jpeg_buffer);
     }
 
     // Step 5: Cleanup

@@ -28,6 +28,8 @@
 /* ==================== Helper Functions ==================== */
 
 static uint32_t restart_delay_seconds = 3;
+static uint8_t s_restart_task_stack[1024];
+static uint32_t s_restart_delay_storage;
 
 /**
  * @brief Restart task function
@@ -1630,29 +1632,25 @@ aicam_result_t system_restart_handler(http_handler_context_t *ctx) {
     // Log restart request
     LOG_SVC_INFO("System restart requested via API - Delay: %u seconds", restart_delay_seconds);
 
-    uint8_t* restart_stack = buffer_calloc(1, 1024);
-    if (!restart_stack) {
-        LOG_SVC_ERROR("Failed to allocate restart stack");
-        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to allocate restart stack");
-    }
-    
-    // Create a task to handle delayed restart
-    osThreadAttr_t restart_task_attr = {
-        .name = "restart_task",
-        .stack_size = 1024,
-        .priority = osPriorityHigh,
-        .stack_mem = restart_stack
-    };
-        
     // Schedule system restart with delay
     if (restart_delay_seconds > 0) {
         LOG_SVC_INFO("System will restart in %u seconds...", restart_delay_seconds);
-        
-        // Create restart task with delay
-        osThreadId_t restart_task = osThreadNew(restart_task_function, &restart_delay_seconds, &restart_task_attr);
-        
+
+        s_restart_delay_storage = restart_delay_seconds;
+
+        // Use pre-allocated static stack to avoid memory fragmentation after OTA
+        osThreadAttr_t restart_task_attr = {
+            .name = "restart_task",
+            .stack_size = 1024,
+            .priority = osPriorityHigh,
+            .stack_mem = s_restart_task_stack
+        };
+
+        osThreadId_t restart_task = osThreadNew(restart_task_function, &s_restart_delay_storage, &restart_task_attr);
+
         if (!restart_task) {
-            LOG_SVC_ERROR("Failed to create restart task, restarting immediately");
+            LOG_SVC_WARN("Failed to create restart task, using inline delayed restart");
+            osDelay(restart_delay_seconds * 1000);
 #if ENABLE_U0_MODULE
             u0_module_clear_wakeup_flag();
             u0_module_reset_chip_n6();

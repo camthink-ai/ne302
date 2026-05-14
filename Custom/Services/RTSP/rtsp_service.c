@@ -436,6 +436,7 @@ static void rtsp_release_client(rtsp_client_t *client)
     }
     client->in_use = AICAM_FALSE;
     client->playing = AICAM_FALSE;
+    client->authenticated = AICAM_FALSE;
     client->session_id[0] = '\0';
     client->nonce[0] = '\0';
     client->client_rtp_port = 0;

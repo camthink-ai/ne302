@@ -43,6 +43,7 @@ typedef struct rtsp_client {
     uint32_t rtp_timestamp;             /* RTP timestamp */
     uint32_t rtp_frame_index;           /* Frame counter for timestamp generation */
     aicam_bool_t in_use;               /* Slot in use */
+    aicam_bool_t authenticated;        /* Passed DESCRIBE auth challenge */
 } rtsp_client_t;
 
 typedef struct {

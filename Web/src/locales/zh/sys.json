@@ -394,6 +394,7 @@
       "update_loading": "正在烧入固件，请稍后",
       "please_select_firmware_file": "请上传固件文件",
       "update_success": "固件烧录成功",
+      "device_restarting": "设备正在重启，请稍后刷新页面",
       "firmware_file_uploading": "固件文件上传中",
       "no_network": "未检测到网络,请刷新网络",
       "invalid_firmware_file": "固件文件无效",

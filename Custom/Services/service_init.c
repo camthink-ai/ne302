@@ -251,7 +251,7 @@ static const service_module_t g_service_registry[] = {
         .config = NULL,
         .auto_start = AICAM_TRUE,
         .init_priority = 10,
-        .required_in_low_power = AICAM_FALSE,
+        .required_in_low_power = AICAM_TRUE,
         .depends_on = {"communication_service"},
         .depends_count = 1
     }
