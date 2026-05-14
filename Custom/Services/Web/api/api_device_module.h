@@ -51,6 +51,13 @@ aicam_result_t device_storage_config_handler(http_handler_context_t *ctx);
 aicam_result_t device_image_config_handler(http_handler_context_t *ctx);
 
 /**
+ * @brief FSBL persisted CPU clock profile (GET/POST)
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t device_sys_clk_config_handler(http_handler_context_t *ctx);
+
+/**
  * @brief Light configuration handler
  * @param ctx HTTP request context
  * @return Operation result

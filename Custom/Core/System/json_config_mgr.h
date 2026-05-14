@@ -339,6 +339,10 @@ typedef struct {
     uint32_t heartbeat_interval_ms;              // Heartbeat interval (ms)
 } mqtt_service_config_t;
 
+/** Stored in image_config_t.isp_mode — built-in profiles vs NVS-backed custom IQ. */
+#define IMAGE_ISP_MODE_OUTDOOR  0u   /* default */
+#define IMAGE_ISP_MODE_INDOOR   1u
+#define IMAGE_ISP_MODE_CUSTOM   255u   /* 0xFF: use isp_config_t from NVS when valid */
 
 //device service configuration structure
 typedef struct {
@@ -346,6 +350,7 @@ typedef struct {
     uint32_t contrast;                       // image contrast (0-100)
     aicam_bool_t horizontal_flip;            // image horizontal flip
     aicam_bool_t vertical_flip;              // image vertical flip
+    uint32_t isp_mode;                       // IMAGE_ISP_MODE_OUTDOOR(0) / INDOOR(1) / CUSTOM
     uint32_t aec;                            // image auto exposure control (0=manual, 1=auto)
     uint32_t startup_skip_frames;            // frames to skip on camera startup for stabilization (1-300)
     uint32_t fast_capture_skip_frames;       // frames to skip for fast capture (number of skipped frames for snapshot capture)

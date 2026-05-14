@@ -217,6 +217,11 @@ aicam_result_t device_service_image_get_config(image_config_t *config);
 aicam_result_t device_service_image_set_config(const image_config_t *config);
 
 /**
+ * @brief Reload ISP tuning block from JSON/NVS into the device service cache (e.g. after HTTP import).
+ */
+aicam_result_t device_service_reload_isp_config_from_storage(void);
+
+/**
  * @brief Get light configuration
  * @param config Pointer to light_config_t structure
  * @return aicam_result_t Operation result

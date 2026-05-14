@@ -9,6 +9,7 @@
  #include "json_config_internal.h" // Includes all necessary headers
  #include "buffer_mgr.h"
  #include "version.h"              // Centralized version info
+ #include "fsbl_app_common.h"
 
  /* ==================== Internal Data Structures and Variables ==================== */
  
@@ -127,6 +128,7 @@
              .horizontal_flip = AICAM_FALSE,
              .vertical_flip = AICAM_FALSE,
              .aec = 1,  // Auto exposure enabled
+             .isp_mode = IMAGE_ISP_MODE_OUTDOOR,
              .startup_skip_frames = 10,  // Default frames to skip for camera stabilization
              .fast_capture_skip_frames = 10,
              .fast_capture_resolution = 0,   // 0: 1280x720
@@ -618,6 +620,13 @@
      // Free memory
      buffer_free(config);
 
+     if (result == AICAM_OK) {
+         sys_clk_config_t sc = {0};
+         if (fsbl_app_write_sys_clk_config(&sc) != 0) {
+             LOG_CORE_WARN("Failed to clear persisted boot sys_clk profile during config reset to default");
+         }
+     }
+
      return result;
  }
 
@@ -1013,12 +1022,19 @@
 
  aicam_result_t json_config_set_device_service_image_config(const image_config_t *image_config)
  {
-     if (!image_config)
-     {
-         return AICAM_ERROR_INVALID_PARAM;
-     }
-     
-     if(image_config != &g_json_config_ctx.current_config.device_service.image_config)
+    if (!image_config)
+    {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    if (image_config->isp_mode != IMAGE_ISP_MODE_INDOOR &&
+        image_config->isp_mode != IMAGE_ISP_MODE_OUTDOOR &&
+        image_config->isp_mode != IMAGE_ISP_MODE_CUSTOM)
+    {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    
+    if(image_config != &g_json_config_ctx.current_config.device_service.image_config)
      {
          memcpy(&g_json_config_ctx.current_config.device_service.image_config, image_config, sizeof(image_config_t));
      }

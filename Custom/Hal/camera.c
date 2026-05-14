@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdint.h>
 #include "cmw_camera.h"
 #include "camera.h"
 #include "common_utils.h"
@@ -8,6 +9,7 @@
 #include "rcc_ic_auto.h"
 #include "isp_param_conf.h"
 #include "isp_api.h"
+#include "isp_core.h"
 
 // Constant definitions
 #define CAMERA_TASK_DELAY_MS            0
@@ -533,6 +535,60 @@ pipe_buffer_t* buffer_get_latest_ready(pipe_buffer_t *bufs, int nb, camera_dq_t 
 }
 
 
+static void camera_copy_default_isp_iq(CMW_Sensor_Name_t sensor_id, ISP_IQParamTypeDef *dst)
+{
+    if (!dst) {
+        return;
+    }
+    switch (sensor_id) {
+        case CMW_IMX335_Sensor:
+            memcpy(dst, &ISP_IQParamCacheInit_IMX335, sizeof(ISP_IQParamTypeDef));
+            break;
+        case CMW_VD66GY_Sensor:
+            memcpy(dst, &ISP_IQParamCacheInit_VD66GY, sizeof(ISP_IQParamTypeDef));
+            break;
+        case CMW_OS04C10_Sensor:
+            memcpy(dst, &ISP_IQParamCacheInit_OS04C10, sizeof(ISP_IQParamTypeDef));
+            break;
+        default:
+            memcpy(dst, &ISP_IQParamCacheInit_OS04C10, sizeof(ISP_IQParamTypeDef));
+            break;
+    }
+}
+
+void camera_fill_isp_iq_scene(cam_iq_scene_t scene, ISP_IQParamTypeDef *out_iq)
+{
+    if (!out_iq) {
+        return;
+    }
+    CMW_Sensor_Name_t sensor = CMW_UNKNOWN_Sensor;
+    if (CMW_CAMERA_GetSensorName(&sensor) != CMW_ERROR_NONE) {
+        memset(out_iq, 0, sizeof(ISP_IQParamTypeDef));
+        return;
+    }
+    camera_copy_default_isp_iq(sensor, out_iq);
+    /* Indoor: IQTune snapshot — contrast curve + statistic region (OS04C10 full frame). */
+    if (scene == CAM_IQ_SCENE_INDOOR) {
+        out_iq->contrast.enable = 1;
+        /* Contrast strength: IQT unit x100 (e.g. 100 = 1.0), from IQTune "Contrast 1" / INDOOR */
+        out_iq->contrast.coeff.LUM_0 = 50;
+        out_iq->contrast.coeff.LUM_32 = 80;
+        out_iq->contrast.coeff.LUM_64 = 94;
+        out_iq->contrast.coeff.LUM_96 = 100;
+        out_iq->contrast.coeff.LUM_128 = 100;
+        out_iq->contrast.coeff.LUM_160 = 102;
+        out_iq->contrast.coeff.LUM_192 = 110;
+        out_iq->contrast.coeff.LUM_224 = 112;
+        out_iq->contrast.coeff.LUM_256 = 120;
+        if (sensor == CMW_OS04C10_Sensor) {
+            out_iq->statAreaStatic.X0 = 109U;
+            out_iq->statAreaStatic.Y0 = 92U;
+            out_iq->statAreaStatic.XSize = 2418U;
+            out_iq->statAreaStatic.YSize = 1329U;
+        }
+    }
+}
+
 static void CAM_setSensorInfo(CMW_Sensor_Name_t sensor, camera_t *camera)
 {
     CMW_Sensor_Name_t sensor_id = sensor;
@@ -573,22 +629,8 @@ static void CAM_setSensorInfo(CMW_Sensor_Name_t sensor, camera_t *camera)
     LOG_DRV_DEBUG("Sensor Image: %dx%d, MirrorFlip: %d ",
     camera->sensor_param.width, camera->sensor_param.height, camera->sensor_param.mirror_flip);
 
-    // Initialize ISP IQ parameters based on detected sensor
-    switch (sensor_id) {
-        case CMW_IMX335_Sensor:
-            memcpy(&camera->isp_iq_param, &ISP_IQParamCacheInit_IMX335, sizeof(ISP_IQParamTypeDef));
-            break;
-        case CMW_VD66GY_Sensor:
-            memcpy(&camera->isp_iq_param, &ISP_IQParamCacheInit_VD66GY, sizeof(ISP_IQParamTypeDef));
-            break;
-        case CMW_OS04C10_Sensor:
-            memcpy(&camera->isp_iq_param, &ISP_IQParamCacheInit_OS04C10, sizeof(ISP_IQParamTypeDef));
-            break;
-        default:
-            // Use OS04C10 as default
-            memcpy(&camera->isp_iq_param, &ISP_IQParamCacheInit_OS04C10, sizeof(ISP_IQParamTypeDef));
-            break;
-    }
+    // Initialize ISP IQ parameters based on detected sensor (stock / indoor profile)
+    camera_copy_default_isp_iq(sensor_id, &camera->isp_iq_param);
 }
 
 /* Keep display output aspect ratio using crop area */
@@ -1249,6 +1291,9 @@ static int camera_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsig
             }
             memcpy(&camera->isp_iq_param, ubuf, sizeof(ISP_IQParamTypeDef));
             ret = AICAM_OK;
+            // #include "crc.h"
+            // uint32_t crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *)ubuf, sizeof(ISP_IQParamTypeDef));
+            // printf("isp crc32: 0x%08lX\r\n", crc32);
             break;
 
         case CAM_CMD_GET_ISP_PARAM:

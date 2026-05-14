@@ -28,12 +28,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { getWebSocketUrl } from '@/utils';
+import { getWebSocketUrl, downloadFile } from '@/utils';
+import { toast } from 'sonner';
 
 export default function Graphics() {
   const { i18n } = useLingui();
   const { deviceInfo } = useSystemInfo();
-  const { getHardwareInfoReq, setHardwareInfoReq } = hardwareManagement;
+  const { getHardwareInfoReq, setHardwareInfoReq, getIspProfileExportReq, postIspProfileImportReq } = hardwareManagement;
   const { toggleAiReq, startVideoStreamReq, stopVideoStreamReq } = deviceTool;
   const [connectionStatus, setConnectionStatus] = useState('');
   const [brightness, setBrightness] = useState(0);
@@ -48,6 +49,9 @@ export default function Graphics() {
   const [captureStorageAi, setCaptureStorageAi] = useState(false);
   const [cameraSectionOpen, setCameraSectionOpen] = useState(true);
   const [captureSectionOpen, setCaptureSectionOpen] = useState(true);
+  const ISP_MODE_CUSTOM = 255;
+  const [ispMode, setIspMode] = useState(0);
+  const ispImportInputRef = useRef<HTMLInputElement>(null);
   const [luxRefDialogOpen, setLuxRefDialogOpen] = useState(false);
   const [luxRefForm, setLuxRefForm] = useState({
     calibFactor: 0,
@@ -151,6 +155,9 @@ export default function Graphics() {
       if (typeof res.data.capture_storage_ai === 'boolean') {
         setCaptureStorageAi(res.data.capture_storage_ai);
       }
+      if (typeof res.data.isp_mode === 'number') {
+        setIspMode(res.data.isp_mode);
+      }
       // TODO: when ISP APIs are wired, hydrate ISP exposure state from /api/v1/isp/aec, /aec/manual, /sensor_delay, /statistics, etc.
     } catch (error) {
       console.error(error);
@@ -169,6 +176,7 @@ export default function Graphics() {
       horizontal_flip: boolean;
       vertical_flip: boolean;
       aec: number;
+      isp_mode: number;
       fast_capture_skip_frames: number;
       fast_capture_resolution: number;
       fast_capture_jpeg_quality: number;
@@ -181,6 +189,7 @@ export default function Graphics() {
     horizontal_flip: overrides.horizontal_flip ?? flipHorizontal,
     vertical_flip: overrides.vertical_flip ?? flipVertical,
     aec: overrides.aec ?? aec,
+    isp_mode: overrides.isp_mode ?? ispMode,
     fast_capture_skip_frames: overrides.fast_capture_skip_frames ?? fastSkipFrames,
     fast_capture_resolution: overrides.fast_capture_resolution ?? fastResolution,
     fast_capture_jpeg_quality: overrides.fast_capture_jpeg_quality ?? fastJpegQuality,
@@ -339,14 +348,14 @@ export default function Graphics() {
                   <div className="flex flex-col gap-2">
                     <button
                       type="button"
-                      className="flex justify-between items-center w-full text-left"
-                      onClick={() => setCameraSectionOpen(!cameraSectionOpen)}
+                      className="flex w-full items-center justify-between text-left"
+                      onClick={() => setCameraSectionOpen((o) => !o)}
                     >
                       <Label>{i18n._('sys.hardware_management.camera_config')}</Label>
-                      <span className="w-4 h-4 text-gray-500">
+                      <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
                         <SvgIcon
                           icon="right"
-                          className={`w-4 h-4 transition-transform duration-200 ${
+                          className={`h-4 w-4 transition-transform duration-200 ${
                             cameraSectionOpen ? 'rotate-90' : 'rotate-0'
                           }`}
                         />
@@ -379,6 +388,102 @@ export default function Graphics() {
                             )}
                           />
                         </div>
+                        <Separator />
+                        <div className="flex justify-between gap-4 items-center">
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <Label className="shrink-0">{i18n._('sys.hardware_management.isp_mode')}</Label>
+                            <Tooltip mbEnhance>
+                              <TooltipTrigger>
+                                <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
+                                  <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-80 text-pretty">
+                                <div>
+                                  <p>{i18n._('sys.hardware_management.camera_config_reboot_hint')}</p>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Select
+                            value={String(ispMode)}
+                            onValueChange={async (v) => {
+                              const next = Number(v);
+                              setIspMode(next);
+                              try {
+                                await setHardwareInfoReq(buildImageConfigRequest({ isp_mode: next }));
+                              } catch (error) {
+                                console.error(error);
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="w-44 border-0 shadow-none focus-visible:ring-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="0">{i18n._('sys.hardware_management.isp_mode_outdoor')}</SelectItem>
+                              <SelectItem value="1">{i18n._('sys.hardware_management.isp_mode_indoor')}</SelectItem>
+                              <SelectItem value="255">{i18n._('sys.hardware_management.isp_mode_custom')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {ispMode === ISP_MODE_CUSTOM && (
+                          <>
+                            <Separator />
+                            <div className="flex flex-wrap gap-2 justify-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = (await getIspProfileExportReq()) as unknown as { data?: unknown };
+                                    const payload = (res as { data?: unknown })?.data ?? res;
+                                    const text = typeof payload === 'string'
+                                      ? payload
+                                      : JSON.stringify(payload, null, 2);
+                                    await downloadFile(text, 'isp_iq_profile.json');
+                                    toast.success(i18n._('sys.hardware_management.isp_profile_export_ok'));
+                                  } catch (error) {
+                                    console.error(error);
+                                    toast.error('Export failed');
+                                  }
+                                }}
+                              >
+                                {i18n._('sys.hardware_management.isp_profile_export')}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => ispImportInputRef.current?.click()}
+                              >
+                                {i18n._('sys.hardware_management.isp_profile_import')}
+                              </Button>
+                              <input
+                                ref={ispImportInputRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={async (ev) => {
+                                  const inputEl = ev.target as HTMLInputElement;
+                                  const file = inputEl.files?.[0];
+                                  inputEl.value = '';
+                                  if (!file) return;
+                                  try {
+                                    const text = await file.text();
+                                    const json = JSON.parse(text) as Record<string, unknown>;
+                                    await postIspProfileImportReq(json);
+                                    toast.success(i18n._('sys.hardware_management.isp_profile_import_ok'));
+                                  } catch (error) {
+                                    console.error(error);
+                                    toast.error('Import failed');
+                                  }
+                                }}
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -387,35 +492,32 @@ export default function Graphics() {
                   <div className="flex flex-col gap-2">
                     <button
                       type="button"
-                      className="flex justify-between items-center w-full text-left"
-                      onClick={() => setCaptureSectionOpen(!captureSectionOpen)}
+                      className="flex w-full items-center justify-between text-left"
+                      onClick={() => setCaptureSectionOpen((o) => !o)}
                     >
                       <div className="flex items-center gap-2">
-                      <Label>{i18n._('sys.hardware_management.capture_config')}</Label>
-                      <Tooltip mbEnhance>
-                        <TooltipTrigger>
-                          <div className="w-4 flex justify-center items-center">
-                            <SvgIcon
-                              className="w-4 h-4"
-                              icon="info"
-                            />
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-80 text-pretty">
-                          <div>
-                            <p>
-                              {i18n._(
-                                'sys.hardware_management.capture_config_tip'
-                              )}
-                            </p>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
+                        <Label>{i18n._('sys.hardware_management.capture_config')}</Label>
+                        <Tooltip mbEnhance>
+                          <TooltipTrigger>
+                            <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
+                              <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-80 text-pretty">
+                            <div>
+                              <p>
+                                {i18n._(
+                                  'sys.hardware_management.capture_config_tip'
+                                )}
+                              </p>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
-                      <span className="w-4 h-4 text-gray-500">
+                      <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
                         <SvgIcon
                           icon="right"
-                          className={`w-4 h-4 transition-transform duration-200 ${
+                          className={`h-4 w-4 transition-transform duration-200 ${
                             captureSectionOpen ? 'rotate-90' : 'rotate-0'
                           }`}
                         />
@@ -471,17 +573,14 @@ export default function Graphics() {
                         </div>
                         <Separator />
                         <div className="flex justify-between gap-4 items-center">
-                          <div className="flex items-center gap-2">
-                            <Label>
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <Label className="shrink-0">
                               {i18n._('sys.hardware_management.fast_capture_jpeg_quality')}
                             </Label>
                             <Tooltip mbEnhance>
                               <TooltipTrigger>
-                                <div className="w-4 flex justify-center items-center">
-                                  <SvgIcon
-                                    className="w-4 h-4"
-                                    icon="info"
-                                  />
+                                <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
+                                  <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
                                 </div>
                               </TooltipTrigger>
                               <TooltipContent className="max-w-80 text-pretty">

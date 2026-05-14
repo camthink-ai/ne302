@@ -11,6 +11,7 @@
 #include "isp_services.h"
 #include "camera.h"
 #include "json_config_mgr.h"
+#include "device_service.h"
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -2521,10 +2522,22 @@ aicam_result_t api_isp_import_config(http_handler_context_t *ctx) {
         if ((item = cJSON_GetObjectItem(lux_ref, "ll_lum1"))) iqParam->luxRef.LL_Lum1 = item->valueint;
         if ((item = cJSON_GetObjectItem(lux_ref, "ll_expo2"))) iqParam->luxRef.LL_Expo2 = item->valueint;
         if ((item = cJSON_GetObjectItem(lux_ref, "ll_lum2"))) iqParam->luxRef.LL_Lum2 = item->valueint;
-        if ((item = cJSON_GetObjectItem(lux_ref, "calib_factor"))) iqParam->luxRef.calibFactor = item->valueint;
+        if ((item = cJSON_GetObjectItem(lux_ref, "calib_factor")) && cJSON_IsNumber(item)) {
+            iqParam->luxRef.calibFactor = (float)item->valuedouble;
+        }
     }
 
     cJSON_Delete(body);
+
+    /* Persist imported IQ to NVS and refresh device_service cache for custom mode */
+    {
+        isp_config_t to_save = {0};
+        to_save.valid = AICAM_TRUE;
+        if (json_config_isp_param_to_config(iqParam, &to_save) == AICAM_OK) {
+            (void)json_config_set_isp_config(&to_save);
+            (void)device_service_reload_isp_config_from_storage();
+        }
+    }
 
     ctx->response.message = "ISP configuration imported and applied successfully";
     return AICAM_OK;

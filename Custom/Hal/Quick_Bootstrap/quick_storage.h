@@ -3,12 +3,18 @@
 
 #include "../Network/netif_manager/netif_manager.h"
 #include "../Network/mqtt_client/ms_mqtt_client.h"
+#include "isp_services.h"
 #include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/** Same numeric values as `IMAGE_ISP_MODE_*` in `json_config_mgr.h` / `image_config_t.isp_mode`. */
+#define QS_IMAGE_ISP_MODE_OUTDOOR  0u
+#define QS_IMAGE_ISP_MODE_INDOOR   1u
+#define QS_IMAGE_ISP_MODE_CUSTOM   255u
 
 #define MAX_KNOWN_WIFI_NETWORKS         16
 #define MAX_WRITE_FILE_NAME_LEN         128
@@ -36,8 +42,9 @@ typedef struct {
     uint32_t fast_capture_resolution;
     uint32_t fast_capture_jpeg_quality;
     uint8_t capture_storage_ai;
-    
-    // TODO: add ISP configuration
+
+    /** One of `QS_IMAGE_ISP_MODE_*` (aligned with app `image_config_t.isp_mode`). */
+    uint32_t isp_mode;
 
 } qs_snapshot_config_t;
 
@@ -47,6 +54,14 @@ typedef struct {
  * @return 0 on success, other values on error
  */
 int quick_storage_read_snapshot_config(qs_snapshot_config_t *snapshot_config);
+
+/**
+ * @brief Build ISP IQ parameters for fast capture without json_config (NVS + stock profiles only).
+ * @param isp_mode `QS_IMAGE_ISP_MODE_*`
+ * @param isp_param Output for `CAM_CMD_SET_ISP_PARAM`
+ * @return AICAM_OK or AICAM_ERROR_INVALID_PARAM
+ */
+int quick_storage_fill_isp_iq_param(uint32_t isp_mode, ISP_IQParamTypeDef *isp_param);
 
 
 typedef struct {

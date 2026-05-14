@@ -21,6 +21,7 @@ import TriggerConfig from './trigger-config';
 import { getItem } from '@/utils/storage';
 
 import deviceTool, { type AiParams, type VideoStreamPushReq } from '@/services/api/deviceTool';
+import hardwareManagement from '@/services/api/hardware-management';
 import systemApis from '@/services/api/system';
 
 import DeviceToolSkeleton from './skeleton';
@@ -31,6 +32,7 @@ import { getWebSocketUrl, sliceFile } from '@/utils';
 import WifiReloadMask from '@/components/wifi-reload-mask';
 import H264Player from '@/lib/MSE/h264Player';
 import RtmpConfig from './rtmp-config';
+import { toast } from 'sonner';
 
 export interface ToolGuideContent {
   title: string;
@@ -62,6 +64,7 @@ export default function DeviceTool() {
     stopVideoStreamReq,
     toggleAiReq,
   } = deviceTool;
+  const { getSysClkConfigReq, setSysClkConfigReq } = hardwareManagement;
   const videoRendererInstance = useRef<H264Player | null>(null);
   const { uploadOTAFileReq, reloadModelReq, preCheckReq } = systemApis;
   const { setIsAiInference, setAiStatus, aiStatus } = useAiStatusStore();
@@ -84,6 +87,8 @@ export default function DeviceTool() {
   });
   // const [videoUrl, setVideoUrl] = useState<string>('')
   const [curWorkModel, setCurWorkModel] = useState<string>('image');
+  const [sysClkProfile, setSysClkProfile] = useState<1 | 2 | 3 | 4>(4);
+  const [sysClkFlashValid, setSysClkFlashValid] = useState(false);
   const handleWorkModelChange = async (value: string) => {
     try {
       const newVideoParameters = {
@@ -166,6 +171,28 @@ export default function DeviceTool() {
       throw error;
     }
   };
+  const initSysClk = async () => {
+    try {
+      const clkRes = await getSysClkConfigReq();
+      const d = clkRes.data as { valid?: boolean; sys_clk_profile?: number };
+      const valid = Boolean(d?.valid);
+      setSysClkFlashValid(valid);
+      if (valid && typeof d.sys_clk_profile === 'number') {
+        const p = d.sys_clk_profile;
+        if (p === 1 || p === 2 || p === 3 || p === 4) {
+          setSysClkProfile(p);
+        } else {
+          setSysClkProfile(4);
+        }
+      } else {
+        setSysClkProfile(4);
+      }
+    } catch (error) {
+      console.error('initSysClk', error);
+      setSysClkFlashValid(false);
+      setSysClkProfile(4);
+    }
+  };
   const initQueue = async () => {
     try {
       setIsLoading(true);
@@ -178,6 +205,7 @@ export default function DeviceTool() {
         // initTriggerConfig(),
         initPowerMode(),
         getAiParams(),
+        initSysClk(),
       ])
     } catch (error) {
       console.error('initQueue', error);
@@ -421,6 +449,54 @@ export default function DeviceTool() {
                                     {/* <SelectItem value="video_stream">
                                     {i18n._('sys.device_tool.video')}
                                   </SelectItem> */}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <Separator className="my-2" />
+                              <div className="flex items-center justify-between">
+                                <div className="flex min-w-0 items-center gap-1">
+                                  <Label className="text-sm text-text-primary shrink-0">
+                                    {i18n._('sys.device_tool.sys_clk_title')}
+                                  </Label>
+                                  <Tooltip mbEnhance>
+                                    <TooltipTrigger>
+                                      <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
+                                        <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent className="max-w-80 text-pretty">
+                                      <div>
+                                        <p>{i18n._('sys.device_tool.sys_clk_reboot_hint')}</p>
+                                        {!sysClkFlashValid && (
+                                          <p className="mt-2">{i18n._('sys.device_tool.sys_clk_no_valid_profile')}</p>
+                                        )}
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </div>
+                                <Select
+                                  value={String(sysClkProfile)}
+                                  onValueChange={async (v) => {
+                                    const next = Number(v) as 1 | 2 | 3 | 4;
+                                    setSysClkProfile(next);
+                                    try {
+                                      await setSysClkConfigReq({ sys_clk_profile: next });
+                                      setSysClkFlashValid(true);
+                                      toast.success(i18n._('sys.device_tool.sys_clk_saved_toast'));
+                                    } catch (e) {
+                                      console.error(e);
+                                      toast.error('Save failed');
+                                    }
+                                  }}
+                                >
+                                  <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
+                                    <SelectValue placeholder={i18n._('sys.device_tool.sys_clk_title')} />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="1">{i18n._('sys.device_tool.sys_clk_hse_200')}</SelectItem>
+                                    <SelectItem value="2">{i18n._('sys.device_tool.sys_clk_hse_400')}</SelectItem>
+                                    <SelectItem value="3">{i18n._('sys.device_tool.sys_clk_hsi_800')}</SelectItem>
+                                    <SelectItem value="4">{i18n._('sys.device_tool.sys_clk_hse_800')}</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>

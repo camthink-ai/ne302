@@ -95,6 +95,7 @@
  #define NVS_KEY_IMAGE_HFLIP             "img_hflip"
  #define NVS_KEY_IMAGE_VFLIP             "img_vflip"
  #define NVS_KEY_IMAGE_AEC               "img_aec"
+ #define NVS_KEY_IMAGE_ISP_MODE          "img_isp_mode"
  #define NVS_KEY_IMAGE_SKIP_FRAMES       "img_skip"
  #define NVS_KEY_IMAGE_FAST_SKIP_FRAMES  "img_fast_skip"
  #define NVS_KEY_IMAGE_FAST_RESOLUTION   "img_fast_res"

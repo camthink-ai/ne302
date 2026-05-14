@@ -8,6 +8,12 @@
 #include "aicam_error.h"
 #include "isp_services.h"
 
+/** ISP IQ preset for built-in tuning profiles (see image_config_t.isp_mode on device side). */
+typedef enum {
+    CAM_IQ_SCENE_INDOOR = 0,
+    CAM_IQ_SCENE_OUTDOOR = 1,
+} cam_iq_scene_t;
+
 /* Define sensor info */
 #define SENSOR_IMX335_WIDTH 2592
 #define SENSOR_IMX335_HEIGHT 1944
@@ -201,5 +207,12 @@ int camera_unregister(void);
  * @return ISP handle pointer, or NULL if not initialized
  */
 ISP_HandleTypeDef* camera_get_isp_handle(void);
+
+/**
+ * @brief Fill ISP IQ parameters for a built-in scene (indoor vs outdoor stock).
+ * @param scene CAM_IQ_SCENE_INDOOR applies IQTune contrast + stat region (OS04C10); outdoor uses sensor defaults only.
+ * @param out_iq Output buffer (must not be NULL).
+ */
+void camera_fill_isp_iq_scene(cam_iq_scene_t scene, ISP_IQParamTypeDef *out_iq);
 
 #endif

@@ -501,6 +501,10 @@ aicam_result_t json_config_save_device_service_image_config_to_nvs(const image_c
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image AEC to NVS");
 
+    result = json_config_nvs_write_uint32(NVS_KEY_IMAGE_ISP_MODE, config->isp_mode);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save image ISP mode to NVS");
+
     result = json_config_nvs_write_uint32(NVS_KEY_IMAGE_SKIP_FRAMES, config->startup_skip_frames);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image startup skip frames to NVS");
@@ -1305,6 +1309,12 @@ aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config)
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image configuration to NVS");
 
+    /* Custom ISP IQ block (isp_valid, lux blob, etc.). Required on factory reset so old NVS tuning
+     * does not survive after defaults (device_service.isp_config is zeroed in default_config). */
+    result = json_config_save_isp_config_to_nvs(&config->device_service.isp_config);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save ISP configuration to NVS");
+
     // Save device service configuration - light config
     result = json_config_save_device_service_light_config_to_nvs(&config->device_service.light_config);
     if (result != AICAM_OK)
@@ -1589,6 +1599,12 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->device_service.image_config.aec = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_IMAGE_AEC, config->device_service.image_config.aec);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_IMAGE_ISP_MODE, &temp_uint32);
+    if (result == AICAM_OK)
+        config->device_service.image_config.isp_mode = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_IMAGE_ISP_MODE, config->device_service.image_config.isp_mode);
 
     result = json_config_nvs_read_uint32(NVS_KEY_IMAGE_SKIP_FRAMES, &temp_uint32);
     if (result == AICAM_OK)

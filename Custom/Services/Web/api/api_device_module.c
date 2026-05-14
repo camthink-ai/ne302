@@ -23,6 +23,7 @@
 #include "ota_header.h"
 #include "storage.h"
 #include "version.h"
+#include "fsbl_app_common.h"
 
 /* ==================== Helper Functions ==================== */
 
@@ -363,6 +364,7 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddBoolToObject(response_json, "horizontal_flip", camera_config.image_config.horizontal_flip);
         cJSON_AddBoolToObject(response_json, "vertical_flip", camera_config.image_config.vertical_flip);
         cJSON_AddNumberToObject(response_json, "aec", camera_config.image_config.aec);
+        cJSON_AddNumberToObject(response_json, "isp_mode", camera_config.image_config.isp_mode);
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
@@ -450,6 +452,17 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
             }
         }
 
+        cJSON* isp_mode_item = cJSON_GetObjectItem(request_json, "isp_mode");
+        if (isp_mode_item && cJSON_IsNumber(isp_mode_item)) {
+            double m = cJSON_GetNumberValue(isp_mode_item);
+            if (m == (double)IMAGE_ISP_MODE_INDOOR || m == (double)IMAGE_ISP_MODE_OUTDOOR || m == (double)IMAGE_ISP_MODE_CUSTOM) {
+                image_config.isp_mode = (uint32_t)m;
+            } else {
+                cJSON_Delete(request_json);
+                return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "isp_mode must be 0 (outdoor), 1 (indoor), or 255 (custom)");
+            }
+        }
+
         // Update fast capture skip frames if provided (0-300 to match CAM_CMD_SET_STARTUP_SKIP_FRAMES)
         cJSON* fast_skip_item = cJSON_GetObjectItem(request_json, "fast_capture_skip_frames");
         if (fast_skip_item && cJSON_IsNumber(fast_skip_item)) {
@@ -498,7 +511,8 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
             old_image_config.contrast != image_config.contrast ||
             old_image_config.horizontal_flip != image_config.horizontal_flip ||
             old_image_config.vertical_flip != image_config.vertical_flip ||
-            old_image_config.aec != image_config.aec) {
+            old_image_config.aec != image_config.aec ||
+            old_image_config.isp_mode != image_config.isp_mode) {
             need_restart_pipeline = AICAM_TRUE;
         }
 
@@ -527,6 +541,7 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddBoolToObject(response_json, "horizontal_flip", image_config.horizontal_flip);
         cJSON_AddBoolToObject(response_json, "vertical_flip", image_config.vertical_flip);
         cJSON_AddNumberToObject(response_json, "aec", image_config.aec);
+        cJSON_AddNumberToObject(response_json, "isp_mode", image_config.isp_mode);
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", image_config.fast_capture_jpeg_quality);
@@ -551,6 +566,93 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
     } else {
         return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET and POST methods are allowed");
     }
+}
+
+/**
+ * @brief GET/POST /api/v1/device/sys-clk/config - Read/write FSBL persisted CPU clock profile (takes effect after reboot)
+ */
+aicam_result_t device_sys_clk_config_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+
+    if (!is_device_service_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Device service is not running");
+    }
+
+    if (web_api_verify_method(ctx, "GET")) {
+        sys_clk_config_t cfg = {0};
+        int ret = fsbl_app_read_sys_clk_config(&cfg);
+
+        cJSON* response_json = cJSON_CreateObject();
+        if (!response_json) {
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+        }
+
+        cJSON_AddBoolToObject(response_json, "valid", ret == 0);
+        if (ret == 0) {
+            cJSON_AddNumberToObject(response_json, "sys_clk_profile", (double)cfg.sys_clk_profile);
+        } else {
+            cJSON_AddNumberToObject(response_json, "sys_clk_profile", 0.0);
+        }
+
+        char* json_string = cJSON_Print(response_json);
+        cJSON_Delete(response_json);
+        if (!json_string) {
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+        }
+
+        return api_response_success(ctx, json_string, "Sys clock configuration retrieved successfully");
+    }
+
+    if (web_api_verify_method(ctx, "POST")) {
+        cJSON* request_json = web_api_parse_body(ctx);
+        if (!request_json) {
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON request body");
+        }
+
+        cJSON* prof_item = cJSON_GetObjectItem(request_json, "sys_clk_profile");
+        if (!prof_item || !cJSON_IsNumber(prof_item)) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "sys_clk_profile is required (number)");
+        }
+
+        uint32_t profile = (uint32_t)cJSON_GetNumberValue(prof_item);
+        if (profile != FSBL_APP_SYSCLK_PROFILE_HSE_200MHZ &&
+            profile != FSBL_APP_SYSCLK_PROFILE_HSE_400MHZ &&
+            profile != FSBL_APP_SYSCLK_PROFILE_HSI_800MHZ &&
+            profile != FSBL_APP_SYSCLK_PROFILE_HSE_800MHZ) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
+                                      "sys_clk_profile must be 1 (HSE 200), 2 (HSE 400), 3 (HSI 800), or 4 (HSE 800)");
+        }
+
+        sys_clk_config_t cfg = {0};
+        cfg.sys_clk_profile = profile;
+        int wret = fsbl_app_write_sys_clk_config(&cfg);
+        cJSON_Delete(request_json);
+
+        if (wret != 0) {
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to write sys clock configuration");
+        }
+
+        cJSON* response_json = cJSON_CreateObject();
+        if (!response_json) {
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+        }
+
+        cJSON_AddStringToObject(response_json, "message",
+                                "Sys clock profile saved; reboot the device for FSBL to apply the new frequency");
+        cJSON_AddNumberToObject(response_json, "sys_clk_profile", (double)profile);
+
+        char* json_string = cJSON_Print(response_json);
+        cJSON_Delete(response_json);
+        if (!json_string) {
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+        }
+
+        return api_response_success(ctx, json_string, "Sys clock configuration updated successfully");
+    }
+
+    return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET and POST methods are allowed");
 }
 
 /**
@@ -844,6 +946,7 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddBoolToObject(image_config_json, "horizontal_flip", camera_config.image_config.horizontal_flip);
             cJSON_AddBoolToObject(image_config_json, "vertical_flip", camera_config.image_config.vertical_flip);
             cJSON_AddNumberToObject(image_config_json, "aec", camera_config.image_config.aec);
+            cJSON_AddNumberToObject(image_config_json, "isp_mode", camera_config.image_config.isp_mode);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
@@ -952,6 +1055,14 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
                 }
             }
 
+            cJSON* isp_mode_nested = cJSON_GetObjectItem(image_config_item, "isp_mode");
+            if (isp_mode_nested && cJSON_IsNumber(isp_mode_nested)) {
+                double m = cJSON_GetNumberValue(isp_mode_nested);
+                if (m == (double)IMAGE_ISP_MODE_INDOOR || m == (double)IMAGE_ISP_MODE_OUTDOOR || m == (double)IMAGE_ISP_MODE_CUSTOM) {
+                    camera_config.image_config.isp_mode = (uint32_t)m;
+                }
+            }
+
             cJSON* cap_dis_comm_item = cJSON_GetObjectItem(image_config_item, "capture_disable_comm");
             if (cap_dis_comm_item && cJSON_IsBool(cap_dis_comm_item)) {
                 camera_config.image_config.capture_disable_comm =
@@ -992,6 +1103,7 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddBoolToObject(image_config_response, "horizontal_flip", camera_config.image_config.horizontal_flip);
             cJSON_AddBoolToObject(image_config_response, "vertical_flip", camera_config.image_config.vertical_flip);
             cJSON_AddNumberToObject(image_config_response, "aec", camera_config.image_config.aec);
+            cJSON_AddNumberToObject(image_config_response, "isp_mode", camera_config.image_config.isp_mode);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
@@ -1981,6 +2093,20 @@ static const api_route_t device_module_routes[] = {
         .method = "POST",
         .path = API_PATH_PREFIX "/device/image/config",
         .handler = device_image_config_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "GET",
+        .path = API_PATH_PREFIX "/device/sys-clk/config",
+        .handler = device_sys_clk_config_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "POST",
+        .path = API_PATH_PREFIX "/device/sys-clk/config",
+        .handler = device_sys_clk_config_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },
