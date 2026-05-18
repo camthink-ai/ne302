@@ -44,8 +44,7 @@ void pwr_standby_mode_detect(void)
 
 void pwr_enter_standby_mode(void)
 {
-    // Ensure all NVS data is flushed to Flash before entering standby
-    storage_nvs_flush_all();
+    // NVS writes are now immediate, no flush needed
     osDelay(100);  // Wait for Flash operations to complete
     
     /* enable memory retention top keep application in standby */

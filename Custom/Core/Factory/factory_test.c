@@ -458,10 +458,7 @@ int factory_config_write(const factory_config_t *config) {
     // Write test_passed as string for fget compatibility
     storage_nvs_write(NVS_FACTORY, NVS_KEY_TEST_PASSED,
                       config->test_passed ? "1" : "0", 2);
-    
-    // Flush to ensure data is written
-    storage_nvs_flush(NVS_FACTORY);
-    
+
     return 0;
 }
 
