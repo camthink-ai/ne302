@@ -89,25 +89,6 @@ typedef struct {
     bool is_open;
 } lfs_dir_handle_t;
 
-// NVS cache configuration
-#define NVS_CACHE_SIZE 32
-#define NVS_CACHE_MAX_DATA_SIZE 128
-
-typedef struct {
-    char key[24];                      // NVS_KEY_SIZE = 24
-    uint8_t data[NVS_CACHE_MAX_DATA_SIZE];
-    size_t len;
-    bool dirty;
-    bool valid;
-    uint32_t last_access_tick;
-} nvs_cache_entry_t;
-
-typedef struct {
-    nvs_cache_entry_t entries[NVS_CACHE_SIZE];
-    bool has_dirty;
-    osMutexId_t cache_mutex;
-} nvs_cache_t;
-
 typedef struct {
     bool is_init;
     device_t *dev;
@@ -118,10 +99,6 @@ typedef struct {
     osSemaphoreId_t sem_id;
     osThreadId_t storage_processId;
     int file_ops_handle;
-    nvs_cache_t nvs_user_cache;        // User NVS cache
-    osThreadId_t nvs_sync_thread;      // NVS sync background thread
-    osSemaphoreId_t nvs_sync_sem;      // Semaphore to wake up sync thread
-    osTimerId_t nvs_sync_timer;        // Periodic timer to trigger sync
 } storage_t;
 
 void *flash_lfs_fopen(const char *path, const char *mode);
@@ -143,13 +120,6 @@ int storage_nvs_read(NVS_Type_t type, const char *key, void *data, size_t len);
 int storage_nvs_delete(NVS_Type_t type, const char *key);
 int storage_nvs_clear(NVS_Type_t type);
 void storage_nvs_dump(NVS_Type_t type);
-
-// NVS cache related functions
-int storage_nvs_write_cached(NVS_Type_t type, const char *key, const void *data, size_t len);
-int storage_nvs_read_cached(NVS_Type_t type, const char *key, void *data, size_t len);
-int storage_nvs_flush(NVS_Type_t type);
-int storage_nvs_flush_all(void);
-void storage_nvs_sync_trigger(void);  // Trigger async sync (wake up background thread)
 
 int storage_flash_write(uint32_t offset, void *data, size_t size);
 int storage_flash_read(uint32_t offset, void *data, size_t size);

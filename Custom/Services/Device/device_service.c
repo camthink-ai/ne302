@@ -2210,9 +2210,8 @@ aicam_result_t device_service_gpio_get(uint32_t pin_number, aicam_bool_t *state)
 static aicam_result_t restart_system(void)
 {
     LOG_SVC_INFO("Initiating system restart...");
-    
-    // Flush all NVS cache to Flash before restart
-    storage_nvs_flush_all();
+
+    // NVS writes are now immediate, no flush needed
     osDelay(200);  // Wait for Flash operations to complete
     
     // Note: This function will not return, the system will reboot immediately

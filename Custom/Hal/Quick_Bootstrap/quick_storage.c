@@ -19,14 +19,14 @@ extern const aicam_global_config_t default_config;
 /* NVS reads for Quick Bootstrap only: same keys/format as json_config_nvs_*, no json_config init. */
 static aicam_result_t qs_nvs_read_string(const char *key, char *value, size_t max_len)
 {
-    int result = storage_nvs_read_cached(NVS_USER, key, value, max_len);
+    int result = storage_nvs_read(NVS_USER, key, value, max_len);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 static aicam_result_t qs_nvs_read_uint32(const char *key, uint32_t *value)
 {
     char value_str[12];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0) {
         *value = (uint32_t)strtoul(value_str, NULL, 10);
         return AICAM_OK;
@@ -37,7 +37,7 @@ static aicam_result_t qs_nvs_read_uint32(const char *key, uint32_t *value)
 static aicam_result_t qs_nvs_read_uint8(const char *key, uint8_t *value)
 {
     char value_str[4];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0) {
         *value = (uint8_t)strtoul(value_str, NULL, 10);
         return AICAM_OK;
@@ -48,7 +48,7 @@ static aicam_result_t qs_nvs_read_uint8(const char *key, uint8_t *value)
 static aicam_result_t qs_nvs_read_bool(const char *key, aicam_bool_t *value)
 {
     char value_str[2];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0) {
         *value = (strcmp(value_str, "1") == 0) ? AICAM_TRUE : AICAM_FALSE;
         return AICAM_OK;
@@ -59,7 +59,7 @@ static aicam_result_t qs_nvs_read_bool(const char *key, aicam_bool_t *value)
 static aicam_result_t qs_nvs_read_int32(const char *key, int32_t *value)
 {
     char value_str[12];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0) {
         *value = (int32_t)strtol(value_str, NULL, 10);
         return AICAM_OK;
@@ -119,7 +119,7 @@ static void qs_load_isp_config_from_nvs(isp_config_t *isp)
     if (qs_nvs_read_bool(NVS_KEY_ISP_CONTRAST_ENABLE, &temp_bool) == AICAM_OK) {
         isp->contrast_enable = temp_bool;
     }
-    (void)storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, isp->contrast_lut, sizeof(isp->contrast_lut));
+    (void)storage_nvs_read(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, isp->contrast_lut, sizeof(isp->contrast_lut));
 
     if (qs_nvs_read_uint32(NVS_KEY_ISP_STAT_X, &temp_uint32) == AICAM_OK) {
         isp->stat_area_x = temp_uint32;
@@ -191,7 +191,7 @@ static void qs_load_isp_config_from_nvs(isp_config_t *isp)
         uint8_t ref_rgb[ISP_AWB_PROFILES_MAX][3];
     } awb_data_t;
     awb_data_t awb_data;
-    if (storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, sizeof(awb_data)) >= 0) {
+    if (storage_nvs_read(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, sizeof(awb_data)) >= 0) {
         memcpy(isp->awb_label, awb_data.label, sizeof(isp->awb_label));
         memcpy(isp->awb_ref_color_temp, awb_data.ref_color_temp, sizeof(isp->awb_ref_color_temp));
         memcpy(isp->awb_gain_r, awb_data.gain_r, sizeof(isp->awb_gain_r));
@@ -217,7 +217,7 @@ static void qs_load_isp_config_from_nvs(isp_config_t *isp)
     if (qs_nvs_read_bool(NVS_KEY_ISP_CCM_ENABLE, &temp_bool) == AICAM_OK) {
         isp->color_conv_enable = temp_bool;
     }
-    (void)storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_CCM_DATA, isp->color_conv_matrix, sizeof(isp->color_conv_matrix));
+    (void)storage_nvs_read(NVS_USER, NVS_KEY_ISP_CCM_DATA, isp->color_conv_matrix, sizeof(isp->color_conv_matrix));
 
     if (qs_nvs_read_bool(NVS_KEY_ISP_GAMMA_ENABLE, &temp_bool) == AICAM_OK) {
         isp->gamma_enable = temp_bool;
@@ -235,7 +235,7 @@ static void qs_load_isp_config_from_nvs(isp_config_t *isp)
         float calib_factor;
     } lux_data_t;
     lux_data_t lux_data;
-    if (storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, sizeof(lux_data)) >= 0) {
+    if (storage_nvs_read(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, sizeof(lux_data)) >= 0) {
         isp->lux_hl_ref = lux_data.hl_ref;
         isp->lux_hl_expo1 = lux_data.hl_expo1;
         isp->lux_hl_expo2 = lux_data.hl_expo2;

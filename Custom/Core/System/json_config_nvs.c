@@ -610,7 +610,7 @@ aicam_result_t json_config_save_isp_config_to_nvs(const isp_config_t *config)
 
     // Contrast
     json_config_nvs_write_bool(NVS_KEY_ISP_CONTRAST_ENABLE, config->contrast_enable);
-    storage_nvs_write_cached(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, config->contrast_lut, sizeof(config->contrast_lut));
+    storage_nvs_write(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, config->contrast_lut, sizeof(config->contrast_lut));
 
     // StatArea
     json_config_nvs_write_uint32(NVS_KEY_ISP_STAT_X, config->stat_area_x);
@@ -661,7 +661,7 @@ aicam_result_t json_config_save_isp_config_to_nvs(const isp_config_t *config)
     memcpy(awb_data.gain_b, config->awb_gain_b, sizeof(awb_data.gain_b));
     memcpy(awb_data.ccm, config->awb_ccm, sizeof(awb_data.ccm));
     memcpy(awb_data.ref_rgb, config->awb_ref_rgb, sizeof(awb_data.ref_rgb));
-    storage_nvs_write_cached(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, sizeof(awb_data));
+    storage_nvs_write(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, sizeof(awb_data));
 
     // ISP Gain
     json_config_nvs_write_bool(NVS_KEY_ISP_GAIN_ENABLE, config->isp_gain_enable);
@@ -671,7 +671,7 @@ aicam_result_t json_config_save_isp_config_to_nvs(const isp_config_t *config)
 
     // Color Conversion Matrix
     json_config_nvs_write_bool(NVS_KEY_ISP_CCM_ENABLE, config->color_conv_enable);
-    storage_nvs_write_cached(NVS_USER, NVS_KEY_ISP_CCM_DATA, config->color_conv_matrix, sizeof(config->color_conv_matrix));
+    storage_nvs_write(NVS_USER, NVS_KEY_ISP_CCM_DATA, config->color_conv_matrix, sizeof(config->color_conv_matrix));
 
     // Gamma
     json_config_nvs_write_bool(NVS_KEY_ISP_GAMMA_ENABLE, config->gamma_enable);
@@ -694,7 +694,7 @@ aicam_result_t json_config_save_isp_config_to_nvs(const isp_config_t *config)
         .ll_lum1 = config->lux_ll_lum1, .ll_lum2 = config->lux_ll_lum2,
         .calib_factor = config->lux_calib_factor
     };
-    storage_nvs_write_cached(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, sizeof(lux_data));
+    storage_nvs_write(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, sizeof(lux_data));
 
     LOG_CORE_INFO("ISP configuration saved to NVS successfully");
     return result;
@@ -1342,9 +1342,6 @@ aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config)
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save webhook configuration to NVS");
 
-    // Flush all cache to Flash immediately after saving
-    storage_nvs_flush(NVS_USER);
-
     LOG_CORE_INFO("All config saved to NVS successfully");
     return AICAM_OK;
 }
@@ -1734,7 +1731,7 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         if (json_config_nvs_read_bool(NVS_KEY_ISP_CONTRAST_ENABLE, &temp_bool) == AICAM_OK)
             isp->contrast_enable = temp_bool;
         size_t lut_size = sizeof(isp->contrast_lut);
-        storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, isp->contrast_lut, lut_size);
+        storage_nvs_read(NVS_USER, NVS_KEY_ISP_CONTRAST_LUT, isp->contrast_lut, lut_size);
 
         // StatArea
         if (json_config_nvs_read_uint32(NVS_KEY_ISP_STAT_X, &temp_uint32) == AICAM_OK)
@@ -1797,7 +1794,7 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         } awb_data_t;
         awb_data_t awb_data;
         size_t awb_size = sizeof(awb_data);
-        if (storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, awb_size) >= 0) {
+        if (storage_nvs_read(NVS_USER, NVS_KEY_ISP_AWB_DATA, &awb_data, awb_size) >= 0) {
             memcpy(isp->awb_label, awb_data.label, sizeof(isp->awb_label));
             memcpy(isp->awb_ref_color_temp, awb_data.ref_color_temp, sizeof(isp->awb_ref_color_temp));
             memcpy(isp->awb_gain_r, awb_data.gain_r, sizeof(isp->awb_gain_r));
@@ -1821,7 +1818,7 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         if (json_config_nvs_read_bool(NVS_KEY_ISP_CCM_ENABLE, &temp_bool) == AICAM_OK)
             isp->color_conv_enable = temp_bool;
         size_t ccm_size = sizeof(isp->color_conv_matrix);
-        storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_CCM_DATA, isp->color_conv_matrix, ccm_size);
+        storage_nvs_read(NVS_USER, NVS_KEY_ISP_CCM_DATA, isp->color_conv_matrix, ccm_size);
 
         // Gamma
         if (json_config_nvs_read_bool(NVS_KEY_ISP_GAMMA_ENABLE, &temp_bool) == AICAM_OK)
@@ -1841,7 +1838,7 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         } lux_data_t;
         lux_data_t lux_data;
         size_t lux_size = sizeof(lux_data);
-        if (storage_nvs_read_cached(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, lux_size) >= 0) {
+        if (storage_nvs_read(NVS_USER, NVS_KEY_ISP_LUX_DATA, &lux_data, lux_size) >= 0) {
             isp->lux_hl_ref = lux_data.hl_ref;
             isp->lux_hl_expo1 = lux_data.hl_expo1;
             isp->lux_hl_expo2 = lux_data.hl_expo2;
@@ -2447,13 +2444,13 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
 
 aicam_result_t json_config_nvs_write_string(const char *key, const char *value)
 {
-    int result = storage_nvs_write_cached(NVS_USER, key, value, strlen(value) + 1);
+    int result = storage_nvs_write(NVS_USER, key, value, strlen(value) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_string(const char *key, char *value, size_t max_len)
 {
-    int result = storage_nvs_read_cached(NVS_USER, key, value, max_len);
+    int result = storage_nvs_read(NVS_USER, key, value, max_len);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
@@ -2462,14 +2459,14 @@ aicam_result_t json_config_nvs_write_uint32(const char *key, uint32_t value)
 {
     char value_str[12];
     snprintf(value_str, sizeof(value_str), "%lu", value);
-    int result = storage_nvs_write_cached(NVS_USER, key, value_str, strlen(value_str) + 1);
+    int result = storage_nvs_write(NVS_USER, key, value_str, strlen(value_str) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_uint32(const char *key, uint32_t *value)
 {
     char value_str[12];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0)
     {
         *value = (uint32_t)strtoul(value_str, NULL, 10);
@@ -2497,14 +2494,14 @@ aicam_result_t json_config_nvs_write_uint64(const char *key, uint64_t value)
         value_str[j] = value_str[i - 1 - j];
         value_str[i - 1 - j] = tmp;
     }
-    int result = storage_nvs_write_cached(NVS_USER, key, value_str, i + 1);
+    int result = storage_nvs_write(NVS_USER, key, value_str, i + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_uint64(const char *key, uint64_t *value)
 {
     char value_str[21] = {0};
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result < 0) {
         return AICAM_ERROR;
     }
@@ -2532,14 +2529,14 @@ aicam_result_t json_config_nvs_write_float(const char *key, float value)
 {
     char value_str[16];
     snprintf(value_str, sizeof(value_str), "%.6f", value);
-    int result = storage_nvs_write_cached(NVS_USER, key, value_str, strlen(value_str) + 1);
+    int result = storage_nvs_write(NVS_USER, key, value_str, strlen(value_str) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_float(const char *key, float *value)
 {
     char value_str[16];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0)
     {
         *value = strtof(value_str, NULL);
@@ -2552,14 +2549,14 @@ aicam_result_t json_config_nvs_write_uint8(const char *key, uint8_t value)
 {
     char value_str[4];
     snprintf(value_str, sizeof(value_str), "%u", value);
-    int result = storage_nvs_write_cached(NVS_USER, key, value_str, strlen(value_str) + 1);
+    int result = storage_nvs_write(NVS_USER, key, value_str, strlen(value_str) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_uint8(const char *key, uint8_t *value)
 {
     char value_str[4];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0)
     {
         *value = (uint8_t)strtoul(value_str, NULL, 10);
@@ -2571,14 +2568,14 @@ aicam_result_t json_config_nvs_read_uint8(const char *key, uint8_t *value)
 aicam_result_t json_config_nvs_write_bool(const char *key, aicam_bool_t value)
 {
     const char *bool_str = (value == AICAM_TRUE) ? "1" : "0";
-    int result = storage_nvs_write_cached(NVS_USER, key, bool_str, strlen(bool_str) + 1);
+    int result = storage_nvs_write(NVS_USER, key, bool_str, strlen(bool_str) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_bool(const char *key, aicam_bool_t *value)
 {
     char value_str[2];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0)
     {
         *value = (strcmp(value_str, "1") == 0) ? AICAM_TRUE : AICAM_FALSE;
@@ -2591,14 +2588,14 @@ aicam_result_t json_config_nvs_write_int32(const char *key, int32_t value)
 {
     char value_str[12];
     snprintf(value_str, sizeof(value_str), "%ld", value);
-    int result = storage_nvs_write_cached(NVS_USER, key, value_str, strlen(value_str) + 1);
+    int result = storage_nvs_write(NVS_USER, key, value_str, strlen(value_str) + 1);
     return (result >= 0) ? AICAM_OK : AICAM_ERROR;
 }
 
 aicam_result_t json_config_nvs_read_int32(const char *key, int32_t *value)
 {
     char value_str[12];
-    int result = storage_nvs_read_cached(NVS_USER, key, value_str, sizeof(value_str));
+    int result = storage_nvs_read(NVS_USER, key, value_str, sizeof(value_str));
     if (result >= 0) {
         *value = (int32_t)strtol(value_str, NULL, 10);
         return AICAM_OK;
