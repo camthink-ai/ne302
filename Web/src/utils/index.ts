@@ -12,28 +12,26 @@ const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reje
 
 /**
  * Async request function with retry mechanism
- * @param promiseFn - Function that returns Promise (e.g., wrapped fetch function)
+ * @param promiseFn - Function that returns Promise; receives AbortSignal to cancel on timeout
  * @param timeout - Timeout for each request (milliseconds)
  * @param retryCount - Maximum retry count
  */
 const retryFetch = async (
-  promiseFn: () => Promise<any>,
+  promiseFn: (signal?: AbortSignal) => Promise<any>,
   timeout: number = 3000,
   retryCount: number = 3
 ): Promise<any> => {
   /* eslint-disable no-await-in-loop */
   for (let i = 0; i < retryCount; i++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
     try {
-      const result = await Promise.race([
-        promiseFn(),
-        sleep(timeout).then(() => {
-          throw new Error('Request timeout');
-        }),
-      ]);
-      return result; // Return directly on success
+      const result = await promiseFn(controller.signal);
+      return result;
     } catch (error) {
-      // log retry attempt
-      if (i === retryCount - 1) throw error; // Throw on last failure
+      if (i === retryCount - 1) throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
   /* eslint-enable no-await-in-loop */

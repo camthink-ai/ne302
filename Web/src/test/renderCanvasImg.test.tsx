@@ -42,7 +42,7 @@ describe('renderCanvasImg', () => {
     vi.spyOn(document, 'createElement').mockReturnValue(mockCanvas);
     
     // Mock canvas.getContext
-    // @ts-ignore
+    // @ts-expect-error mock canvas getContext in unit tests
     mockCanvas.getContext.mockReturnValue(mockContext);
     
     // Mock Image constructor
@@ -50,7 +50,7 @@ describe('renderCanvasImg', () => {
     mockImage.mockReturnValue(mockImageInstance);
     
     // Mock measureText
-    // @ts-ignore
+    // @ts-expect-error mock canvas measureText in unit tests
     mockContext.measureText.mockReturnValue({ width: 100 });
   });
 
@@ -119,7 +119,7 @@ describe('renderCanvasImg', () => {
   });
 
   it('should handle missing canvas context', async () => {
-    // @ts-expect-error
+    // @ts-expect-error simulate missing canvas context in unit tests
     mockCanvas.getContext.mockReturnValue(null);
 
     const canvasPromise = renderCanvasImg('test.jpg', [], {});
@@ -220,7 +220,7 @@ describe('convertToJpeg', () => {
     vi.spyOn(document, 'createElement').mockReturnValue(mockCanvas);
     
     // Mock canvas.getContext
-    // @ts-ignore
+    // @ts-expect-error mock canvas getContext in unit tests
     mockCanvas.getContext.mockReturnValue(mockContext);
     
     // Mock Image constructor
@@ -271,7 +271,7 @@ describe('convertToJpeg', () => {
   });
 
   it('should handle canvas context not available', async () => {
-    // @ts-expect-error
+    // @ts-expect-error simulate missing canvas context in unit tests
     mockCanvas.getContext.mockReturnValue(null);
     
     const file = createMockFile('test.png', 'image/png');
@@ -308,7 +308,7 @@ describe('proportionScaleImg', () => {
     vi.spyOn(document, 'createElement').mockReturnValue(mockCanvas);
     
     // Mock canvas.getContext
-    // @ts-ignore
+    // @ts-expect-error mock canvas getContext in unit tests
     mockCanvas.getContext.mockReturnValue(mockContext);
     
     // Mock Image constructor
@@ -402,7 +402,7 @@ describe('proportionScaleImg', () => {
   });
 
   it('should handle canvas context not available', async () => {
-    // @ts-expect-error
+    // @ts-expect-error simulate missing canvas context in unit tests
     mockCanvas.getContext.mockReturnValue(null);
     
     const file = createMockFile('test.jpg', 'image/jpeg');
@@ -453,7 +453,7 @@ describe('fixedScaleImg', () => {
     vi.spyOn(document, 'createElement').mockReturnValue(mockCanvas);
     
     // Mock canvas.getContext
-    // @ts-ignore
+    // @ts-expect-error mock canvas getContext in unit tests
     mockCanvas.getContext.mockReturnValue(mockContext);
     
     // Mock Image constructor
@@ -512,7 +512,7 @@ describe('fixedScaleImg', () => {
   });
 
   it('should handle canvas context not available', async () => {
-    // @ts-expect-error
+    // @ts-expect-error simulate missing canvas context in unit tests
     mockCanvas.getContext.mockReturnValue(null);
     
     const file = createMockFile('test.jpg', 'image/jpeg');

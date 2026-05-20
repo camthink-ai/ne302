@@ -65,18 +65,15 @@ export interface WebhookCaCertResponse {
 
 const applicationManagement = {
   getMqttConfigReq: () => request.get('/api/v1/apps/mqtt/config'),
-  setMqttConfigReq: (data: SetMqttConfigReq) =>
-    request.post('/api/v1/apps/mqtt/config', data),
+  setMqttConfigReq: (data: SetMqttConfigReq) => request.post('/api/v1/apps/mqtt/config', data),
   connectMqttReq: () => request.post('/api/v1/apps/mqtt/connect'),
   disconnectMqttReq: () => request.post('/api/v1/apps/mqtt/disconnect'),
 
   getWebhookConfigReq: () => request.get('/api/v1/apps/webhook/config'),
-  setWebhookConfigReq: (data: WebhookConfig) =>
-    request.post('/api/v1/apps/webhook/config', data),
+  setWebhookConfigReq: (data: WebhookConfig) => request.post('/api/v1/apps/webhook/config', data),
   testWebhookReq: () => request.post('/api/v1/apps/webhook/test'),
   getWebhookCaCertReq: () => request.get('/api/v1/apps/webhook/ca-cert'),
-  setWebhookCaCertReq: (data: { ca_cert_data: string }) =>
-    request.post('/api/v1/apps/webhook/ca-cert', data),
+  setWebhookCaCertReq: (data: { ca_cert_data: string }) => request.post('/api/v1/apps/webhook/ca-cert', data),
   deleteWebhookCaCertReq: () => request.delete('/api/v1/apps/webhook/ca-cert'),
 };
 

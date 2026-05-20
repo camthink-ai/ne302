@@ -230,16 +230,16 @@ export default function RtmpConfig() {
   };
 
   const skeleton = () => (
-    <div className='flex flex-col gap-2'>
-      <Skeleton className='h-10 w-full mb-2' />
-      <Skeleton className='h-10 w-full mb-2' />
+    <div className="flex flex-col gap-2">
+      <Skeleton className="h-10 w-full mb-2" />
+      <Skeleton className="h-10 w-full mb-2" />
     </div>
   );
   return (
     <div>
-      <div className='flex items-center  justify-between'>
-        <div className='flex items-center gap-2'>
-          <Label className='text-sm text-text-primary'>
+      <div className="flex items-center  justify-between">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm text-text-primary">
             {' '}
             {i18n._('sys.device_tool.media_stream_settings')}
           </Label>
@@ -268,138 +268,134 @@ export default function RtmpConfig() {
             <SelectValue placeholder={i18n._('common.status')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value='rtmp'>RTMP</SelectItem>
-            <SelectItem value='rtsp'>RTSP</SelectItem>
+            <SelectItem value="rtmp">RTMP</SelectItem>
+            <SelectItem value="rtsp">RTSP</SelectItem>
           </SelectContent>
         </Select>
       </div>
       {/* {rtmpEnabled && ( */}
-      <div className='border border-gray-200 border-solid p-4 rounded-md mt-2'>
+      <div className="border border-gray-200 border-solid p-4 rounded-md mt-2">
         {currentMode === 'rtmp' ? (
           <>
             {rtmpLoading ? (
               skeleton()
             ) : (
               <>
-                <div className='flex justify-between gap-2 mb-2 flex-wrap'>
-                  <div className='flex items-center gap-2'>
-                    <Label className='text-sm text-text-primary'>
+                <div className="flex justify-between gap-2 mb-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm text-text-primary">
                       {' '}
                       {i18n._('common.status')}:
                     </Label>
                     {rtmpStatus.status.state === 'reconnecting' && (
-                      <div className='flex items-center gap-2'>
-                        <div className='w-2 h-2 rounded-full bg-orange-500'></div>
-                        <p className='text-sm text-orange-500'>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-orange-500"></div>
+                        <p className="text-sm text-orange-500">
                           {i18n._('sys.device_tool.reconnecting')}
                         </p>
                       </div>
                     )}
                     {rtmpStatus.status.state === 'connecting' && (
-                      <div className='flex items-center gap-2'>
-                        <div className='w-2 h-2 rounded-full bg-yellow-500'></div>
-                        <p className='text-sm text-yellow-500'>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                        <p className="text-sm text-yellow-500">
                           {i18n._('sys.device_tool.connecting')}
                         </p>
                       </div>
                     )}
                     {rtmpStatus.status.state === 'streaming' && (
-                      <div className='flex items-center gap-2'>
-                        <div className='w-2 h-2 rounded-full bg-green-500'></div>
-                        <p className='text-sm text-green-500'>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                        <p className="text-sm text-green-500">
                           {i18n._('common.connected')}
                         </p>
                       </div>
                     )}
-                    {(rtmpStatus.status.state === 'idle' ||
-                      rtmpStatus.status.state === 'error') && (
-                      <div className='flex items-center gap-2'>
-                        <div className='w-2 h-2 rounded-full bg-gray-500'></div>
-                        <p className='text-sm text-gray-500'>
+                    {(rtmpStatus.status.state === 'idle'
+                      || rtmpStatus.status.state === 'error') && (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-gray-500"></div>
+                        <p className="text-sm text-gray-500">
                           {i18n._('common.disconnected')}
                         </p>
                       </div>
                     )}
                   </div>
-                  <div className='flex items-center gap-2'>
-                    <Label className='text-sm text-text-primary'>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm text-text-primary">
                       {' '}
                       {i18n._('sys.device_tool.stream_duration_sec')}:
                     </Label>
-                    <p className='text-sm text-text-primary'>
+                    <p className="text-sm text-text-primary">
                       {rtmpStatus.statistics.stream_duration_sec}s
                     </p>
                   </div>
                 </div>
                 <Separator />
-                <div className='flex flex-col gap-2'>
-                  <div className='flex justify-between gap-2 flex-1 pr-0'>
-                    <Label className='text-sm text-text-primary shrink-0'>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between gap-2 flex-1 pr-0">
+                    <Label className="text-sm text-text-primary shrink-0">
                       {' '}
                       {i18n._('sys.device_tool.url')}
                     </Label>
                     <Input
-                      variant='ghost'
+                      variant="ghost"
                       placeholder={i18n._('common.please_enter')}
-                      type='text'
+                      type="text"
                       value={rtmpConfig.config.url}
-                      onChange={e =>
-                        setRtmpConfig({
+                      onChange={e => setRtmpConfig({
                           ...rtmpConfig,
                           config: {
                             ...rtmpConfig.config,
                             url: (e.target as HTMLInputElement).value,
                           },
-                        })
-                      }
+                        })}
                     />
                   </div>
                   {errors.url.error && (
-                    <p className='text-sm text-red-500 self-end pr-2'>
+                    <p className="text-sm text-red-500 self-end pr-2">
                       {i18n._(errors.url.message)}
                     </p>
                   )}
                 </div>
-                <div className='flex flex-col gap-2'>
-                  <div className='flex justify-between gap-2 flex-1 pr-0'>
-                    <Label className='text-sm text-text-primary shrink-0'>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between gap-2 flex-1 pr-0">
+                    <Label className="text-sm text-text-primary shrink-0">
                       {' '}
                       {i18n._('common.secret_key')}
                     </Label>
-                    <div className='flex items-center justify-center relative'>
+                    <div className="flex items-center justify-center relative">
                       <Input
-                        className='pr-11'
-                        variant='ghost'
+                        className="pr-11"
+                        variant="ghost"
                         placeholder={i18n._('common.please_enter')}
                         type={isPasswordVisible ? 'text' : 'password'}
                         value={rtmpConfig.config.stream_key}
-                        onChange={e =>
-                          setRtmpConfig({
+                        onChange={e => setRtmpConfig({
                             ...rtmpConfig,
                             config: {
                               ...rtmpConfig.config,
                               stream_key: (e.target as HTMLInputElement).value,
                             },
-                          })
-                        }
+                          })}
                       />
 
                       <button
-                        type='button'
+                        type="button"
                         onClick={handlePasswordVisible}
-                        className='absolute top-1/2 -translate-y-1/2 right-0 flex items-center bg-transparent pr-4 border-none cursor-pointer disabled:opacity-50'
+                        className="absolute top-1/2 -translate-y-1/2 right-0 flex items-center bg-transparent pr-4 border-none cursor-pointer disabled:opacity-50"
                         disabled={configLoading}
                       >
                         {isPasswordVisible ? (
-                          <SvgIcon className='w-5 h-5' icon='visibility' />
+                          <SvgIcon className="w-5 h-5" icon="visibility" />
                         ) : (
-                          <SvgIcon className='w-5 h-5' icon='visibility_off' />
+                          <SvgIcon className="w-5 h-5" icon="visibility_off" />
                         )}
                       </button>
                     </div>
                   </div>
                   {errors.stream_key.error && (
-                    <p className='text-sm text-red-500 self-end pr-2'>
+                    <p className="text-sm text-red-500 self-end pr-2">
                       {i18n._(errors.stream_key.message)}
                     </p>
                   )}
@@ -407,21 +403,19 @@ export default function RtmpConfig() {
               </>
             )}
 
-            <div className='flex justify-end gap-2 mt-2'>
+            <div className="flex justify-end gap-2 mt-2">
               <Button
-                variant='primary'
+                variant="primary"
                 disabled={configLoading}
-                onClick={() =>
-                  rtmpConfig.status.streaming
+                onClick={() => (rtmpConfig.status.streaming
                     ? handleStopRtmp()
-                    : handleStartRtmp()
-                }
+                    : handleStartRtmp())}
               >
                 {configLoading ? (
-                  <div className='w-full h-full flex items-center justify-center'>
+                  <div className="w-full h-full flex items-center justify-center">
                     <div
-                      className='w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin'
-                      aria-label='loading'
+                      className="w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin"
+                      aria-label="loading"
                     />
                   </div>
                 ) : rtmpConfig.status.streaming ? (

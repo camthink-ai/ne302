@@ -21,21 +21,21 @@ export function getValueFromArrayBuffer(type: DataType, buffer: ArrayBuffer, off
     
     switch (type) {
         case dataType.int:
-            return count === 1 ? view.getInt32(0, true) : Array.from({length: count}, (_, i) => view.getInt32(i * 4, true))
+            return count === 1 ? view.getInt32(0, true) : Array.from({ length: count }, (_, i) => view.getInt32(i * 4, true))
         case dataType.uint:
-            return count === 1 ? view.getUint32(0, true) : Array.from({length: count}, (_, i) => view.getUint32(i * 4, true))
+            return count === 1 ? view.getUint32(0, true) : Array.from({ length: count }, (_, i) => view.getUint32(i * 4, true))
         case dataType.short:
-            return count === 1 ? view.getInt16(0, true) : Array.from({length: count}, (_, i) => view.getInt16(i * 2, true))
+            return count === 1 ? view.getInt16(0, true) : Array.from({ length: count }, (_, i) => view.getInt16(i * 2, true))
         case dataType.ushort:
-            return count === 1 ? view.getUint16(0, true) : Array.from({length: count}, (_, i) => view.getUint16(i * 2, true))
+            return count === 1 ? view.getUint16(0, true) : Array.from({ length: count }, (_, i) => view.getUint16(i * 2, true))
         case dataType.byte:
-            return count === 1 ? view.getInt8(0) : Array.from({length: count}, (_, i) => view.getInt8(i))
+            return count === 1 ? view.getInt8(0) : Array.from({ length: count }, (_, i) => view.getInt8(i))
         case dataType.ubyte:
-            return count === 1 ? view.getUint8(0) : Array.from({length: count}, (_, i) => view.getUint8(i))
+            return count === 1 ? view.getUint8(0) : Array.from({ length: count }, (_, i) => view.getUint8(i))
         case dataType.float:
-            return count === 1 ? view.getFloat32(0, true) : Array.from({length: count}, (_, i) => view.getFloat32(i * 4, true))
+            return count === 1 ? view.getFloat32(0, true) : Array.from({ length: count }, (_, i) => view.getFloat32(i * 4, true))
         case dataType.double:
-            return count === 1 ? view.getFloat64(0, true) : Array.from({length: count}, (_, i) => view.getFloat64(i * 8, true))
+            return count === 1 ? view.getFloat64(0, true) : Array.from({ length: count }, (_, i) => view.getFloat64(i * 8, true))
         default:
             throw new Error(`Unsupported data type: ${type}`)
     }

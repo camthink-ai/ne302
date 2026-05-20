@@ -420,9 +420,9 @@ export default function CellularNetworkPage() {
                             <div className="flex justify-between items-center gap-2">
                                 <Label className="text-sm text-text-primary shrink-0" htmlFor="cellular-enable-roaming">{i18n._('sys.system_management.cellular_enable_roaming')}</Label>
                                 <Switch
-                                    id="cellular-enable-roaming"
-                                    checked={!!saveCellularData.enable_roaming}
-                                    onCheckedChange={(checked) => setSaveCellularData((prev) => ({ ...prev, enable_roaming: checked }))}
+                                  id="cellular-enable-roaming"
+                                  checked={!!saveCellularData.enable_roaming}
+                                  onCheckedChange={(checked) => setSaveCellularData((prev) => ({ ...prev, enable_roaming: checked }))}
                                 />
                             </div>
                         </div>

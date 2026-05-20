@@ -37,7 +37,7 @@ interface ExportFirmwareReq {
 }
 export type FirmwareType = 'app' | 'web' | 'ai' | 'fsbl';
 const systemApis = {
-  getDeviceInfoReq: () => request.get('/api/v1/device/info'),
+  getDeviceInfoReq: (config?: { skipErrorToast?: boolean; signal?: AbortSignal }) => request.get('/api/v1/device/info', config),
   setSystemTimeReq: (data: SetSystemTimeReq) => request.post('/api/v1/system/time', data),
   setDeviceNameReq: (data: { device_name: string }) => request.post('/api/v1/device/name', data),
   uploadOTAFileReq: (file: Blob, firmwareType: FirmwareType) => request.post(
@@ -58,7 +58,10 @@ const systemApis = {
   uploadDeviceFileReq: (data: any) => request.post('/api/v1/device/config/import', data),
   exportDeviceFileReq: () => request.get('/api/v1/device/config/export'),
   exportFirmwareReq: (data: ExportFirmwareReq) => request.post('/api/v1/system/ota/export', data, { responseType: 'blob' as any }),
-  restartDevice: (data: { delay_seconds: number }) => request.post('/api/v1/system/restart', data),
+  restartDevice: (
+    data: { delay_seconds: number },
+    config?: { skipErrorToast?: boolean },
+  ) => request.post('/api/v1/system/restart', data, config),
   getLogsReq: () => request.get('/api/v1/system/logs'),
   exportLogsReq: () => request.get('/api/v1/system/logs/export'),
   getVersionsReq: () => request.get('/api/v1/device/firmware-versions'),

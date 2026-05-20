@@ -5,18 +5,18 @@ import WebhookModule from './webhook-module';
 
 export default function ApplicationManagement() {
   return (
-    <div className='flex justify-center'>
-      <Card className='sm:w-xl w-full mx-4 my-4'>
+    <div className="flex justify-center">
+      <Card className="sm:w-xl w-full mx-4 my-4">
         <CardContent>
-          <Tabs defaultValue='mqtt-module'>
-            <TabsList className='w-full'>
-              <TabsTrigger value='mqtt-module'>MQTT/MQTTS</TabsTrigger>
-              <TabsTrigger value='webhook-module'>Webhook</TabsTrigger>
+          <Tabs defaultValue="mqtt-module">
+            <TabsList className="w-full">
+              <TabsTrigger value="mqtt-module">MQTT/MQTTS</TabsTrigger>
+              <TabsTrigger value="webhook-module">Webhook</TabsTrigger>
             </TabsList>
-            <TabsContent value='mqtt-module'>
+            <TabsContent value="mqtt-module">
               <MqttModule />
             </TabsContent>
-            <TabsContent value='webhook-module'>
+            <TabsContent value="webhook-module">
               <WebhookModule />
             </TabsContent>
           </Tabs>

@@ -95,7 +95,7 @@ export default function RtspConfig() {
 
   const validate = (): boolean => {
     let valid = true;
-    const port = config.port;
+    const { port } = config;
 
     if (!port || port < 1 || port > 65535) {
       setErrors(prev => ({
@@ -177,9 +177,9 @@ export default function RtspConfig() {
   };
 
   const skeleton = () => (
-    <div className='flex flex-col gap-2'>
-      <Skeleton className='h-10 w-full mb-2' />
-      <Skeleton className='h-10 w-full mb-2' />
+    <div className="flex flex-col gap-2">
+      <Skeleton className="h-10 w-full mb-2" />
+      <Skeleton className="h-10 w-full mb-2" />
     </div>
   );
 
@@ -190,12 +190,12 @@ export default function RtspConfig() {
       ) : (
         <>
           {/* Status */}
-          <div className='flex justify-between gap-2 mb-2 flex-wrap'>
-            <div className='flex items-center gap-2'>
-              <Label className='text-sm text-text-primary'>
+          <div className="flex justify-between gap-2 mb-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Label className="text-sm text-text-primary">
                 {i18n._('common.status')}:
               </Label>
-              <div className='flex items-center gap-2'>
+              <div className="flex items-center gap-2">
                 <div
                   className={`w-2 h-2 rounded-full ${status.running ? 'bg-green-500' : 'bg-gray-500'}`}
                 />
@@ -212,8 +212,8 @@ export default function RtspConfig() {
           <Separator />
 
           {/* Enable switch */}
-          <div className='flex justify-between items-center py-2'>
-            <Label className='text-sm text-text-primary'>
+          <div className="flex justify-between items-center py-2">
+            <Label className="text-sm text-text-primary">
               {i18n._('sys.device_tool.rtsp.enable')}
             </Label>
             <Switch
@@ -238,29 +238,29 @@ export default function RtspConfig() {
             className={config.enabled ? '' : 'opacity-50 pointer-events-none'}
           >
             {/* Port */}
-            <div className='flex flex-col gap-1 py-2'>
-              <div className='flex justify-between gap-2'>
-                <Label className='text-sm text-text-primary shrink-0'>
+            <div className="flex flex-col gap-1 py-2">
+              <div className="flex justify-between gap-2">
+                <Label className="text-sm text-text-primary shrink-0">
                   {i18n._('sys.device_tool.rtsp.port')}
                 </Label>
                 <Input
-                  variant='ghost'
-                  type='number'
+                  variant="ghost"
+                  type="number"
                   min={1}
                   max={65535}
-                  placeholder='554'
+                  placeholder="554"
                   value={config.port || ''}
                   onChange={e => {
                     const v = parseInt(
                       (e.target as HTMLInputElement).value,
                       10
                     );
-                    setConfig({ ...config, port: isNaN(v) ? 0 : v });
+                    setConfig({ ...config, port: Number.isNaN(v) ? 0 : v });
                   }}
                 />
               </div>
               {errors.port.error && (
-                <p className='text-sm text-red-500 self-end'>
+                <p className="text-sm text-red-500 self-end">
                   {i18n._(errors.port.message)}
                 </p>
               )}
@@ -268,24 +268,22 @@ export default function RtspConfig() {
             <Separator />
 
             {/* Auth mode */}
-            <div className='flex justify-between items-center py-2'>
-              <Label className='text-sm text-text-primary'>
+            <div className="flex justify-between items-center py-2">
+              <Label className="text-sm text-text-primary">
                 {i18n._('sys.device_tool.rtsp.auth_mode')}
               </Label>
               <Select
                 value={config.auth_mode}
-                onValueChange={v =>
-                  setConfig({ ...config, auth_mode: v as RtspAuthMode })
-                }
+                onValueChange={v => setConfig({ ...config, auth_mode: v as RtspAuthMode })}
               >
-                <SelectTrigger className='bg-transparent border-0 !shadow-none !outline-none text-right'>
+                <SelectTrigger className="bg-transparent border-0 !shadow-none !outline-none text-right">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='none'>
+                  <SelectItem value="none">
                     {i18n._('sys.device_tool.rtsp.auth_none')}
                   </SelectItem>
-                  <SelectItem value='digest'>
+                  <SelectItem value="digest">
                     {i18n._('sys.device_tool.rtsp.auth_digest')}
                   </SelectItem>
                 </SelectContent>
@@ -296,55 +294,51 @@ export default function RtspConfig() {
             {config.auth_mode === 'digest' && (
               <>
                 <Separator />
-                <div className='flex flex-col gap-1 py-2'>
-                  <div className='flex justify-between gap-2'>
-                    <Label className='text-sm text-text-primary shrink-0'>
+                <div className="flex flex-col gap-1 py-2">
+                  <div className="flex justify-between gap-2">
+                    <Label className="text-sm text-text-primary shrink-0">
                       {i18n._('sys.device_tool.rtsp.username')}
                     </Label>
                     <Input
-                      variant='ghost'
+                      variant="ghost"
                       placeholder={i18n._('common.please_enter')}
                       value={config.username}
-                      onChange={e =>
-                        setConfig({
+                      onChange={e => setConfig({
                           ...config,
                           username: (e.target as HTMLInputElement).value,
-                        })
-                      }
+                        })}
                     />
                   </div>
                   {errors.username.error && (
-                    <p className='text-sm text-red-500 self-end'>
+                    <p className="text-sm text-red-500 self-end">
                       {i18n._(errors.username.message)}
                     </p>
                   )}
                 </div>
                 <Separator />
-                <div className='flex flex-col gap-1 py-2'>
-                  <div className='flex justify-between gap-2'>
-                    <Label className='text-sm text-text-primary shrink-0'>
+                <div className="flex flex-col gap-1 py-2">
+                  <div className="flex justify-between gap-2">
+                    <Label className="text-sm text-text-primary shrink-0">
                       {i18n._('sys.device_tool.rtsp.password')}
                     </Label>
-                    <div className='flex flex-1 gap-2 items-center'>
+                    <div className="flex flex-1 gap-2 items-center">
                       <Input
-                        variant='ghost'
+                        variant="ghost"
                         type={isPasswordVisible ? 'text' : 'password'}
                         placeholder={i18n._('common.please_enter')}
                         value={config.password}
-                        onChange={e =>
-                          setConfig({
+                        onChange={e => setConfig({
                             ...config,
                             password: (e.target as HTMLInputElement).value,
-                          })
-                        }
+                          })}
                       />
                       <button
-                        type='button'
+                        type="button"
                         onClick={() => setIsPasswordVisible(!isPasswordVisible)}
-                        className='flex items-center bg-transparent pr-4 border-none cursor-pointer'
+                        className="flex items-center bg-transparent pr-4 border-none cursor-pointer"
                       >
                         <SvgIcon
-                          className='w-4 h-4'
+                          className="w-4 h-4"
                           icon={
                             isPasswordVisible ? 'visibility' : 'visibility_off'
                           }
@@ -353,7 +347,7 @@ export default function RtspConfig() {
                     </div>
                   </div>
                   {errors.password.error && (
-                    <p className='text-sm text-red-500 self-end'>
+                    <p className="text-sm text-red-500 self-end">
                       {i18n._(errors.password.message)}
                     </p>
                   )}
@@ -364,30 +358,30 @@ export default function RtspConfig() {
             <Separator />
 
             {/* Stream URL */}
-            <div className='py-2'>
-              <Label className='text-sm text-text-primary mb-2 block'>
+            <div className="py-2">
+              <Label className="text-sm text-text-primary mb-2 block">
                 {i18n._('sys.device_tool.rtsp.stream_url')}
               </Label>
-              <div className='flex items-center gap-2 bg-gray-100 border border-dashed border-gray-300 rounded-md px-3 py-2'>
-                <span className='text-sm text-orange-500 font-medium shrink-0'>
+              <div className="flex items-center gap-2 bg-gray-100 border border-dashed border-gray-300 rounded-md px-3 py-2">
+                <span className="text-sm text-orange-500 font-medium shrink-0">
                   {i18n._('sys.device_tool.rtsp.video_stream')}
                 </span>
-                <span className='flex-1 font-mono text-sm text-text-primary truncate select-all'>
+                <span className="flex-1 font-mono text-sm text-text-primary truncate select-all">
                   {streamUrl}
                 </span>
                 <button
-                  type='button'
+                  type="button"
                   onClick={handleCopy}
-                  className='shrink-0 p-1 rounded hover:bg-gray-200 transition-colors'
+                  className="shrink-0 p-1 rounded hover:bg-gray-200 transition-colors"
                   title={i18n._('sys.device_tool.rtsp.copy')}
                 >
                   <SvgIcon
-                    className='w-4 h-4 text-text-secondary'
-                    icon='content_copy'
+                    className="w-4 h-4 text-text-secondary"
+                    icon="content_copy"
                   />
                 </button>
                 {copied && (
-                  <span className='text-xs text-green-500 shrink-0'>
+                  <span className="text-xs text-green-500 shrink-0">
                     {i18n._('sys.device_tool.rtsp.copied')}
                   </span>
                 )}
@@ -396,13 +390,13 @@ export default function RtspConfig() {
           </div>
 
           {/* Save button */}
-          <div className='flex justify-end gap-2 mt-2'>
-            <Button variant='primary' disabled={saving} onClick={handleSave}>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="primary" disabled={saving} onClick={handleSave}>
               {saving ? (
-                <div className='w-full h-full flex items-center justify-center'>
+                <div className="w-full h-full flex items-center justify-center">
                   <div
-                    className='w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin'
-                    aria-label='loading'
+                    className="w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin"
+                    aria-label="loading"
                   />
                 </div>
               ) : (

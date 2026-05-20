@@ -222,10 +222,8 @@ export default function Graphics() {
     if (type === 'fast_skip_frames') {
       if (value < 0) value = 0;
       else if (value > 300) value = 300;
-    } else {
-      if (value < 0) value = 0;
+    } else if (value < 0) value = 0;
       else if (value > 100) value = 100;
-    }
 
     const nextSkip = type === 'fast_skip_frames' ? value : fastSkipFrames;
     const nextQuality = type === 'fast_jpeg_quality' ? value : fastJpegQuality;
@@ -249,9 +247,9 @@ export default function Graphics() {
     let nextFlipHorizontal = flipHorizontal;
     let nextFlipVertical = flipVertical;
     let nextAec = aec;
-    let nextFastSkipFrames = fastSkipFrames;
+    const nextFastSkipFrames = fastSkipFrames;
     let nextFastResolution = fastResolution;
-    let nextFastJpegQuality = fastJpegQuality;
+    const nextFastJpegQuality = fastJpegQuality;
 
     switch (type) {
       case 'brightness':
@@ -929,12 +927,10 @@ export default function Graphics() {
                 type="number"
                 step={0.001}
                 value={luxRefForm.calibFactor}
-                onChange={(e) =>
-                  setLuxRefForm((prev) => ({
+                onChange={(e) => setLuxRefForm((prev) => ({
                     ...prev,
                     calibFactor: Number((e.target as HTMLInputElement).value || 0),
-                  }))
-                }
+                  }))}
               />
             </div>
             {/* High lux conditions */}
@@ -948,12 +944,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.hlRef}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         hlRef: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -961,12 +955,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.hlExpo1}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         hlExpo1: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -974,12 +966,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.hlLum1}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         hlLum1: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -987,12 +977,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.hlExpo2}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         hlExpo2: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1000,12 +988,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.hlLum2}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         hlLum2: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
               </div>
@@ -1021,12 +1007,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.llRef}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         llRef: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1034,12 +1018,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.llExpo1}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         llExpo1: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1047,12 +1029,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.llLum1}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         llLum1: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1060,12 +1040,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.llExpo2}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         llExpo2: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
                 <div className="space-y-1">
@@ -1073,12 +1051,10 @@ export default function Graphics() {
                   <Input
                     type="number"
                     value={luxRefForm.llLum2}
-                    onChange={(e) =>
-                      setLuxRefForm((prev) => ({
+                    onChange={(e) => setLuxRefForm((prev) => ({
                         ...prev,
                         llLum2: Number((e.target as HTMLInputElement).value || 0),
-                      }))
-                    }
+                      }))}
                   />
                 </div>
               </div>
