@@ -8,8 +8,7 @@ interface IconButtonProps extends React.ComponentProps<typeof Button> {
 }
 
 const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
-  ({ className, icon, children, ...props }, ref) => {
-    return (
+  ({ className, icon, children, ...props }, ref) => (
       <Button
         ref={ref}
         className={cn('gap-2', className)}
@@ -21,7 +20,6 @@ const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
         <span>{children}</span>
       </Button>
     )
-  }
 )
 
 IconButton.displayName = 'IconButton'

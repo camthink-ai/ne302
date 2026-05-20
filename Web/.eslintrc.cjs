@@ -107,5 +107,17 @@ module.exports = {
         'import/no-extraneous-dependencies': 'off',
       },
     },
+    {
+      files: [
+        'lingui.config.ts',
+        'vite.config.ts',
+        'vitest.config.ts',
+        'vitePlugins/**/*.ts',
+        'postcss.config.js',
+      ],
+      parserOptions: {
+        project: null,
+      },
+    },
   ],
 }; 

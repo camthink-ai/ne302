@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT/Web" || exit 1
-npx --no -- commitlint --edit "$1"
+pnpm exec commitlint --edit "$1"

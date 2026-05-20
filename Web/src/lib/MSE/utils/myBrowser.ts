@@ -51,7 +51,7 @@ class BrowserDetector {
     }
 
     // Detect if WebGL is supported
-    isWebGLSupported(): boolean {
+    static isWebGLSupported(): boolean {
         try {
             const canvas = document.createElement('canvas')
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -63,19 +63,19 @@ class BrowserDetector {
     }
 
     // Detect if MSE is supported
-    isMSESupported(): boolean {
+    static isMSESupported(): boolean {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         return 'MediaSource' in window
     }
 
     // Detect if H.264 is supported
-    isH264Supported(): boolean {
+    static isH264Supported(): boolean {
         const video = document.createElement('video')
         return video.canPlayType('video/mp4; codecs="avc1.42E01E"') !== ''
     }
 
     // Detect if AAC is supported
-    isAACSupported(): boolean {
+    static isAACSupported(): boolean {
         const video = document.createElement('video')
         return video.canPlayType('audio/mp4; codecs="mp4a.40.2"') !== ''
     }

@@ -61,7 +61,7 @@ export default function ImportFirmware({
 
   const uploadBtnSlot = (
     <>
-      <SvgIcon icon='upload' />
+      <SvgIcon icon="upload" />
       {i18n._('common.reupload')}
     </>
   );
@@ -74,23 +74,23 @@ export default function ImportFirmware({
     fileName: string;
     type: string;
   }) => (
-    <div className='flex flex-col gap-2 flex-1 items-center justify-center w-full h-full rounded-md'>
+    <div className="flex flex-col gap-2 flex-1 items-center justify-center w-full h-full rounded-md">
       {fileName ? (
-        <div className='flex flex-col items-center justify-center gap-2 h-full'>
-          <div className='flex flex-col items-center gap-2'>
-            <div className='w-14 h-14 bg-gray-400 rounded-md flex items-center justify-center'>
-              <SvgIcon className='w-10 h-10' icon='file' />
+        <div className="flex flex-col items-center justify-center gap-2 h-full">
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-14 h-14 bg-gray-400 rounded-md flex items-center justify-center">
+              <SvgIcon className="w-10 h-10" icon="file" />
             </div>
-            <p className='text-sm items-center  text-wrap text-text-primary'>
+            <p className="text-sm items-center  text-wrap text-text-primary">
               {fileName}
             </p>
           </div>
-          <div className='absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-2'>
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-2">
             <Upload
               onFileChange={(file: File) => onFileChange(file, type)}
               slot={uploadBtnSlot}
-              className='flex flex-1 h-full justify-start'
-              type='button'
+              className="flex flex-1 h-full justify-start"
+              type="button"
               accept={acceptFileType}
               maxFiles={1}
               maxSize={1024 * 1024 * 10}
@@ -99,11 +99,11 @@ export default function ImportFirmware({
           </div>
         </div>
       ) : (
-        <div className='w-full relative flex-1 py-8 flex flex-col items-center justify-center pointer-events-none'>
-          <div className='w-16 mb-2'>
-            <SvgIcon className='w-10 h-10' icon='upload_single' />
+        <div className="w-full relative flex-1 py-8 flex flex-col items-center justify-center pointer-events-none">
+          <div className="w-16 mb-2">
+            <SvgIcon className="w-10 h-10" icon="upload_single" />
           </div>
-          <p className='text-sm text-text-secondary'>{placeholder}</p>
+          <p className="text-sm text-text-secondary">{placeholder}</p>
         </div>
       )}
     </div>
@@ -116,8 +116,8 @@ export default function ImportFirmware({
       const contentPreview = await sliceFile(file, 2048);
       if (!contentPreview.size) {
         throw new Error(
-          i18n._('sys.system_management.invalid_firmware_file') ||
-            'Invalid firmware file'
+          i18n._('sys.system_management.invalid_firmware_file')
+          || 'Invalid firmware file'
         );
       }
       await preCheckReq(contentPreview, type as FirmwareType);
@@ -151,18 +151,14 @@ export default function ImportFirmware({
     setUploadLoadings(prev => ({ ...prev, [type as UploadCategory]: true }));
     uploadQueueRef.current = uploadQueueRef.current
       .catch(() => undefined)
-      .then(() =>
-        task(type as UploadCategory).catch(error => {
+      .then(() => task(type as UploadCategory).catch(error => {
           toast.error(error instanceof Error ? error.message : String(error));
           throw error;
-        })
-      )
-      .then(() =>
-        setUploadLoadings(prev => ({
+        }))
+      .then(() => setUploadLoadings(prev => ({
           ...prev,
           [type as UploadCategory]: false,
-        }))
-      );
+        })));
     return uploadQueueRef.current;
   };
   const handleUpdate = async () => {
@@ -261,20 +257,20 @@ export default function ImportFirmware({
         open={isImportFirmwareDialogOpen}
         onOpenChange={setIsImportFirmwareDialogOpen}
       >
-        <DialogContent className='md:max-w-4xl mx-4'>
+        <DialogContent className="md:max-w-4xl mx-4">
           <DialogHeader>
             <DialogTitle>
               {i18n._('sys.system_management.header_import_firmware')}
             </DialogTitle>
-            <ScrollArea className='h-[70vh] md:h-auto pt-2'>
-              <div className='flex flex-col gap-2'>
-                <p className='text-sm mt-2 self-start'>
+            <ScrollArea className="h-[70vh] md:h-auto pt-2">
+              <div className="flex flex-col gap-2">
+                <p className="text-sm mt-2 self-start">
                   *{i18n._('sys.system_management.firmware_file')}
                 </p>
-                <div className='h-full w-full flex md:grid md:grid-cols-2 flex-col flex-1 justify-center items-center gap-4 mb-4'>
+                <div className="h-full w-full flex md:grid md:grid-cols-2 flex-col flex-1 justify-center items-center gap-4 mb-4">
                   <Upload
-                    className='h-50 w-full'
-                    type='customZone'
+                    className="h-50 w-full"
+                    type="customZone"
                     slot={customUpload({
                       placeholder: i18n._('sys.system_management.app_file'),
                       fileName: appFile?.name || '',
@@ -288,8 +284,8 @@ export default function ImportFirmware({
                     loading={uploadLoadings.app}
                   />
                   <Upload
-                    className='h-50  w-full'
-                    type='customZone'
+                    className="h-50  w-full"
+                    type="customZone"
                     slot={customUpload({
                       placeholder: i18n._('sys.system_management.web_file'),
                       fileName: webFile?.name || '',
@@ -303,8 +299,8 @@ export default function ImportFirmware({
                     loading={uploadLoadings.web}
                   />
                   <Upload
-                    className='h-50 w-full'
-                    type='customZone'
+                    className="h-50 w-full"
+                    type="customZone"
                     slot={customUpload({
                       placeholder: i18n._(
                         'sys.system_management.ai_model_file'
@@ -320,8 +316,8 @@ export default function ImportFirmware({
                     loading={uploadLoadings.ai}
                   />
                   <Upload
-                    className='h-50 w-full'
-                    type='customZone'
+                    className="h-50 w-full"
+                    type="customZone"
                     slot={customUpload({
                       placeholder: i18n._('sys.system_management.device_file'),
                       fileName: deviceFile?.name || '',
@@ -338,17 +334,17 @@ export default function ImportFirmware({
               </div>
             </ScrollArea>
           </DialogHeader>
-          <DialogFooter className='mt-4'>
+          <DialogFooter className="mt-4">
             <Button
-              variant='outline'
-              className='w-1/2 md:w-auto'
+              variant="outline"
+              className="w-1/2 md:w-auto"
               onClick={() => setIsImportFirmwareDialogOpen(false)}
             >
               {i18n._('common.cancel')}
             </Button>
             <Button
-              variant='primary'
-              className='w-1/2 md:w-auto'
+              variant="primary"
+              className="w-1/2 md:w-auto"
               onClick={() => handleUpdate()}
             >
               {i18n._('sys.system_management.confirm_burn')}
