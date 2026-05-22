@@ -18,6 +18,7 @@
 #include "stm32n6xx_hal_cortex.h"
 #include "generic_file.h"
 #include "json_config_mgr.h"
+#include "json_config_internal.h"
 #include "ai_service.h"
 #include "ota_service.h"
 #include "ota_header.h"
@@ -1845,8 +1846,48 @@ aicam_result_t device_config_import_handler(http_handler_context_t *ctx) {
     cJSON_Delete(response_json);
     
     LOG_SVC_INFO("Device configuration imported successfully");
-    
+
     return api_result;
+}
+
+/**
+ * @brief GET/POST /api/v1/device/preference/stream_tab - Get or set preferred stream tab
+ */
+aicam_result_t device_pref_stream_tab_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+
+    if (!web_api_verify_method(ctx, "GET") && !web_api_verify_method(ctx, "POST")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET and POST methods are allowed");
+    }
+
+    if (web_api_verify_method(ctx, "GET")) {
+        char value[8] = "rtmp";
+        json_config_nvs_read_string(NVS_KEY_PREF_STREAM_TAB, value, sizeof(value));
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "stream_tab", value);
+        char *str = cJSON_Print(json);
+        cJSON_Delete(json);
+        return api_response_success(ctx, str, "OK");
+    }
+
+    // POST - save preference
+    cJSON *req = web_api_parse_body(ctx);
+    if (!req) {
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON");
+    }
+    cJSON *item = cJSON_GetObjectItem(req, "stream_tab");
+    if (!item || !cJSON_IsString(item)) {
+        cJSON_Delete(req);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "stream_tab is required");
+    }
+    const char *tab = item->valuestring;
+    if (strcmp(tab, "rtmp") != 0 && strcmp(tab, "rtsp") != 0) {
+        cJSON_Delete(req);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "stream_tab must be 'rtmp' or 'rtsp'");
+    }
+    json_config_nvs_write_string(NVS_KEY_PREF_STREAM_TAB, tab);
+    cJSON_Delete(req);
+    return api_response_success(ctx, "{}", "Preference saved");
 }
 
 /**
@@ -2196,6 +2237,20 @@ static const api_route_t device_module_routes[] = {
         .method = "POST",
         .path = API_PATH_PREFIX "/device/config/import",
         .handler = device_config_import_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "GET",
+        .path = API_PATH_PREFIX "/device/preference/stream_tab",
+        .handler = device_pref_stream_tab_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "POST",
+        .path = API_PATH_PREFIX "/device/preference/stream_tab",
+        .handler = device_pref_stream_tab_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     }

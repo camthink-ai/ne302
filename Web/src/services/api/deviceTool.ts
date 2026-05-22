@@ -132,6 +132,11 @@ const deviceTool = {
   getRtspClientsReq: () => request.get('/api/v1/apps/rtsp/clients'),
   kickRtspClientReq: (id: string) => request.delete(`/api/v1/apps/rtsp/clients/${id}`),
 
+  getStreamTabPrefReq: () =>
+    request.get('/api/v1/device/preference/stream_tab'),
+  setStreamTabPrefReq: (data: { stream_tab: string }) =>
+    request.post('/api/v1/device/preference/stream_tab', data),
+
   // // PIR
   // getPirConfigReq: () => request.get('/api/v1/work-mode/triggers'),
   // setPirConfigReq: (data: PirConfigReq) => request.post('/api/v1/work-mode/triggers', data),
