@@ -3574,6 +3574,8 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     }
 
     aicam_result_t upload_result = AICAM_ERROR;
+    aicam_bool_t mqtt_uploaded = AICAM_FALSE;
+    aicam_bool_t webhook_succeeded = AICAM_FALSE;
     aicam_bool_t mqtt_available = mqtt_service_is_running();
 
     step_start_time = rtc_get_uptime_ms();
@@ -3626,9 +3628,10 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             uint64_t upload_duration = upload_end_time - upload_start_time;
 
             if (mqtt_result >= 0) {
-                LOG_SVC_INFO("[TIMING] Image uploaded successfully (msg_id: %d, upload duration: %lu ms)", 
+                LOG_SVC_INFO("[TIMING] Image uploaded successfully (msg_id: %d, upload duration: %lu ms)",
                             mqtt_result, (unsigned long)upload_duration);
                 upload_result = AICAM_OK;
+                mqtt_uploaded = AICAM_TRUE;
             } else {
                 LOG_SVC_ERROR("[TIMING] Image upload failed: %d (upload duration: %lu ms)", 
                              mqtt_result, (unsigned long)upload_duration);
@@ -3652,9 +3655,10 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             uint64_t upload_duration = upload_end_time - upload_start_time;
 
             if (mqtt_result > 0) {
-                LOG_SVC_INFO("[TIMING] Image uploaded in %d chunks (upload duration: %lu ms)", 
+                LOG_SVC_INFO("[TIMING] Image uploaded in %d chunks (upload duration: %lu ms)",
                             mqtt_result, (unsigned long)upload_duration);
                 upload_result = AICAM_OK;
+                mqtt_uploaded = AICAM_TRUE;
             } else {
                 LOG_SVC_ERROR("[TIMING] Chunked upload failed: %d (upload duration: %lu ms)", 
                              mqtt_result, (unsigned long)upload_duration);
@@ -3707,6 +3711,8 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                 if (wh_ret == AICAM_OK) {
                     // Ownership transferred to webhook task — skip cleanup in Step 5
                     jpeg_buffer = NULL;
+                    upload_result = AICAM_OK;
+                    webhook_succeeded = AICAM_TRUE;
                 }
             }
         } else {
@@ -3746,8 +3752,8 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     LOG_SVC_INFO("[TIMING] Step 5 COMPLETED: Cleanup finished (duration: %lu ms)", 
                  (unsigned long)step_duration);
 
-    // Step 6: Wait for publish confirmation (if upload was successful)
-    if (upload_result == AICAM_OK) {
+    // Step 6: Wait for MQTT publish confirmation (only if MQTT upload was performed)
+    if (mqtt_uploaded) {
         step_start_time = rtc_get_uptime_ms();
         LOG_SVC_INFO("[TIMING] Step 6: Waiting for publish confirmation...");
 
@@ -3761,7 +3767,9 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
 
         if(mqtt_service_wait_for_event(MQTT_EVENT_PUBLISHED, AICAM_TRUE, puback_timeout) != AICAM_OK){
             LOG_SVC_ERROR("[TIMING] Step 6 FAILED: Wait for published event failed");
-            upload_result = AICAM_ERROR;
+            if (!webhook_succeeded) {
+                upload_result = AICAM_ERROR;
+            }
         } else {
             step_end_time = rtc_get_uptime_ms();
             step_duration = step_end_time - step_start_time;

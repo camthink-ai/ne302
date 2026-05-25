@@ -327,6 +327,9 @@
  #define NVS_KEY_RTSP_USERNAME       "rtsp_user"
  #define NVS_KEY_RTSP_PASSWORD       "rtsp_pass"
 
+// UI preferences
+#define NVS_KEY_PREF_STREAM_TAB     "pref_stab"
+
 // Webhook configuration key names
 #define NVS_KEY_WEBHOOK_ENABLE      "wh_enable"
 #define NVS_KEY_WEBHOOK_URL         "wh_url"

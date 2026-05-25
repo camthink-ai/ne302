@@ -99,7 +99,11 @@ export default function RtmpConfig() {
       state: 'idle',
     },
   });
-  const [currentMode, setCurrentMode] = useState<string>('rtmp');
+  const [currentMode, setCurrentModeRaw] = useState<string>('rtmp');
+  const setCurrentMode = (mode: string) => {
+    setCurrentModeRaw(mode);
+    deviceTool.setStreamTabPrefReq({ stream_tab: mode }).catch(() => {});
+  };
   const autoCheck = useRef(false);
   const [errors, setErrors] = useState<Errors>({
     url: {
@@ -116,6 +120,7 @@ export default function RtmpConfig() {
       setRtmpLoading(true);
       const res = await getRtmpConfigReq();
       setRtmpConfig(res.data);
+      return res.data;
     } catch (error) {
       console.error('initRtmpConfig', error);
       throw error;
@@ -176,7 +181,16 @@ export default function RtmpConfig() {
   const initRtmpData = async () => {
     try {
       setRtmpLoading(true);
-      await Promise.all([getRtmpConfig(), getRtmpStatus()]);
+      await Promise.all([
+        getRtmpConfig(),
+        getRtmpStatus(),
+        deviceTool
+          .getStreamTabPrefReq()
+          .then(res => {
+            if (res?.data?.stream_tab) setCurrentModeRaw(res.data.stream_tab);
+          })
+          .catch(() => {}),
+      ]);
     } catch (error) {
       console.error('initRtmpData', error);
       throw error;
@@ -188,6 +202,7 @@ export default function RtmpConfig() {
     try {
       const res = await getRtmpStatusReq();
       setRtmpStatus(res.data);
+      return res.data;
     } catch (error) {
       console.error('getRtmpStatus', error);
       throw error;
