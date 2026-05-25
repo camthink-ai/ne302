@@ -25,6 +25,9 @@
 #include "nn.h"
 #include "cmsis_os2.h"
 #include "mqtt_service.h"
+#include "system_service.h"
+#include "device_service.h"
+#include "ai_service.h"
 
 #define OTA_WRITE_BUF_SIZE 1024
 #define OTA_PRECHECK_DATA_SIZE 2048  // 2KB: 1KB OTA header + 1KB model package header
@@ -32,6 +35,9 @@
 /* ==================== Global Variables ==================== */
 static aicam_bool_t g_ota_upgrade_in_progress = AICAM_FALSE;
 static uint32_t g_ota_last_activity_tick = 0;
+static aicam_bool_t g_ota_stopped_mqtt = AICAM_FALSE;
+static aicam_bool_t g_ota_stopped_camera = AICAM_FALSE;
+static aicam_bool_t g_ota_stopped_ai = AICAM_FALSE;
 
 typedef struct {
     upgrade_handle_t handle;
@@ -64,6 +70,8 @@ typedef struct {
     aicam_bool_t failed;
     aicam_bool_t initialized;
     aicam_bool_t mqtt_was_stopped;  // track if MQTT was stopped for OTA
+    aicam_bool_t camera_was_stopped; // track if camera was stopped for OTA
+    aicam_bool_t ai_was_stopped;     // track if AI pipeline was stopped for OTA
 } ota_upload_ctx_t;
 
 
@@ -535,14 +543,25 @@ void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data)
         if (ctx) {
             LOG_SVC_INFO("OTA upload cleanup (Event: %d)", ev);
             aicam_bool_t mqtt_was_stopped = ctx->mqtt_was_stopped;
+            aicam_bool_t camera_was_stopped = ctx->camera_was_stopped;
+            aicam_bool_t ai_was_stopped = ctx->ai_was_stopped;
             buffer_free(ctx);
             c->fn_data = NULL;
-            // clear the global status
             g_ota_upgrade_in_progress = AICAM_FALSE;
-            // Restart MQTT service if it was stopped for OTA
+            g_ota_stopped_mqtt = AICAM_FALSE;
+            g_ota_stopped_camera = AICAM_FALSE;
+            g_ota_stopped_ai = AICAM_FALSE;
             if (mqtt_was_stopped) {
                 mqtt_service_start();
                 LOG_SVC_INFO("MQTT service restarted after OTA cleanup");
+            }
+            if (camera_was_stopped) {
+                device_service_camera_start();
+                LOG_SVC_INFO("Camera restarted after OTA cleanup");
+            }
+            if (ai_was_stopped) {
+                ai_pipeline_start();
+                LOG_SVC_INFO("AI pipeline restarted after OTA cleanup");
             }
         }
         return;
@@ -601,10 +620,48 @@ void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data)
         // Stop MQTT service during OTA to free up network resources
         // MQTT auto-reconnect can interfere with OTA upload due to network lock contention
         ctx->mqtt_was_stopped = AICAM_FALSE;
+        g_ota_stopped_mqtt = AICAM_FALSE;
         if (mqtt_service_is_running()) {
             if (mqtt_service_stop() == AICAM_OK) {
                 ctx->mqtt_was_stopped = AICAM_TRUE;
+                g_ota_stopped_mqtt = AICAM_TRUE;
                 LOG_SVC_INFO("MQTT service stopped for OTA upgrade");
+            }
+        }
+
+        // Stop AI pipeline first (before camera) to avoid race condition where
+        // AI node tries to get pipe2 buffer after camera stops producing frames
+        ctx->ai_was_stopped = AICAM_FALSE;
+        g_ota_stopped_ai = AICAM_FALSE;
+        if (ai_pipeline_is_running()) {
+            if (ai_pipeline_stop() == AICAM_OK) {
+                ctx->ai_was_stopped = AICAM_TRUE;
+                g_ota_stopped_ai = AICAM_TRUE;
+                LOG_SVC_INFO("AI pipeline stopped for OTA upgrade");
+            }
+        }
+
+        // Stop camera during OTA to prevent XSPI bus contention during flash erase
+        ctx->camera_was_stopped = AICAM_FALSE;
+        g_ota_stopped_camera = AICAM_FALSE;
+        if (device_service_camera_stop() == AICAM_OK) {
+            ctx->camera_was_stopped = AICAM_TRUE;
+            g_ota_stopped_camera = AICAM_TRUE;
+            LOG_SVC_INFO("Camera stopped for OTA upgrade (XSPI bus contention prevention)");
+        }
+
+        // Wait for any in-progress capture to complete before starting flash erase
+        if (system_service_capture_in_progress()) {
+            LOG_SVC_INFO("OTA waiting for capture to complete...");
+            uint32_t wait_start = osKernelGetTickCount();
+            while (system_service_capture_in_progress() &&
+                   (osKernelGetTickCount() - wait_start) < 30000) {
+                osDelay(500);
+            }
+            if (system_service_capture_in_progress()) {
+                LOG_SVC_WARN("OTA proceeding despite capture still in progress (timeout)");
+            } else {
+                LOG_SVC_INFO("Capture completed, OTA proceeding");
             }
         }
 
@@ -747,15 +804,30 @@ void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data)
 cleanup:
     {
         aicam_bool_t mqtt_was_stopped = ctx ? ctx->mqtt_was_stopped : AICAM_FALSE;
+        aicam_bool_t camera_was_stopped = ctx ? ctx->camera_was_stopped : AICAM_FALSE;
+        aicam_bool_t ai_was_stopped = ctx ? ctx->ai_was_stopped : AICAM_FALSE;
         if (ctx && (ctx->failed || ctx->total_received >= ctx->content_length)) {
             buffer_free(ctx);
             c->fn_data = NULL;
         }
-        g_ota_upgrade_in_progress = AICAM_FALSE; // clear the global status
+        g_ota_upgrade_in_progress = AICAM_FALSE;
+        g_ota_stopped_mqtt = AICAM_FALSE;
+        g_ota_stopped_camera = AICAM_FALSE;
+        g_ota_stopped_ai = AICAM_FALSE;
         // Restart MQTT service if it was stopped for OTA
         if (mqtt_was_stopped) {
             mqtt_service_start();
             LOG_SVC_INFO("MQTT service restarted after OTA completion");
+        }
+        // Restart camera if it was stopped for OTA
+        if (camera_was_stopped) {
+            device_service_camera_start();
+            LOG_SVC_INFO("Camera restarted after OTA completion");
+        }
+        // Restart AI pipeline if it was stopped for OTA
+        if (ai_was_stopped) {
+            ai_pipeline_start();
+            LOG_SVC_INFO("AI pipeline restarted after OTA completion");
         }
     }
 }
@@ -992,6 +1064,24 @@ aicam_bool_t ota_check_timeout(void)
         LOG_SVC_WARN("OTA upload timeout after %u ms, resetting state", elapsed);
         g_ota_upgrade_in_progress = AICAM_FALSE;
         g_ota_last_activity_tick = 0;
+
+        // Restart services that were stopped for OTA
+        if (g_ota_stopped_ai) {
+            ai_pipeline_start();
+            LOG_SVC_INFO("AI pipeline restarted after OTA timeout");
+        }
+        if (g_ota_stopped_camera) {
+            device_service_camera_start();
+            LOG_SVC_INFO("Camera restarted after OTA timeout");
+        }
+        if (g_ota_stopped_mqtt) {
+            mqtt_service_start();
+            LOG_SVC_INFO("MQTT service restarted after OTA timeout");
+        }
+        g_ota_stopped_mqtt = AICAM_FALSE;
+        g_ota_stopped_camera = AICAM_FALSE;
+        g_ota_stopped_ai = AICAM_FALSE;
+
         return AICAM_TRUE;
     }
     
@@ -1008,6 +1098,23 @@ void ota_reset_upload_state(void)
     }
     g_ota_upgrade_in_progress = AICAM_FALSE;
     g_ota_last_activity_tick = 0;
+
+    // Restart services that were stopped for OTA
+    if (g_ota_stopped_ai) {
+        ai_pipeline_start();
+        LOG_SVC_INFO("AI pipeline restarted after OTA state reset");
+    }
+    if (g_ota_stopped_camera) {
+        device_service_camera_start();
+        LOG_SVC_INFO("Camera restarted after OTA state reset");
+    }
+    if (g_ota_stopped_mqtt) {
+        mqtt_service_start();
+        LOG_SVC_INFO("MQTT service restarted after OTA state reset");
+    }
+    g_ota_stopped_mqtt = AICAM_FALSE;
+    g_ota_stopped_camera = AICAM_FALSE;
+    g_ota_stopped_ai = AICAM_FALSE;
 }
 
 /**

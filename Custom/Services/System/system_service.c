@@ -28,7 +28,8 @@
 #include "nn.h"
 #include "quick_snapshot.h"
 #include "cJSON.h"
-#include "webhook_service.h" 
+#include "webhook_service.h"
+#include "api_ota_module.h" 
  
  /* ==================== System Controller Implementation ==================== */
  
@@ -1103,6 +1104,12 @@ static void scheduled_interval_timer_callback(void *user_data)
  static void wakeup_task_async(system_controller_t *controller, aicam_capture_trigger_t trigger_type)
  {
      LOG_SVC_INFO("=== Wakeup Task Started ===");
+
+     if (ota_is_upload_in_progress()) {
+         LOG_SVC_WARN("Wakeup task skipped: OTA upgrade in progress");
+         return;
+     }
+
      LOG_SVC_INFO("Current work mode: %d", controller->current_work_mode);
 
 
@@ -3069,6 +3076,11 @@ aicam_result_t system_service_request_sleep(uint32_t duration_sec)
 
 /* ==================== Unified Capture Entry ==================== */
 
+aicam_bool_t system_service_capture_in_progress(void)
+{
+    return g_capture_in_progress;
+}
+
 aicam_result_t system_service_capture_request(const system_capture_request_t *request,
                                               system_capture_response_t *response)
 {
@@ -3084,6 +3096,11 @@ aicam_result_t system_service_capture_request(const system_capture_request_t *re
     }
 
     if (g_capture_in_progress) {
+        return AICAM_ERROR_BUSY;
+    }
+
+    if (ota_is_upload_in_progress()) {
+        LOG_SVC_WARN("Capture rejected: OTA upgrade in progress");
         return AICAM_ERROR_BUSY;
     }
 
@@ -3292,13 +3309,20 @@ static aicam_result_t generate_inference_json(const nn_result_t *nn_result,
  * @param qos MQTT QoS level (0, 1, or 2)
  * @return AICAM_OK on success, error code otherwise
  */
-aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai, 
+aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                                                      uint32_t chunk_size,
                                                      aicam_bool_t store_to_sd,
                                                      aicam_capture_trigger_t trigger_type)
 {
+    if (g_capture_in_progress || ota_is_upload_in_progress()) {
+        LOG_SVC_WARN("Capture rejected: busy or OTA in progress");
+        return AICAM_ERROR_BUSY;
+    }
+    g_capture_in_progress = AICAM_TRUE;
+
     if (!g_system_service_ctx.is_initialized || !g_system_service_ctx.controller) {
         LOG_SVC_ERROR("System service not initialized");
+        g_capture_in_progress = AICAM_FALSE;
         return AICAM_ERROR_NOT_INITIALIZED;
     }
 
@@ -3794,10 +3818,9 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                      (unsigned long)total_duration, total_duration / 1000.0f);
     }
 
+    g_capture_in_progress = AICAM_FALSE;
     return upload_result;
 }
-
-/* ==================== PIR Debug Commands ==================== */
 
 /**
  * @brief PIR status command: Show PIR sensor status and configuration

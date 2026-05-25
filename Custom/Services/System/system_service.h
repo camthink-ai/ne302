@@ -679,6 +679,12 @@ aicam_result_t system_service_capture_request(const system_capture_request_t *re
                                               system_capture_response_t *response);
 
 /**
+ * @brief Check if a capture operation is currently in progress
+ * @return AICAM_TRUE if capture is running, AICAM_FALSE otherwise
+ */
+aicam_bool_t system_service_capture_in_progress(void);
+
+/**
  * @brief Register PIR debug commands
  * @details Register CLI commands for PIR sensor debugging:
  *   - pir_status: Show PIR sensor status and configuration
