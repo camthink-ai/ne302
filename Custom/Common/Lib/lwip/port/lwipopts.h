@@ -291,7 +291,7 @@ a lot of data that needs to be copied, this should be set high. */
 #define LWIP_STATS_DISPLAY      0
 
 #if LWIP_STATS
-#define LINK_STATS              0
+#define LINK_STATS              1
 #define IP_STATS                0
 #define ICMP_STATS              0
 #define IGMP_STATS              0
@@ -349,7 +349,7 @@ extern unsigned int lwip_port_rand(void);
 #define DEFAULT_RAW_RECVMBOX_SIZE      8
 #define DEFAULT_THREAD_STACKSIZE       512
 #define TCPIP_THREAD_STACKSIZE         1024
-#define TCPIP_THREAD_PRIO              58
+#define TCPIP_THREAD_PRIO              4
 
 #define SNTP_MAX_SERVERS               3
 #define SNTP_SERVER_DNS                1

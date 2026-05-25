@@ -23,6 +23,7 @@ BUILD_DIR = build
 ######################################
 # C source files - Application layer
 C_SOURCES =
+
 C_SOURCES += Core/Src/main.c
 C_SOURCES += Core/Src/syscalls.c
 C_SOURCES += Core/Src/sysmem.c
@@ -669,6 +670,10 @@ C_DEFS += -DUX_HOST_CLASS_NETWORK_NO_NX
 C_DEFS += '-DMBEDTLS_CONFIG_FILE="config-ccm-psk-tls1_2.h"'
 C_DEFS += -DUSE_HAL_HASH_SUSPEND_RESUME=1
 C_DEFS += -DUSE_HAL_CRYP_SUSPEND_RESUME=1
+C_DEFS += -DMBEDTLS_SHA512_C
+C_DEFS += -DMBEDTLS_SHA384_C
+C_DEFS += -DMBEDTLS_PKCS5_C
+C_DEFS += -DMBEDTLS_CMAC_C
 
 # Mongoose
 C_DEFS += -DMG_ARCH=MG_ARCH_CMSIS_RTOS2
@@ -951,6 +956,10 @@ LDFLAGS += -Wl,--cmse-implib
 LDFLAGS += -Wl,--out-implib=$(BUILD_DIR)/secure_nsclib.o
 # Link libraries with start-group/end-group for circular dependencies
 LDFLAGS += -Wl,--start-group $(LIBS) -Wl,--end-group
+
+##################################################################
+include ../Custom/Common/Lib/mmx108/mmx108.mk
+
 
 ######################################
 # Build Targets

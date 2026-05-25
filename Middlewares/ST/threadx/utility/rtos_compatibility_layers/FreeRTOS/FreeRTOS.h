@@ -35,7 +35,9 @@
 
 #include <tx_api.h>
 
-#include <FreeRTOSConfig.h>
+//#include <FreeRTOSConfig.h>
+#include "FreeRTOSConfig_mm.h"
+
 
 //// Hard coded configurations and other preprocessor definitions for compatibility.
 #define portCRITICAL_NESTING_IN_TCB 0

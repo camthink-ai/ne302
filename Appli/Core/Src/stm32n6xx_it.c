@@ -826,10 +826,12 @@ void EXTI12_IRQHandler(void)
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_12);
 }
 
+#if 0
 void EXTI15_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_15);
 }
+#endif
 
 void CSI_IRQHandler(void)
 {

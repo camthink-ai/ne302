@@ -242,7 +242,6 @@ void txfr_thread_wrapper(ULONG id)
 #endif // #if (INCLUDE_vTaskDelete == 1)
 }
 
-
 void *pvPortMalloc(size_t xWantedSize)
 {
     return txfr_malloc(xWantedSize);
@@ -1477,6 +1476,11 @@ UBaseType_t uxSemaphoreGetCount(SemaphoreHandle_t xSemaphore)
 TaskHandle_t xSemaphoreGetMutexHolder(SemaphoreHandle_t xMutex)
 {
     configASSERT(xMutex != NULL);
+
+	if (xMutex->mutex.tx_mutex_owner == NULL)
+	{
+		return NULL;
+	}
 
     return xMutex->mutex.tx_mutex_owner->txfr_thread_ptr;
 }
