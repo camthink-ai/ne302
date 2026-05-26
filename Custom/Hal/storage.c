@@ -4,6 +4,8 @@
 #include "common_utils.h"
 #include "upgrade_manager.h"
 #include "crc.h"
+#include "iwdg.h"
+#include "tx_api.h"
 
 #define LFS_LOCK(sys)   do{ if ((sys)->thread_safe && (sys)->lock) (sys)->lock(); }while(0)
 #define LFS_UNLOCK(sys) do{ if ((sys)->thread_safe && (sys)->unlock) (sys)->unlock(); }while(0)
@@ -485,45 +487,76 @@ int storage_flash_erase(uint32_t offset, size_t num_blk)
     }
 
     LOG_DRV_DEBUG("storage_flash_erase offset %u, num_blk %u\r\n", offset, num_blk);
+
+    // For large OTA erases, protect I-cache by locking preemption during MM-disabled phase.
+    // Code runs from XSPI flash (XIP). When memory-mapped mode is disabled for erase,
+    // only I-cache serves instruction fetches. If other tasks run and evict the erase loop,
+    // the CPU faults when trying to fetch from flash with MM disabled.
+    // Strategy: lock preemption during erase batches (MM disabled), briefly unlock between
+    // batches (MM re-enabled) to let network stack send TCP ACKs and prevent connection timeout.
+    const size_t PREEMPTION_LOCK_THRESHOLD = 128;
+    aicam_bool_t lock_preemption = (num_blk >= PREEMPTION_LOCK_THRESHOLD);
+
+    TX_THREAD *self = NULL;
+    UINT old_threshold = 0;
+    if (lock_preemption) {
+        self = tx_thread_identify();
+        if (self) {
+            tx_thread_preemption_change(self, 0, &old_threshold);
+        }
+    }
+
     storage_lock();
     XSPI_NOR_DisableMemoryMappedMode();
-    
-    // For large erase operations, periodically yield CPU to prevent system freeze
-    // This is critical for OTA upgrades of large firmware files
-    const size_t YIELD_INTERVAL = 16;  // Yield every 16 blocks (~64KB, ~320-1600ms)
-    
+
+    const size_t YIELD_INTERVAL = 16;
+
     for (size_t i = 0; i < num_blk; i++) {
         if (XSPI_NOR_Erase4K(offset + i * FLASH_BLOCK_SIZE) != 0) {
             XSPI_NOR_EnableMemoryMappedMode();
             storage_unlock();
+            if (lock_preemption && self) {
+                tx_thread_preemption_change(self, old_threshold, &old_threshold);
+            }
             LOG_DRV_ERROR("storage_flash_erase failed at block %u\r\n", i);
             return -1;
         }
-        
-        // Periodically yield CPU to prevent watchdog timeout and allow other tasks to run
-        // This is especially important for large OTA upgrades (e.g., 10MB = 2560 blocks)
+
         if ((i + 1) % YIELD_INTERVAL == 0 || i == num_blk - 1) {
-            // Re-enable memory mapped mode temporarily to allow other operations
+            // Re-enable MM — flash access is now safe for other tasks
             XSPI_NOR_EnableMemoryMappedMode();
             storage_unlock();
-            
-            // Yield CPU to other tasks (prevents watchdog timeout and allows network/other tasks)
-            osDelay(5);  // 5ms delay to allow task switching
-            
-            // Re-acquire lock and disable memory mapped mode for next erase
-            storage_lock();
-            XSPI_NOR_DisableMemoryMappedMode();
-            
-            // Log progress for large operations
-            if (num_blk > 64) {  
-                LOG_DRV_DEBUG("storage_flash_erase progress: %u/%u blocks (%.1f%%)\r\n", 
+
+            HAL_IWDG_Refresh(&hiwdg);
+
+            if (lock_preemption && self) {
+                // Briefly allow network stack to process TCP ACKs (prevent connection timeout).
+                // MM is enabled so other tasks can safely access flash.
+                // Keep window short (1ms) to minimize I-cache pressure on the erase loop.
+                tx_thread_preemption_change(self, old_threshold, &old_threshold);
+                osDelay(1);
+                tx_thread_preemption_change(self, 0, &old_threshold);
+            } else {
+                osDelay(5);
+            }
+
+            if (num_blk > 64) {
+                LOG_DRV_DEBUG("storage_flash_erase progress: %u/%u blocks (%.1f%%)\r\n",
                        i + 1, num_blk, ((float)(i + 1) * 100.0f / num_blk));
             }
+
+            storage_lock();
+            XSPI_NOR_DisableMemoryMappedMode();
         }
     }
-    
+
     XSPI_NOR_EnableMemoryMappedMode();
     storage_unlock();
+
+    if (lock_preemption && self) {
+        tx_thread_preemption_change(self, old_threshold, &old_threshold);
+    }
+
     LOG_DRV_DEBUG("storage_flash_erase end\r\n");
     return 0;
 }
