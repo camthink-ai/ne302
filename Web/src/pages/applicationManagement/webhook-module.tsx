@@ -57,7 +57,7 @@ export default function WebhookModule() {
 
   const uploadSlot = (
     <>
-      <SvgIcon icon='upload' />
+      <SvgIcon icon="upload" />
       {i18n._('common.upload')}
     </>
   );
@@ -192,7 +192,7 @@ export default function WebhookModule() {
       } else {
         toast.error(i18n._('sys.application_management.webhook_test_failed'));
       }
-    } catch (error) {
+    } catch {
       toast.error(i18n._('sys.application_management.webhook_test_failed'));
     } finally {
       setTestLoading(false);
@@ -210,8 +210,8 @@ export default function WebhookModule() {
         <ApplicationManagementSkeleton />
       ) : (
         <>
-          <div className='flex flex-col gap-2 mt-4 bg-gray-100 p-4 rounded-lg'>
-            <div className='flex justify-between'>
+          <div className="flex flex-col gap-2 mt-4 bg-gray-100 p-4 rounded-lg">
+            <div className="flex justify-between">
               <Label>
                 {i18n._('sys.application_management.webhook_enable')}
               </Label>
@@ -221,11 +221,11 @@ export default function WebhookModule() {
               />
             </div>
             <Separator />
-            <div className='flex justify-between'>
+            <div className="flex justify-between">
               <Label>
                 {i18n._('sys.application_management.webhook_status')}
               </Label>
-              <div className='flex items-center gap-2'>
+              <div className="flex items-center gap-2">
                 <div
                   className={`w-2 h-2 rounded-full ${config.enable ? 'bg-green-500' : 'bg-gray-500'}`}
                 />
@@ -243,52 +243,48 @@ export default function WebhookModule() {
               </div>
             </div>
             <Separator />
-            <div className='flex flex-col gap-1'>
-              <div className='flex gap-2 justify-between'>
-                <Label className='shrink-0'>
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-2 justify-between">
+                <Label className="shrink-0">
                   {i18n._('sys.application_management.webhook_url')}
                 </Label>
                 <Input
                   placeholder={i18n._(
                     'sys.application_management.webhook_url_placeholder'
                   )}
-                  variant='ghost'
+                  variant="ghost"
                   value={config.url}
-                  onChange={e =>
-                    setConfig({
+                  onChange={e => setConfig({
                       ...config,
                       url: (e.target as HTMLInputElement).value,
-                    })
-                  }
+                    })}
                 />
               </div>
               {errors.url.error && (
-                <p className='text-red-500 text-sm self-end'>
+                <p className="text-red-500 text-sm self-end">
                   {i18n._(errors.url.message)}
                 </p>
               )}
             </div>
             <Separator />
-            <div className='flex gap-2 justify-between'>
+            <div className="flex gap-2 justify-between">
               <Label>
                 {i18n._('sys.application_management.webhook_auth_type')}
               </Label>
               <Select
                 value={config.auth_type}
-                onValueChange={v =>
-                  setConfig({ ...config, auth_type: v as AuthType })
-                }
+                onValueChange={v => setConfig({ ...config, auth_type: v as AuthType })}
               >
-                <SelectTrigger className='bg-transparent border-0 !shadow-none !outline-none focus:!outline-none focus:!ring-0 focus:!ring-offset-0 focus:!shadow-none focus:!border-transparent focus-visible:!outline-none focus-visible:!ring-0 focus-visible:!ring-offset-0 text-right'>
+                <SelectTrigger className="bg-transparent border-0 !shadow-none !outline-none focus:!outline-none focus:!ring-0 focus:!ring-offset-0 focus:!shadow-none focus:!border-transparent focus-visible:!outline-none focus-visible:!ring-0 focus-visible:!ring-offset-0 text-right">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='none'>
+                  <SelectItem value="none">
                     {i18n._('sys.application_management.webhook_auth_none')}
                   </SelectItem>
-                  <SelectItem value='bearer'>Bearer</SelectItem>
-                  <SelectItem value='basic'>Basic</SelectItem>
-                  <SelectItem value='custom'>
+                  <SelectItem value="bearer">Bearer</SelectItem>
+                  <SelectItem value="basic">Basic</SelectItem>
+                  <SelectItem value="custom">
                     {i18n._('sys.application_management.webhook_auth_custom')}
                   </SelectItem>
                 </SelectContent>
@@ -297,39 +293,37 @@ export default function WebhookModule() {
             {config.auth_type !== 'none' && (
               <>
                 <Separator />
-                <div className='flex flex-col gap-1'>
-                  <div className='flex gap-2 justify-between'>
-                    <Label className='shrink-0'>
+                <div className="flex flex-col gap-1">
+                  <div className="flex gap-2 justify-between">
+                    <Label className="shrink-0">
                       {i18n._('sys.application_management.webhook_secret')}
                     </Label>
-                    <div className='flex flex-1 gap-2 justify-between'>
+                    <div className="flex flex-1 gap-2 justify-between">
                       <Input
                         placeholder={i18n._('common.please_enter')}
                         type={isSecretVisible ? 'text' : 'password'}
-                        variant='ghost'
+                        variant="ghost"
                         value={config.secret}
-                        onChange={e =>
-                          setConfig({
+                        onChange={e => setConfig({
                             ...config,
                             secret: (e.target as HTMLInputElement).value,
-                          })
-                        }
+                          })}
                       />
                       <button
-                        type='button'
+                        type="button"
                         onClick={handlePasswordVisible}
-                        className='flex items-center bg-transparent pr-4 border-none cursor-pointer disabled:opacity-50'
+                        className="flex items-center bg-transparent pr-4 border-none cursor-pointer disabled:opacity-50"
                       >
                         {isSecretVisible ? (
-                          <SvgIcon className='w-4 h-4' icon='visibility' />
+                          <SvgIcon className="w-4 h-4" icon="visibility" />
                         ) : (
-                          <SvgIcon className='w-4 h-4' icon='visibility_off' />
+                          <SvgIcon className="w-4 h-4" icon="visibility_off" />
                         )}
                       </button>
                     </div>
                   </div>
                   {errors.secret.error && (
-                    <p className='text-red-500 text-sm self-end'>
+                    <p className="text-red-500 text-sm self-end">
                       {i18n._(errors.secret.message)}
                     </p>
                   )}
@@ -337,27 +331,27 @@ export default function WebhookModule() {
               </>
             )}
             <Separator />
-            <div className='flex justify-between'>
-              <div className='flex items-center gap-2'>
+            <div className="flex justify-between">
+              <div className="flex items-center gap-2">
                 <Label>
                   {i18n._('sys.application_management.webhook_ca_cert')}
                 </Label>
                 <Tooltip>
                   <TooltipTrigger>
-                    <SvgIcon icon='info' className='w-4 h-4' />
+                    <SvgIcon icon="info" className="w-4 h-4" />
                   </TooltipTrigger>
-                  <TooltipContent className='max-w-80 text-pretty'>
+                  <TooltipContent className="max-w-80 text-pretty">
                     {i18n._(
                       'sys.application_management.webhook_ca_cert_tooltip'
                     )}
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <div className='flex items-center gap-2'>
+              <div className="flex items-center gap-2">
                 {caCertFilename ? (
-                  <p className='text-sm text-text-primary'>{caCertFilename}</p>
+                  <p className="text-sm text-text-primary">{caCertFilename}</p>
                 ) : (
-                  <p className='text-sm text-gray-400'>
+                  <p className="text-sm text-gray-400">
                     {i18n._(
                       'sys.application_management.webhook_ca_cert_placeholder'
                     )}
@@ -365,7 +359,7 @@ export default function WebhookModule() {
                 )}
                 <Upload
                   slot={uploadSlot}
-                  type='button'
+                  type="button"
                   onFileChange={handleSaveCaCert}
                   accept={certAccept}
                   fileType={['.crt', '.pem', '.cer', '.der']}
@@ -373,7 +367,7 @@ export default function WebhookModule() {
                   multiple={false}
                 />
                 <Button
-                  variant='outline'
+                  variant="outline"
                   onClick={() => {
                     setCaCertData('');
                     setCaCertFilename('');
@@ -384,25 +378,25 @@ export default function WebhookModule() {
               </div>
             </div>
           </div>
-          <div className='w-full flex justify-end gap-2'>
+          <div className="w-full flex justify-end gap-2">
             <Button
-              variant='outline'
-              className='w-20 mt-4'
+              variant="outline"
+              className="w-20 mt-4"
               onClick={handleSave}
             >
               {i18n._('common.save')}
             </Button>
             <Button
-              variant='primary'
+              variant="primary"
               disabled={testLoading}
-              className='w-28 mt-4'
+              className="w-28 mt-4"
               onClick={handleTest}
             >
               {testLoading ? (
-                <div className='w-full h-full flex items-center justify-center'>
+                <div className="w-full h-full flex items-center justify-center">
                   <div
-                    className='w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin'
-                    aria-label='loading'
+                    className="w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin"
+                    aria-label="loading"
                   />
                 </div>
               ) : (

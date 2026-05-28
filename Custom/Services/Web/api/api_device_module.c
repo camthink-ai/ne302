@@ -18,6 +18,7 @@
 #include "stm32n6xx_hal_cortex.h"
 #include "generic_file.h"
 #include "json_config_mgr.h"
+#include "json_config_internal.h"
 #include "ai_service.h"
 #include "ota_service.h"
 #include "ota_header.h"
@@ -28,6 +29,8 @@
 /* ==================== Helper Functions ==================== */
 
 static uint32_t restart_delay_seconds = 3;
+static uint8_t s_restart_task_stack[1024];
+static uint32_t s_restart_delay_storage;
 
 /**
  * @brief Restart task function
@@ -1630,29 +1633,25 @@ aicam_result_t system_restart_handler(http_handler_context_t *ctx) {
     // Log restart request
     LOG_SVC_INFO("System restart requested via API - Delay: %u seconds", restart_delay_seconds);
 
-    uint8_t* restart_stack = buffer_calloc(1, 1024);
-    if (!restart_stack) {
-        LOG_SVC_ERROR("Failed to allocate restart stack");
-        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to allocate restart stack");
-    }
-    
-    // Create a task to handle delayed restart
-    osThreadAttr_t restart_task_attr = {
-        .name = "restart_task",
-        .stack_size = 1024,
-        .priority = osPriorityHigh,
-        .stack_mem = restart_stack
-    };
-        
     // Schedule system restart with delay
     if (restart_delay_seconds > 0) {
         LOG_SVC_INFO("System will restart in %u seconds...", restart_delay_seconds);
-        
-        // Create restart task with delay
-        osThreadId_t restart_task = osThreadNew(restart_task_function, &restart_delay_seconds, &restart_task_attr);
-        
+
+        s_restart_delay_storage = restart_delay_seconds;
+
+        // Use pre-allocated static stack to avoid memory fragmentation after OTA
+        osThreadAttr_t restart_task_attr = {
+            .name = "restart_task",
+            .stack_size = 1024,
+            .priority = osPriorityHigh,
+            .stack_mem = s_restart_task_stack
+        };
+
+        osThreadId_t restart_task = osThreadNew(restart_task_function, &s_restart_delay_storage, &restart_task_attr);
+
         if (!restart_task) {
-            LOG_SVC_ERROR("Failed to create restart task, restarting immediately");
+            LOG_SVC_WARN("Failed to create restart task, using inline delayed restart");
+            osDelay(restart_delay_seconds * 1000);
 #if ENABLE_U0_MODULE
             u0_module_clear_wakeup_flag();
             u0_module_reset_chip_n6();
@@ -1847,8 +1846,48 @@ aicam_result_t device_config_import_handler(http_handler_context_t *ctx) {
     cJSON_Delete(response_json);
     
     LOG_SVC_INFO("Device configuration imported successfully");
-    
+
     return api_result;
+}
+
+/**
+ * @brief GET/POST /api/v1/device/preference/stream_tab - Get or set preferred stream tab
+ */
+aicam_result_t device_pref_stream_tab_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+
+    if (!web_api_verify_method(ctx, "GET") && !web_api_verify_method(ctx, "POST")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET and POST methods are allowed");
+    }
+
+    if (web_api_verify_method(ctx, "GET")) {
+        char value[8] = "rtmp";
+        json_config_nvs_read_string(NVS_KEY_PREF_STREAM_TAB, value, sizeof(value));
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "stream_tab", value);
+        char *str = cJSON_Print(json);
+        cJSON_Delete(json);
+        return api_response_success(ctx, str, "OK");
+    }
+
+    // POST - save preference
+    cJSON *req = web_api_parse_body(ctx);
+    if (!req) {
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON");
+    }
+    cJSON *item = cJSON_GetObjectItem(req, "stream_tab");
+    if (!item || !cJSON_IsString(item)) {
+        cJSON_Delete(req);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "stream_tab is required");
+    }
+    const char *tab = item->valuestring;
+    if (strcmp(tab, "rtmp") != 0 && strcmp(tab, "rtsp") != 0) {
+        cJSON_Delete(req);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "stream_tab must be 'rtmp' or 'rtsp'");
+    }
+    json_config_nvs_write_string(NVS_KEY_PREF_STREAM_TAB, tab);
+    cJSON_Delete(req);
+    return api_response_success(ctx, "{}", "Preference saved");
 }
 
 /**
@@ -2198,6 +2237,20 @@ static const api_route_t device_module_routes[] = {
         .method = "POST",
         .path = API_PATH_PREFIX "/device/config/import",
         .handler = device_config_import_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "GET",
+        .path = API_PATH_PREFIX "/device/preference/stream_tab",
+        .handler = device_pref_stream_tab_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "POST",
+        .path = API_PATH_PREFIX "/device/preference/stream_tab",
+        .handler = device_pref_stream_tab_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     }

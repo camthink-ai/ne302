@@ -207,8 +207,62 @@ aicam_result_t rtsp_generate_sdp(char *sdp_buf, uint32_t buf_size,
 /* ==================== Request Handling ==================== */
 
 /**
- * @brief Handle individual RTSP methods
+ * @brief Check if client needs auth; send 401 challenge if so.
+ * @return AICAM_TRUE if auth is OK (or not required), AICAM_FALSE if 401 was sent.
  */
+static aicam_bool_t check_auth_required(rtsp_client_t *client, const char *cseq,
+                                         const char *request)
+{
+    rtsp_service_auth_config_t auth_cfg;
+    rtsp_service_get_auth_config(&auth_cfg);
+
+    if (!auth_cfg.auth_mode[0] || strcmp(auth_cfg.auth_mode, "digest") != 0) {
+        return AICAM_TRUE;
+    }
+
+    if (client->authenticated) {
+        return AICAM_TRUE;
+    }
+
+    /* Client not authenticated — try to verify Authorization header */
+    const char *auth_hdr = rtsp_parse_authorization(request);
+    if (auth_hdr) {
+        static char uri[256];
+        rtsp_parse_uri(request, uri, sizeof(uri));
+
+        const char *method_str = NULL;
+        if (strncmp(request, "SETUP", 5) == 0)      method_str = "SETUP";
+        else if (strncmp(request, "PLAY", 4) == 0)   method_str = "PLAY";
+        else if (strncmp(request, "DESCRIBE", 8) == 0) method_str = "DESCRIBE";
+
+        if (method_str &&
+            rtsp_digest_verify(auth_hdr, method_str,
+                               auth_cfg.username, auth_cfg.password,
+                               client->nonce, "NE301")) {
+            client->authenticated = AICAM_TRUE;
+            return AICAM_TRUE;
+        }
+        /* Bad credentials → 403 */
+        send_simple_response(client->tcp_socket, 403, "Forbidden", cseq, NULL);
+        return AICAM_FALSE;
+    }
+
+    /* No Authorization header → send 401 challenge */
+    static char nonce[65];
+    rtsp_digest_generate_nonce(nonce, sizeof(nonce));
+    rtsp_service_set_client_nonce(client, nonce);
+
+    static char resp_401[512];
+    int len = snprintf(resp_401, sizeof(resp_401),
+        "RTSP/1.0 401 Unauthorized\r\n"
+        "CSeq: %s\r\n"
+        "WWW-Authenticate: Digest realm=\"NE301\", nonce=\"%s\"\r\n"
+        "\r\n",
+        cseq ? cseq : "0", nonce);
+    send_response(client->tcp_socket, resp_401, len);
+    return AICAM_FALSE;
+}
+
 static aicam_result_t handle_options(rtsp_client_t *client, const char *cseq)
 {
     static char resp[512];
@@ -265,6 +319,7 @@ static aicam_result_t handle_describe(rtsp_client_t *client, const char *cseq,
             send_simple_response(client->tcp_socket, 403, "Forbidden", cseq, NULL);
             return AICAM_OK;
         }
+        client->authenticated = AICAM_TRUE;
         LOG_SVC_INFO("RTSP: DESCRIBE auth OK");
     }
 
@@ -321,6 +376,10 @@ static aicam_result_t handle_setup(rtsp_client_t *client, const char *cseq,
                                     const char *request)
 {
     LOG_SVC_INFO("RTSP: SETUP handler, cseq=%s", cseq ? cseq : "NULL");
+
+    if (!check_auth_required(client, cseq, request)) {
+        return AICAM_OK;
+    }
 
     const char *transport = rtsp_parse_transport(request);
     if (!transport) {
@@ -392,6 +451,10 @@ static aicam_result_t handle_play(rtsp_client_t *client, const char *cseq)
     LOG_SVC_INFO("RTSP: PLAY handler, session=%s, rtp_port=%u, sock=%d",
                  client->session_id, client->client_rtp_port, client->rtp_socket);
 
+    if (!check_auth_required(client, cseq, NULL)) {
+        return AICAM_OK;
+    }
+
     if (client->session_id[0] == '\0' || client->client_rtp_port == 0) {
         LOG_SVC_WARN("RTSP: PLAY rejected — no session (session=%s rtp_port=%u)",
                      client->session_id, client->client_rtp_port);
@@ -425,6 +488,10 @@ static aicam_result_t handle_play(rtsp_client_t *client, const char *cseq)
 
 static aicam_result_t handle_teardown(rtsp_client_t *client, const char *cseq)
 {
+    if (!check_auth_required(client, cseq, NULL)) {
+        return AICAM_OK;
+    }
+
     static char resp[256];
     int len = snprintf(resp, sizeof(resp),
         "RTSP/1.0 200 OK\r\n"

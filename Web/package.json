@@ -16,7 +16,7 @@
     "lint:check": "eslint . --ext .ts,.tsx,.js,.jsx --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky",
+    "prepare": "cd .. && node Web/node_modules/husky/bin.js Web/.husky",
     "build:bin": "tsc -b && vite build && node static_to_c_converter.cjs -i ./dist -o ./firmware_assets && node ./scripts/pack_web_assets.cjs"
   },
   "lint-staged": {

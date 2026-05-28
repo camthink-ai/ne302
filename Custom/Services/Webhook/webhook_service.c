@@ -18,6 +18,7 @@
 #include "nn.h"
 #include "cJSON.h"
 #include "device_service.h"
+#include "communication_service.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -166,6 +167,7 @@ static struct {
     osThreadId_t task_handle;
     uint32_t push_count;
     uint32_t fail_count;
+    volatile aicam_bool_t push_in_progress;
 } g_webhook;
 
 static uint8_t webhook_task_stack[WEBHOOK_TASK_STACK] __attribute__((aligned(32))) IN_PSRAM;
@@ -256,6 +258,9 @@ aicam_result_t webhook_service_stop(void)
 
     if (g_webhook.task_handle) {
         osThreadJoin(g_webhook.task_handle);
+        /* osThreadJoin only waits but does NOT release the ThreadX TCB.
+         * osThreadTerminate calls tx_thread_delete to free kernel resources. */
+        osThreadTerminate(g_webhook.task_handle);
         g_webhook.task_handle = NULL;
     }
 
@@ -303,13 +308,26 @@ aicam_result_t webhook_service_push_capture(
     const mqtt_image_metadata_t *metadata,
     const mqtt_ai_result_t *ai_result)
 {
-    if (!jpeg_data || jpeg_size == 0) return AICAM_ERROR_INVALID_PARAM;
+    if (!jpeg_data || jpeg_size == 0) {
+        LOG_SVC_WARN("Webhook push_capture: invalid params (data=%p, size=%lu)",
+                     (const void *)jpeg_data, (unsigned long)jpeg_size);
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    if (!g_webhook.running) {
+        LOG_SVC_ERROR("Webhook push_capture: service not running!");
+        return AICAM_ERROR;
+    }
 
     webhook_config_t cfg;
     if (json_config_get_webhook_config(&cfg) != AICAM_OK || !cfg.enable) {
-        LOG_SVC_DEBUG("Webhook: disabled, skipping push");
+        LOG_SVC_WARN("Webhook push_capture: disabled or config read failed (enable=%d)", cfg.enable);
         return AICAM_ERROR;
     }
+
+    LOG_SVC_INFO("Webhook push_capture: enqueuing %lu bytes, queue count=%lu",
+                 (unsigned long)jpeg_size,
+                 (unsigned long)osMessageQueueGetCount(g_webhook.queue));
 
     webhook_push_msg_t *msg = buffer_calloc(1, sizeof(webhook_push_msg_t));
     if (!msg) {
@@ -339,14 +357,23 @@ aicam_result_t webhook_service_push_capture(
         }
     }
 
+    /* Mark push in progress BEFORE enqueuing — prevents wait_pending from
+     * seeing queue=0 + push_in_progress=0 if the task consumes the message
+     * before wait_pending gets a chance to poll. */
+    g_webhook.push_in_progress = AICAM_TRUE;
+
     osStatus_t status = osMessageQueuePut(g_webhook.queue, &msg, 0, 0);
     if (status != osOK) {
-        LOG_SVC_WARN("Webhook: queue full, dropping push");
+        LOG_SVC_WARN("Webhook: queue put failed (status=%d, count=%lu)",
+                     status, (unsigned long)osMessageQueueGetCount(g_webhook.queue));
+        g_webhook.push_in_progress = AICAM_FALSE;
         if (msg->ai_result_json) cJSON_free(msg->ai_result_json);
         buffer_free(msg);
         return AICAM_ERROR;
     }
 
+    LOG_SVC_INFO("Webhook push_capture: enqueued OK (queue count=%lu)",
+                 (unsigned long)osMessageQueueGetCount(g_webhook.queue));
     return AICAM_OK;
 }
 
@@ -388,6 +415,32 @@ aicam_result_t webhook_service_test_push(void)
     return webhook_do_push(test_jpeg, sizeof(test_jpeg), NULL, NULL);
 }
 
+aicam_result_t webhook_service_wait_pending(uint32_t timeout_ms)
+{
+    if (!g_webhook.running || !g_webhook.queue) {
+        LOG_SVC_WARN("Webhook wait_pending: service not running (running=%d, queue=%p)",
+                     g_webhook.running, (void *)g_webhook.queue);
+        return AICAM_OK;
+    }
+
+    LOG_SVC_INFO("Webhook wait_pending: queue=%lu, push_in_progress=%d, timeout=%lu ms",
+                 (unsigned long)osMessageQueueGetCount(g_webhook.queue),
+                 g_webhook.push_in_progress, (unsigned long)timeout_ms);
+
+    uint32_t start = osKernelGetTickCount();
+    while (osMessageQueueGetCount(g_webhook.queue) > 0 || g_webhook.push_in_progress) {
+        if ((osKernelGetTickCount() - start) >= timeout_ms) {
+            LOG_SVC_WARN("Webhook: wait pending timed out after %lu ms (queue=%lu, push_in_progress=%d)",
+                         (unsigned long)timeout_ms,
+                         (unsigned long)osMessageQueueGetCount(g_webhook.queue),
+                         g_webhook.push_in_progress);
+            return AICAM_ERROR_TIMEOUT;
+        }
+        osDelay(50);
+    }
+    return AICAM_OK;
+}
+
 /* ==================== Push Task ==================== */
 
 static void webhook_push_task(void *arg)
@@ -407,8 +460,34 @@ static void webhook_push_task(void *arg)
         LOG_SVC_INFO("Webhook task: processing %lu bytes",
                      (unsigned long)msg->jpeg_size);
 
+        g_webhook.push_in_progress = AICAM_TRUE;
+
+        /* Wait for network connectivity before push.
+         * After sleep wake-up the interface may not be up yet. */
+        communication_type_t net_type = communication_get_current_type();
+        LOG_SVC_INFO("Webhook: network type=%d", net_type);
+        if (net_type == COMM_TYPE_NONE) {
+            LOG_SVC_INFO("Webhook: network not ready, waiting up to 10s...");
+            uint32_t wait_start = osKernelGetTickCount();
+            while (g_webhook.running &&
+                   communication_get_current_type() == COMM_TYPE_NONE) {
+                if ((osKernelGetTickCount() - wait_start) >= 10000) {
+                    LOG_SVC_WARN("Webhook: network wait timed out (10s)");
+                    break;
+                }
+                osDelay(500);
+            }
+            LOG_SVC_INFO("Webhook: network ready after %lu ms (type=%d)",
+                         (unsigned long)(osKernelGetTickCount() - wait_start),
+                         communication_get_current_type());
+        }
+
         aicam_result_t ret = webhook_do_push(msg->jpeg_data, msg->jpeg_size,
                                               &msg->metadata, msg->ai_result_json);
+        LOG_SVC_INFO("Webhook: push result=%d", ret);
+        g_webhook.push_in_progress = AICAM_FALSE;
+        LOG_SVC_INFO("Webhook: push done (total=%lu, fail=%lu)",
+                     (unsigned long)g_webhook.push_count, (unsigned long)g_webhook.fail_count);
 
         /* Free the JPEG buffer (caller transferred ownership) */
         buffer_free(msg->jpeg_data);

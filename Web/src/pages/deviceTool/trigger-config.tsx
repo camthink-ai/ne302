@@ -57,11 +57,11 @@ type TriggerConfigProps = {
 
 function PIRSkeleton() {
   return (
-    <div className='flex flex-col gap-2 justify-between items-center'>
-      <Skeleton className='w-full h-10 rounded-md'></Skeleton>
-      <Skeleton className='w-full h-10 rounded-md'></Skeleton>
-      <Skeleton className='w-full h-10 rounded-md'></Skeleton>
-      <Skeleton className='w-full h-10 rounded-md'></Skeleton>
+    <div className="flex flex-col gap-2 justify-between items-center">
+      <Skeleton className="w-full h-10 rounded-md"></Skeleton>
+      <Skeleton className="w-full h-10 rounded-md"></Skeleton>
+      <Skeleton className="w-full h-10 rounded-md"></Skeleton>
+      <Skeleton className="w-full h-10 rounded-md"></Skeleton>
     </div>
   );
 }
@@ -70,8 +70,7 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
   const { i18n } = useLingui();
   const { configTriggerConfigReq, getTriggerConfigReq } = deviceTool;
   const [intervalCaptureTime, setIntervalCaptureTime] = useState(10);
-  const [intervalCaptureTimeUnit, setIntervalCaptureTimeUnit] =
-    useState('hour');
+  const [intervalCaptureTimeUnit, setIntervalCaptureTimeUnit] =    useState('hour');
   const [scheduledStartTime, setScheduledStartTime] = useState('08:00');
   const [savePirTriggerLoading, setSavePirTriggerLoading] = useState(false);
   const [PIRLoading, setPIRLoading] = useState(false);
@@ -131,8 +130,8 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
     if (!triggerConfig.timer_trigger) return;
 
     if (
-      (triggerConfig.timer_trigger.interval_sec / 60) % 60 === 0 &&
-      triggerConfig.timer_trigger.interval_sec / 60 / 60 > 0
+      (triggerConfig.timer_trigger.interval_sec / 60) % 60 === 0
+      && triggerConfig.timer_trigger.interval_sec / 60 / 60 > 0
     ) {
       setIntervalCaptureTimeUnit('hour');
       setIntervalCaptureTime(
@@ -214,12 +213,8 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
         )?.[0]
       ) as unknown as string;
     }
-    const newWeekdays = triggerConfig.timer_trigger.weekdays.map((item, i) =>
-      i === index ? Number(weekUnit) : item
-    );
-    const newTimeNode = triggerConfig.timer_trigger.time_node.map((item, i) =>
-      i === index ? timeStr : item
-    );
+    const newWeekdays = triggerConfig.timer_trigger.weekdays.map((item, i) => (i === index ? Number(weekUnit) : item));
+    const newTimeNode = triggerConfig.timer_trigger.time_node.map((item, i) => (i === index ? timeStr : item));
     setTriggerConfig({
       ...triggerConfig,
       timer_trigger: {
@@ -233,8 +228,7 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
 
   const handleIntervalCapture = async () => {
     if (!triggerConfig.timer_trigger) return;
-    const formateTime =
-      intervalCaptureTimeUnit === 'hour'
+    const formateTime =      intervalCaptureTimeUnit === 'hour'
         ? intervalCaptureTime * 60 * 60
         : intervalCaptureTime * 60;
     try {
@@ -349,13 +343,13 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
   };
 
   const intervalCapture = () => (
-    <div className=''>
+    <div className="">
       {/* Interval type selector */}
-      <div className='flex justify-between items-center gap-2 mb-2'>
-        <Label className='text-sm text-text-primary'>
+      <div className="flex justify-between items-center gap-2 mb-2">
+        <Label className="text-sm text-text-primary">
           {i18n._('sys.device_tool.interval_type')}
         </Label>
-        <div className='flex rounded-md border border-gray-200 overflow-hidden'>
+        <div className="flex rounded-md border border-gray-200 overflow-hidden">
           <button
             className={`px-3 py-1.5 text-xs font-medium ${triggerConfig.timer_trigger?.interval_mode !== 'scheduled' ? 'bg-[#f24a00] text-white' : 'bg-white text-gray-500'}`}
             onClick={() => {
@@ -390,16 +384,16 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
       </div>
 
       {/* Interval value */}
-      <div className='flex justify-between items-center gap-2'>
-        <Label className='text-sm text-text-primary'>
+      <div className="flex justify-between items-center gap-2">
+        <Label className="text-sm text-text-primary">
           {i18n._('sys.device_tool.interval_capture')}
         </Label>
-        <div className='flex items-center'>
+        <div className="flex items-center">
           <Input
-            type='number'
+            type="number"
             min={1}
             max={999}
-            className='w-20'
+            className="w-20"
             value={intervalCaptureTime}
             onChange={handleIntervalCaptureTimeChange}
             onBlur={e => {
@@ -416,12 +410,12 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
             value={intervalCaptureTimeUnit}
             onValueChange={handleIntervalCaptureTimeUnitChange}
           >
-            <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+            <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='hour'>{i18n._('common.hour')}</SelectItem>
-              <SelectItem value='minute'>{i18n._('common.minute')}</SelectItem>
+              <SelectItem value="hour">{i18n._('common.hour')}</SelectItem>
+              <SelectItem value="minute">{i18n._('common.minute')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -429,30 +423,30 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
 
       {/* Start time — only for scheduled mode */}
       {triggerConfig.timer_trigger?.interval_mode === 'scheduled' && (
-        <div className='flex justify-between items-center gap-2 mt-2'>
-          <Label className='text-sm text-text-primary'>
+        <div className="flex justify-between items-center gap-2 mt-2">
+          <Label className="text-sm text-text-primary">
             {i18n._('sys.device_tool.start_time')}
           </Label>
           <TimePicker
             value={scheduledStartTime}
             onChange={(value: string) => setScheduledStartTime(value)}
-            className='w-32'
+            className="w-32"
           />
         </div>
       )}
 
       {/* Next capture info — only shown after config is saved to server */}
       {savedNextCaptureAt && triggerConfig.timer_trigger?.enable && (
-        <div className='mt-2 p-2 bg-orange-50 border border-orange-100 rounded-md text-xs text-orange-700 flex justify-between'>
+        <div className="mt-2 p-2 bg-orange-50 border border-orange-100 rounded-md text-xs text-orange-700 flex justify-between">
           <span>{i18n._('sys.device_tool.next_capture')}</span>
-          <span className='font-medium'>
+          <span className="font-medium">
             {new Date(savedNextCaptureAt * 1000).toLocaleString()}
           </span>
         </div>
       )}
 
-      <div className='flex justify-end mt-2'>
-        <Button variant='primary' onClick={handleIntervalCapture}>
+      <div className="flex justify-end mt-2">
+        <Button variant="primary" onClick={handleIntervalCapture}>
           {i18n._('common.confirm')}
         </Button>
       </div>
@@ -474,24 +468,24 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
     });
   };
   const customSlot = (cb: () => void) => (
-    <Button variant='outline' size='sm' onClick={cb}>
+    <Button variant="outline" size="sm" onClick={cb}>
       {i18n._('common.delete')}
     </Button>
   );
 
   const fixedCapture = () => (
-    <div className='mt-2'>
-      <div className='flex justify-between items-center'>
-        <Label className='text-sm text-text-primary'>
+    <div className="mt-2">
+      <div className="flex justify-between items-center">
+        <Label className="text-sm text-text-primary">
           {i18n._('sys.device_tool.capture_mode')}
         </Label>
 
         <Button
           disabled={(triggerConfig.timer_trigger?.time_node_count || 0) >= 10}
-          variant='outline'
+          variant="outline"
           onClick={handleAddIntervalCapture}
         >
-          <SvgIcon icon='add' />
+          <SvgIcon icon="add" />
           {i18n._('common.add')}
         </Button>
       </div>
@@ -501,17 +495,17 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
             showWeekSelect
             customSlot={() => customSlot(() => handleDeleteFixedCapture(index))}
             value={
-              `${WeekUnitMap.get(triggerConfig.timer_trigger?.weekdays?.[index] as unknown as number) || `${i18n._('common.everyday')}`} ${triggerConfig.timer_trigger?.time_node?.[index]}` ||
-              'Everyday 00:00'
+              `${WeekUnitMap.get(triggerConfig.timer_trigger?.weekdays?.[index] as unknown as number) || `${i18n._('common.everyday')}`} ${triggerConfig.timer_trigger?.time_node?.[index]}`
+              || 'Everyday 00:00'
             }
-            className='w-full mt-2'
+            className="w-full mt-2"
             onChange={value => handleCaptureTimeChange(index, value)}
           />
         </div>
       ))}
       {(triggerConfig.timer_trigger?.time_node_count || 0) > 0 && (
-        <div className='flex justify-end mt-2'>
-          <Button variant='primary' onClick={handleFixedCapture}>
+        <div className="flex justify-end mt-2">
+          <Button variant="primary" onClick={handleFixedCapture}>
             {i18n._('common.confirm')}
           </Button>
         </div>
@@ -522,25 +516,25 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
   return (
     <>
       {/* Trigger method */}
-      <p className='text-sm text-text-primary mb-2 font-semibold'>
+      <p className="text-sm text-text-primary mb-2 font-semibold">
         {i18n._('sys.device_tool.trigger')}
       </p>
-      <Card className='bg-gray-50'>
-        <CardContent className=''>
-          <div ref={childeRef} className='w-full h-full '>
-            <div className='flex items-center justify-between'>
-              <div className='flex items-center gap-2'>
-                <Label className='text-sm text-text-primary'>
+      <Card className="bg-gray-50">
+        <CardContent className="">
+          <div ref={childeRef} className="w-full h-full ">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Label className="text-sm text-text-primary">
                   {' '}
                   {i18n._('sys.device_tool.trigger_pir')}
                 </Label>
                 <Tooltip mbEnhance>
                   <TooltipTrigger>
-                    <div className='flex justify-center items-center'>
-                      <SvgIcon className='w-4 h-4' icon='info' />
+                    <div className="flex justify-center items-center">
+                      <SvgIcon className="w-4 h-4" icon="info" />
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent className='max-w-80 text-pretty'>
+                  <TooltipContent className="max-w-80 text-pretty">
                     <p>{i18n._('sys.device_tool.pir_note')}</p>
                   </TooltipContent>
                 </Tooltip>
@@ -548,28 +542,27 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
               <Switch
                 checked={triggerConfig.pir_trigger?.enable || false}
                 onCheckedChange={value => handlePirTriggerChange(value)}
-                aria-label='Toggle theme'
-                className='transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110'
+                aria-label="Toggle theme"
+                className="transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110"
               />
             </div>
             {triggerConfig.pir_trigger?.enable && (
-              <div className='border border-gray-200 border-solid p-4 rounded-md mt-2'>
+              <div className="border border-gray-200 border-solid p-4 rounded-md mt-2">
                 {PIRLoading ? (
                   <PIRSkeleton />
                 ) : (
                   <>
-                    <div className='flex justify-between gap-2 flex-1 pr-0'>
-                      <Label className='text-sm text-text-primary shrink-0'>
+                    <div className="flex justify-between gap-2 flex-1 pr-0">
+                      <Label className="text-sm text-text-primary shrink-0">
                         {' '}
                         {i18n._('sys.device_tool.trigger_type')}
                       </Label>
                       <Select
                         value={
-                          triggerConfig.pir_trigger?.trigger_type ||
-                          'rising_edge'
+                          triggerConfig.pir_trigger?.trigger_type
+                          || 'rising_edge'
                         }
-                        onValueChange={value =>
-                          setTriggerConfig({
+                        onValueChange={value => setTriggerConfig({
                             ...triggerConfig,
                             pir_trigger: {
                               ...triggerConfig.pir_trigger,
@@ -580,68 +573,67 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                                 | 'high_level'
                                 | 'low_level',
                             },
-                          })
-                        }
+                          })}
                       >
-                        <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+                        <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
                           <SelectValue
                             placeholder={i18n._('sys.device_tool.trigger_in')}
                           />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value='rising_edge'>
+                          <SelectItem value="rising_edge">
                             {i18n._('sys.device_tool.rising_edge')}
                           </SelectItem>
-                          <SelectItem value='falling_edge'>
+                          <SelectItem value="falling_edge">
                             {i18n._('sys.device_tool.falling_edge')}
                           </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className='flex justify-between gap-2 flex-1 pr-0'>
-                      <div className='flex items-center gap-2'>
-                        <Label className='text-sm text-text-primary shrink-0'>
+                    <div className="flex justify-between gap-2 flex-1 pr-0">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm text-text-primary shrink-0">
                           {' '}
                           {i18n._('sys.device_tool.sensitivity_level')}
                         </Label>
                         <Tooltip mbEnhance>
                           <TooltipTrigger>
-                            <div className='w-4 flex justify-center items-center'>
-                              <SvgIcon className='w-4 h-4' icon='info' />
+                            <div className="w-4 flex justify-center items-center">
+                              <SvgIcon className="w-4 h-4" icon="info" />
                             </div>
                           </TooltipTrigger>
-                          <TooltipContent className='max-w-80 text-pretty'>
-                            <p className='max-w-80 text-pretty'>
+                          <TooltipContent className="max-w-80 text-pretty">
+                            <p className="max-w-80 text-pretty">
                               {i18n._('sys.device_tool.sensitivity_level_note')}
                             </p>
                           </TooltipContent>
                         </Tooltip>
                       </div>
                       <Input
-                        type='number'
+                        type="number"
                         min={1}
                         max={255}
-                        className='w-20'
+                        className="w-20"
                         value={
                           triggerConfig.pir_trigger?.sensitivity_level || 10
                         }
                         onBlur={e => handlePirTriggerSensitivityLevelBlur(e)}
                       />
                     </div>
-                    <div className='flex justify-between gap-2 flex-1 pr-0'>
-                      <div className='flex items-center gap-2'>
-                        <Label className='text-sm text-text-primary shrink-0'>
+                    <div className="flex justify-between gap-2 flex-1 pr-0">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm text-text-primary shrink-0">
                           {' '}
                           {i18n._('sys.device_tool.ignore_time')}
                         </Label>
                         <Tooltip mbEnhance>
                           <TooltipTrigger>
-                            <div className='w-4 flex justify-center items-center'>
-                              <SvgIcon className='w-4 h-4' icon='info' />
+                            <div className="w-4 flex justify-center items-center">
+                              <SvgIcon className="w-4 h-4" icon="info" />
                             </div>
                           </TooltipTrigger>
-                          <TooltipContent className='max-w-80 text-pretty'>
-                            <p className='max-w-80 text-pretty'>
+                          <TooltipContent className="max-w-80 text-pretty">
+                            <p className="max-w-80 text-pretty">
                               {i18n._('sys.device_tool.ignore_time_note')}
                             </p>
                           </TooltipContent>
@@ -651,17 +643,15 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         value={(
                           triggerConfig.pir_trigger?.ignore_time_s || 0
                         ).toString()}
-                        onValueChange={value =>
-                          setTriggerConfig({
+                        onValueChange={value => setTriggerConfig({
                             ...triggerConfig,
                             pir_trigger: {
                               ...triggerConfig.pir_trigger,
                               ignore_time_s: Number(value),
                             },
-                          })
-                        }
+                          })}
                       >
-                        <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+                        <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
                           <SelectValue
                             placeholder={i18n._('sys.device_tool.trigger_in')}
                           />
@@ -675,20 +665,20 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className='flex justify-between gap-2 flex-1 pr-0'>
-                      <div className='flex items-center gap-2'>
-                        <Label className='text-sm text-text-primary shrink-0'>
+                    <div className="flex justify-between gap-2 flex-1 pr-0">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm text-text-primary shrink-0">
                           {' '}
                           {i18n._('sys.device_tool.pulse_count')}
                         </Label>
                         <Tooltip mbEnhance>
                           <TooltipTrigger>
-                            <div className='w-4 flex justify-center items-center'>
-                              <SvgIcon className='w-4 h-4' icon='info' />
+                            <div className="w-4 flex justify-center items-center">
+                              <SvgIcon className="w-4 h-4" icon="info" />
                             </div>
                           </TooltipTrigger>
-                          <TooltipContent className='max-w-80 text-pretty'>
-                            <p className='max-w-80 text-pretty'>
+                          <TooltipContent className="max-w-80 text-pretty">
+                            <p className="max-w-80 text-pretty">
                               {i18n._('sys.device_tool.pulse_count_note')}
                             </p>
                           </TooltipContent>
@@ -698,17 +688,15 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         value={(
                           triggerConfig.pir_trigger?.pulse_count || 1
                         ).toString()}
-                        onValueChange={value =>
-                          setTriggerConfig({
+                        onValueChange={value => setTriggerConfig({
                             ...triggerConfig,
                             pir_trigger: {
                               ...triggerConfig.pir_trigger,
                               pulse_count: Number(value),
                             },
-                          })
-                        }
+                          })}
                       >
-                        <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+                        <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
                           <SelectValue
                             placeholder={i18n._('sys.device_tool.trigger_in')}
                           />
@@ -725,19 +713,19 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className='flex justify-between gap-2 flex-1 pr-0'>
-                      <div className='flex items-center gap-2'>
-                        <Label className='text-sm text-text-primary shrink-0'>
+                    <div className="flex justify-between gap-2 flex-1 pr-0">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm text-text-primary shrink-0">
                           {' '}
                           {i18n._('sys.device_tool.window_time')}
                         </Label>
                         <Tooltip mbEnhance>
                           <TooltipTrigger>
-                            <div className='w-4 flex justify-center items-center'>
-                              <SvgIcon className='w-4 h-4' icon='info' />
+                            <div className="w-4 flex justify-center items-center">
+                              <SvgIcon className="w-4 h-4" icon="info" />
                             </div>
                           </TooltipTrigger>
-                          <TooltipContent className='max-w-80 text-pretty'>
+                          <TooltipContent className="max-w-80 text-pretty">
                             <p>{i18n._('sys.device_tool.window_time_note')}</p>
                           </TooltipContent>
                         </Tooltip>
@@ -746,17 +734,15 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         value={(
                           triggerConfig.pir_trigger?.window_time_s || 0
                         ).toString()}
-                        onValueChange={value =>
-                          setTriggerConfig({
+                        onValueChange={value => setTriggerConfig({
                             ...triggerConfig,
                             pir_trigger: {
                               ...triggerConfig.pir_trigger,
                               window_time_s: Number(value),
                             },
-                          })
-                        }
+                          })}
                       >
-                        <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+                        <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
                           <SelectValue
                             placeholder={i18n._('sys.device_tool.trigger_in')}
                           />
@@ -770,17 +756,17 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className='flex justify-end mt-2'>
+                    <div className="flex justify-end mt-2">
                       <Button
-                        variant='primary'
+                        variant="primary"
                         disabled={savePirTriggerLoading}
                         onClick={handlePirTriggerSave}
                       >
                         {savePirTriggerLoading ? (
-                          <div className='w-full h-full flex items-center justify-center'>
+                          <div className="w-full h-full flex items-center justify-center">
                             <div
-                              className='w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin'
-                              aria-label='loading'
+                              className="w-4 h-4 rounded-full border-2 border-[#f24a00] border-t-transparent animate-spin"
+                              aria-label="loading"
                             />
                           </div>
                         ) : (
@@ -792,21 +778,21 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                 )}
               </div>
             )}
-            <Separator className='my-2' />
-            <div className=''>
-              <div className='flex items-center  justify-between'>
-                <div className='flex items-center gap-2'>
-                  <Label className='text-sm text-text-primary'>
+            <Separator className="my-2" />
+            <div className="">
+              <div className="flex items-center  justify-between">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm text-text-primary">
                     {' '}
                     {i18n._('sys.device_tool.remote_control')}
                   </Label>
                   <Tooltip mbEnhance>
                     <TooltipTrigger>
-                      <div className='w-4 flex justify-center items-center'>
-                        <SvgIcon className='w-4 h-4' icon='info' />
+                      <div className="w-4 flex justify-center items-center">
+                        <SvgIcon className="w-4 h-4" icon="info" />
                       </div>
                     </TooltipTrigger>
-                    <TooltipContent className='max-w-80 text-pretty'>
+                    <TooltipContent className="max-w-80 text-pretty">
                       <p>{i18n._('sys.device_tool.remote_control_note')}</p>
                     </TooltipContent>
                   </Tooltip>
@@ -814,26 +800,26 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                 <Switch
                   checked={triggerConfig.remote_trigger?.enable || false}
                   onCheckedChange={value => handleRemoteTriggerChange(value)}
-                  aria-label='Toggle theme'
-                  className='transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110'
+                  aria-label="Toggle theme"
+                  className="transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110"
                 />
               </div>
             </div>
-            <Separator className='my-2' />
-            <div className=''>
-              <div className='flex items-center  justify-between'>
-                <div className='flex items-center gap-2'>
-                  <Label className='text-sm text-text-primary'>
+            <Separator className="my-2" />
+            <div className="">
+              <div className="flex items-center  justify-between">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm text-text-primary">
                     {' '}
                     {i18n._('sys.device_tool.schedule')}
                   </Label>
                   <Tooltip mbEnhance>
                     <TooltipTrigger>
-                      <div className='w-4 flex justify-center items-center'>
-                        <SvgIcon className='w-4 h-4' icon='info' />
+                      <div className="w-4 flex justify-center items-center">
+                        <SvgIcon className="w-4 h-4" icon="info" />
                       </div>
                     </TooltipTrigger>
-                    <TooltipContent className='max-w-80 text-pretty'>
+                    <TooltipContent className="max-w-80 text-pretty">
                       <p>{i18n._('sys.device_tool.timing_capture_note')}</p>
                     </TooltipContent>
                   </Tooltip>
@@ -841,51 +827,49 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
                 <Switch
                   checked={triggerConfig.timer_trigger?.enable || false}
                   onCheckedChange={value => handleTimerTriggerChange(value)}
-                  aria-label='Toggle theme'
-                  className='transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110'
+                  aria-label="Toggle theme"
+                  className="transition-all duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] hover:scale-110"
                 />
               </div>
             </div>
             {triggerConfig.timer_trigger?.enable && (
-              <div className='border border-gray-200 border-solid p-4 rounded-md mt-2'>
-                <div className='flex items-center  justify-between'>
-                  <Label className='text-sm text-text-primary'>
+              <div className="border border-gray-200 border-solid p-4 rounded-md mt-2">
+                <div className="flex items-center  justify-between">
+                  <Label className="text-sm text-text-primary">
                     {i18n._('sys.device_tool.capture_mode')}
                   </Label>
                   <Select
                     value={
                       triggerConfig.timer_trigger?.capture_mode || 'interval'
                     }
-                    onValueChange={value =>
-                      setTriggerConfig({
+                    onValueChange={value => setTriggerConfig({
                         ...triggerConfig,
                         timer_trigger: {
                           ...triggerConfig.timer_trigger,
                           capture_mode: value,
                         },
-                      })
-                    }
+                      })}
                   >
-                    <SelectTrigger className='border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent'>
+                    <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 focus-visible:border-transparent">
                       <SelectValue
                         placeholder={i18n._('sys.device_tool.trigger_in')}
                       />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value='interval'>
+                      <SelectItem value="interval">
                         {i18n._('sys.device_tool.interval_capture')}
                       </SelectItem>
-                      <SelectItem value='once'>
+                      <SelectItem value="once">
                         {i18n._('sys.device_tool.fixed_capture')}
                       </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 {/* Mode parameter options */}
-                {triggerConfig.timer_trigger?.capture_mode === 'interval' &&
-                  intervalCapture()}
-                {triggerConfig.timer_trigger?.capture_mode === 'once' &&
-                  fixedCapture()}
+                {triggerConfig.timer_trigger?.capture_mode === 'interval'
+                  && intervalCapture()}
+                {triggerConfig.timer_trigger?.capture_mode === 'once'
+                  && fixedCapture()}
               </div>
             )}
           </div>

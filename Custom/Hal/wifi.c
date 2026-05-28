@@ -723,7 +723,6 @@ void wifi_enter_update_mode(void)
 {
     storage_nvs_write(NVS_FACTORY, NVS_KEY_WIFI_MODE, WIFI_MODE_UPDATE, strlen(WIFI_MODE_UPDATE));
     LOG_SIMPLE("wifi update, System reset...\r\n");
-    storage_nvs_flush_all();
     osDelay(200);
 #if ENABLE_U0_MODULE
     u0_module_clear_wakeup_flag();
@@ -742,7 +741,6 @@ static int wifi_test_cmd(int argc, char* argv[])
 {
     storage_nvs_write(NVS_FACTORY, NVS_KEY_WIFI_MODE, WIFI_MODE_TX_TEST, strlen(WIFI_MODE_TX_TEST));
     LOG_SIMPLE("wifi test, System reset...\r\n");
-    storage_nvs_flush_all();
     osDelay(200);
 #if ENABLE_U0_MODULE
     u0_module_clear_wakeup_flag();

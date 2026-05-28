@@ -45,6 +45,13 @@ aicam_result_t webhook_service_push_capture(
  */
 aicam_result_t webhook_service_test_push(void);
 
+/**
+ * @brief Wait until all queued webhook pushes complete
+ * @param timeout_ms Maximum wait time in milliseconds
+ * @return AICAM_OK if all pushes completed, AICAM_ERROR_TIMEOUT on timeout
+ */
+aicam_result_t webhook_service_wait_pending(uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

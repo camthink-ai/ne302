@@ -49,7 +49,7 @@ function getProjectVersion(): string {
       
       // Append suffix if present
       return suffix ? `${version}_${suffix}` : version;
-    } catch (error) {
+    } catch {
       console.warn('Failed to read version.mk, falling back to package.json');
     }
   }

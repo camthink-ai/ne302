@@ -394,6 +394,7 @@
       "update_loading": "Burning firmware, please wait",
       "please_select_firmware_file": "Please upload firmware file",
       "update_success": "Firmware burned successfully",
+      "device_restarting": "Device is restarting, please refresh the page later",
       "firmware_file_uploading": "Firmware file uploading",
       "no_network": "No network detected, please refresh the network",
       "firmware_upgrade_success": "Firmware burned successfully, please reconnect to the device",

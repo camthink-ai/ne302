@@ -79,14 +79,23 @@ request.interceptors.response.use(
     if (data.error_code === 'UNAUTHORIZED' && window.location.pathname.includes('/login') && window.location.pathname !== '/') {
       return Promise.reject(response)
     }
-    toast.error(i18n._(`errors.business.${data.error_code}`))
+    if (!response.config?.skipErrorToast) {
+      toast.error(i18n._(`errors.business.${data.error_code}`))
+    }
     return Promise.reject(response)
   },
   (error) => {
+    const isCanceled = axios.isCancel(error) || error.code === 'ERR_CANCELED'
+    if (isCanceled) {
+      return Promise.reject(error)
+    }
+    const skipErrorToast = error.config?.skipErrorToast
     if (!error.response) {
       const errorMessage = String(error)
-      debouncedTimeoutError(errorMessage)
-      return Promise.reject(new Error(error))
+      if (!skipErrorToast) {
+        debouncedTimeoutError(errorMessage)
+      }
+      return Promise.reject(error)
     }
     const { status } = error.response
     switch (status) {
@@ -95,20 +104,28 @@ request.interceptors.response.use(
         localStorage.removeItem('token')
         // 'login route
         if (!window.location.pathname.includes('/login') && window.location.pathname !== '/') {
-          toast.error(i18n._('errors.http.401'))
+          if (!skipErrorToast) {
+            toast.error(i18n._('errors.http.401'))
+          }
           window.location.href = '/login'
         }
         return Promise.reject(error.response)
       case 403:
-        toast.error(i18n._('errors.http.403'))
+        if (!skipErrorToast) {
+          toast.error(i18n._('errors.http.403'))
+        }
         return Promise.reject(error.response)
 
       case 404:
-        toast.error(i18n._('errors.http.404'))
+        if (!skipErrorToast) {
+          toast.error(i18n._('errors.http.404'))
+        }
         return Promise.reject(error.response)
 
       case 500:
-        debouncedTimeoutError(i18n._('errors.http.500'))
+        if (!skipErrorToast) {
+          debouncedTimeoutError(i18n._('errors.http.500'))
+        }
         return Promise.reject(error.response)
 
       default: {

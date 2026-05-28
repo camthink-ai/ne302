@@ -4,6 +4,8 @@
 #include "common_utils.h"
 #include "upgrade_manager.h"
 #include "crc.h"
+#include "iwdg.h"
+#include "tx_api.h"
 
 #define LFS_LOCK(sys)   do{ if ((sys)->thread_safe && (sys)->lock) (sys)->lock(); }while(0)
 #define LFS_UNLOCK(sys) do{ if ((sys)->thread_safe && (sys)->unlock) (sys)->unlock(); }while(0)
@@ -17,22 +19,6 @@ const osThreadAttr_t storageTask_attributes = {
     .stack_mem = storage_tread_stack,
     .stack_size = sizeof(storage_tread_stack),
 };
-
-// NVS sync thread stack and attributes
-static uint8_t nvs_sync_thread_stack[1024 * 4] ALIGN_32 IN_PSRAM;
-const osThreadAttr_t nvsSyncTask_attributes = {
-    .name = "nvsSyncTask",
-    .priority = (osPriority_t) osPriorityBelowNormal,
-    .stack_mem = nvs_sync_thread_stack,
-    .stack_size = sizeof(nvs_sync_thread_stack),
-};
-
-/* Forward declarations for NVS cache functions */
-static void storage_nvs_cache_init(nvs_cache_t *cache);
-static void nvs_sync_thread(void *arg);
-static void nvs_sync_timer_callback(void *arg);
-static nvs_cache_entry_t* nvs_cache_find(nvs_cache_t *cache, const char *key);
-static nvs_cache_entry_t* nvs_cache_alloc(nvs_cache_t *cache, const char *key);
 
 /* Block device operations simulating Flash characteristics */
 // Check if programming operation is allowed (conforms to Flash characteristics)
@@ -501,45 +487,76 @@ int storage_flash_erase(uint32_t offset, size_t num_blk)
     }
 
     LOG_DRV_DEBUG("storage_flash_erase offset %u, num_blk %u\r\n", offset, num_blk);
+
+    // For large OTA erases, protect I-cache by locking preemption during MM-disabled phase.
+    // Code runs from XSPI flash (XIP). When memory-mapped mode is disabled for erase,
+    // only I-cache serves instruction fetches. If other tasks run and evict the erase loop,
+    // the CPU faults when trying to fetch from flash with MM disabled.
+    // Strategy: lock preemption during erase batches (MM disabled), briefly unlock between
+    // batches (MM re-enabled) to let network stack send TCP ACKs and prevent connection timeout.
+    const size_t PREEMPTION_LOCK_THRESHOLD = 128;
+    aicam_bool_t lock_preemption = (num_blk >= PREEMPTION_LOCK_THRESHOLD);
+
+    TX_THREAD *self = NULL;
+    UINT old_threshold = 0;
+    if (lock_preemption) {
+        self = tx_thread_identify();
+        if (self) {
+            tx_thread_preemption_change(self, 0, &old_threshold);
+        }
+    }
+
     storage_lock();
     XSPI_NOR_DisableMemoryMappedMode();
-    
-    // For large erase operations, periodically yield CPU to prevent system freeze
-    // This is critical for OTA upgrades of large firmware files
-    const size_t YIELD_INTERVAL = 16;  // Yield every 16 blocks (~64KB, ~320-1600ms)
-    
+
+    const size_t YIELD_INTERVAL = 16;
+
     for (size_t i = 0; i < num_blk; i++) {
         if (XSPI_NOR_Erase4K(offset + i * FLASH_BLOCK_SIZE) != 0) {
             XSPI_NOR_EnableMemoryMappedMode();
             storage_unlock();
+            if (lock_preemption && self) {
+                tx_thread_preemption_change(self, old_threshold, &old_threshold);
+            }
             LOG_DRV_ERROR("storage_flash_erase failed at block %u\r\n", i);
             return -1;
         }
-        
-        // Periodically yield CPU to prevent watchdog timeout and allow other tasks to run
-        // This is especially important for large OTA upgrades (e.g., 10MB = 2560 blocks)
+
         if ((i + 1) % YIELD_INTERVAL == 0 || i == num_blk - 1) {
-            // Re-enable memory mapped mode temporarily to allow other operations
+            // Re-enable MM — flash access is now safe for other tasks
             XSPI_NOR_EnableMemoryMappedMode();
             storage_unlock();
-            
-            // Yield CPU to other tasks (prevents watchdog timeout and allows network/other tasks)
-            osDelay(5);  // 5ms delay to allow task switching
-            
-            // Re-acquire lock and disable memory mapped mode for next erase
-            storage_lock();
-            XSPI_NOR_DisableMemoryMappedMode();
-            
-            // Log progress for large operations
-            if (num_blk > 64) {  
-                LOG_DRV_DEBUG("storage_flash_erase progress: %u/%u blocks (%.1f%%)\r\n", 
+
+            HAL_IWDG_Refresh(&hiwdg);
+
+            if (lock_preemption && self) {
+                // Briefly allow network stack to process TCP ACKs (prevent connection timeout).
+                // MM is enabled so other tasks can safely access flash.
+                // Keep window short (1ms) to minimize I-cache pressure on the erase loop.
+                tx_thread_preemption_change(self, old_threshold, &old_threshold);
+                osDelay(1);
+                tx_thread_preemption_change(self, 0, &old_threshold);
+            } else {
+                osDelay(5);
+            }
+
+            if (num_blk > 64) {
+                LOG_DRV_DEBUG("storage_flash_erase progress: %u/%u blocks (%.1f%%)\r\n",
                        i + 1, num_blk, ((float)(i + 1) * 100.0f / num_blk));
             }
+
+            storage_lock();
+            XSPI_NOR_DisableMemoryMappedMode();
         }
     }
-    
+
     XSPI_NOR_EnableMemoryMappedMode();
     storage_unlock();
+
+    if (lock_preemption && self) {
+        tx_thread_preemption_change(self, old_threshold, &old_threshold);
+    }
+
     LOG_DRV_DEBUG("storage_flash_erase end\r\n");
     return 0;
 }
@@ -748,33 +765,6 @@ int storage_init(void *priv)
         HAL_NVIC_SystemReset();
         return ret;
     }
-    
-    // Initialize NVS cache
-    storage_nvs_cache_init(&storage->nvs_user_cache);
-    LOG_DRV_DEBUG("NVS cache initialized (%d entries)\r\n", NVS_CACHE_SIZE);
-    
-    // Create semaphore for NVS sync thread
-    storage->nvs_sync_sem = osSemaphoreNew(1, 0, NULL);
-    if (storage->nvs_sync_sem == NULL) {
-        LOG_DRV_ERROR("Failed to create NVS sync semaphore\r\n");
-    }
-    
-    // Create NVS sync background thread
-    storage->nvs_sync_thread = osThreadNew(nvs_sync_thread, NULL, &nvsSyncTask_attributes);
-    if (storage->nvs_sync_thread == NULL) {
-        LOG_DRV_ERROR("Failed to create NVS sync thread\r\n");
-    } else {
-        LOG_DRV_DEBUG("NVS sync thread created\r\n");
-    }
-    
-    // Create periodic timer to trigger sync every 30 seconds
-    storage->nvs_sync_timer = osTimerNew(nvs_sync_timer_callback, osTimerPeriodic, NULL, NULL);
-    if (storage->nvs_sync_timer != NULL) {
-        osTimerStart(storage->nvs_sync_timer, 30000);  // 30 seconds
-        LOG_DRV_DEBUG("NVS sync timer started (30s interval)\r\n");
-    } else {
-        LOG_DRV_ERROR("Failed to create NVS sync timer\r\n");
-    }
 
     ret = lfs_mem_init(&storage->lfs_sys, FS_FLASH_OFFSET, FS_FLASH_SIZE , FS_FLASH_BLK, 10000, storage_lock, storage_unlock);
     if(ret !=0){
@@ -901,257 +891,6 @@ void storage_nvs_dump(NVS_Type_t type)
         hal_mem_free(buf);
     }
     nvs_release_iterator(&it);
-}
-
-// ==================== NVS Cache Implementation ====================
-
-// Initialize NVS cache
-static void storage_nvs_cache_init(nvs_cache_t *cache)
-{
-    memset(cache->entries, 0, sizeof(cache->entries));
-    cache->has_dirty = false;
-    cache->cache_mutex = osMutexNew(NULL);
-}
-
-// Find cache entry by key
-static nvs_cache_entry_t* nvs_cache_find(nvs_cache_t *cache, const char *key)
-{
-    for (int i = 0; i < NVS_CACHE_SIZE; i++) {
-        if (cache->entries[i].valid && strcmp(cache->entries[i].key, key) == 0) {
-            cache->entries[i].last_access_tick = osKernelGetTickCount();
-            return &cache->entries[i];
-        }
-    }
-    return NULL;
-}
-
-// Allocate cache entry (LRU replacement policy)
-static nvs_cache_entry_t* nvs_cache_alloc(nvs_cache_t *cache, const char *key)
-{
-    int victim_idx = -1;
-    uint32_t oldest_tick = UINT32_MAX;
-    
-    // 1. Find free entry first
-    for (int i = 0; i < NVS_CACHE_SIZE; i++) {
-        if (!cache->entries[i].valid) {
-            victim_idx = i;
-            break;
-        }
-        // Track oldest entry for LRU replacement
-        if (cache->entries[i].last_access_tick < oldest_tick) {
-            oldest_tick = cache->entries[i].last_access_tick;
-            victim_idx = i;
-        }
-    }
-    
-    if (victim_idx < 0) {
-        return NULL;  // Should not happen
-    }
-    
-    nvs_cache_entry_t *entry = &cache->entries[victim_idx];
-    
-    // 2. Write back dirty entry before eviction
-    if (entry->valid && entry->dirty) {
-        LOG_DRV_DEBUG("NVS cache evict dirty entry: %s\r\n", entry->key);
-        storage_nvs_write(NVS_USER, entry->key, entry->data, entry->len);
-    }
-    
-    // 3. Initialize new entry
-    memset(entry, 0, sizeof(nvs_cache_entry_t));
-    strncpy(entry->key, key, sizeof(entry->key) - 1);
-    entry->valid = true;
-    entry->last_access_tick = osKernelGetTickCount();
-    return entry;
-}
-
-// Write with cache support
-int storage_nvs_write_cached(NVS_Type_t type, const char *key, const void *data, size_t len)
-{
-    // Factory partition doesn't use cache, write directly
-    if (type == NVS_FACTORY) {
-        return storage_nvs_write(type, key, data, len);
-    }
-    
-    // Data too large, bypass cache and write directly
-    if (len > NVS_CACHE_MAX_DATA_SIZE) {
-        return storage_nvs_write(type, key, data, len);
-    }
-    
-    if (!g_storage.is_init) {
-        return -1;
-    }
-    
-    nvs_cache_t *cache = &g_storage.nvs_user_cache;
-    osMutexAcquire(cache->cache_mutex, osWaitForever);
-    
-    // Find existing cache entry
-    nvs_cache_entry_t *entry = nvs_cache_find(cache, key);
-    
-    if (entry) {
-        // Data unchanged, skip unnecessary write
-        if (entry->len == len && memcmp(entry->data, data, len) == 0) {
-            osMutexRelease(cache->cache_mutex);
-            return 0;
-        }
-        
-        // Update cache
-        memcpy(entry->data, data, len);
-        entry->len = len;
-        entry->dirty = true;
-        cache->has_dirty = true;
-        
-        osMutexRelease(cache->cache_mutex);
-        LOG_DRV_DEBUG("NVS cache update: %s\r\n", key);
-        return 0;
-    }
-    
-    // Allocate new cache entry
-    entry = nvs_cache_alloc(cache, key);
-    if (entry) {
-        memcpy(entry->data, data, len);
-        entry->len = len;
-        entry->dirty = true;
-        cache->has_dirty = true;
-        
-        osMutexRelease(cache->cache_mutex);
-        LOG_DRV_DEBUG("NVS cache add: %s\r\n", key);
-        return 0;
-    }
-    
-    // Cache full, write directly to Flash
-    osMutexRelease(cache->cache_mutex);
-    LOG_DRV_DEBUG("NVS cache full, direct write: %s\r\n", key);
-    return storage_nvs_write(type, key, data, len);
-}
-
-// Read with cache support
-int storage_nvs_read_cached(NVS_Type_t type, const char *key, void *data, size_t len)
-{
-    // Factory partition doesn't use cache
-    if (type == NVS_FACTORY) {
-        return storage_nvs_read(type, key, data, len);
-    }
-    
-    if (!g_storage.is_init) {
-        return -1;
-    }
-    
-    nvs_cache_t *cache = &g_storage.nvs_user_cache;
-    osMutexAcquire(cache->cache_mutex, osWaitForever);
-    
-    // Find cache entry
-    nvs_cache_entry_t *entry = nvs_cache_find(cache, key);
-    if (entry) {
-        size_t copy_len = entry->len < len ? entry->len : len;
-        memcpy(data, entry->data, copy_len);
-        osMutexRelease(cache->cache_mutex);
-        LOG_DRV_DEBUG("NVS cache hit: %s\r\n", key);
-        return (int)copy_len;
-    }
-    
-    osMutexRelease(cache->cache_mutex);
-    
-    // Cache miss, read from Flash
-    int ret = storage_nvs_read(type, key, data, len);
-    
-    // Load into cache if read successful and data size is suitable
-    if (ret > 0 && ret <= NVS_CACHE_MAX_DATA_SIZE) {
-        osMutexAcquire(cache->cache_mutex, osWaitForever);
-        entry = nvs_cache_alloc(cache, key);
-        if (entry) {
-            memcpy(entry->data, data, ret);
-            entry->len = ret;
-            entry->dirty = false;
-            LOG_DRV_DEBUG("NVS cache load: %s\r\n", key);
-        }
-        osMutexRelease(cache->cache_mutex);
-    }
-    
-    return ret;
-}
-
-// Flush all dirty cache entries to Flash for specified partition
-int storage_nvs_flush(NVS_Type_t type)
-{
-    if (type == NVS_FACTORY) {
-        return 0;  // Factory partition doesn't use cache
-    }
-    
-    if (!g_storage.is_init) {
-        return -1;
-    }
-    
-    nvs_cache_t *cache = &g_storage.nvs_user_cache;
-    
-    if (!cache->has_dirty) {
-        return 0;  // No dirty data to flush
-    }
-    
-    osMutexAcquire(cache->cache_mutex, osWaitForever);
-    
-    int flush_count = 0;
-    for (int i = 0; i < NVS_CACHE_SIZE; i++) {
-        if (cache->entries[i].valid && cache->entries[i].dirty) {
-            int ret = storage_nvs_write(NVS_USER, cache->entries[i].key, 
-                                       cache->entries[i].data, cache->entries[i].len);
-            if (ret >= 0) {
-                cache->entries[i].dirty = false;
-                flush_count++;
-            } else {
-                LOG_DRV_ERROR("NVS flush failed for key: %s\r\n", cache->entries[i].key);
-            }
-        }
-    }
-    
-    cache->has_dirty = false;
-    
-    osMutexRelease(cache->cache_mutex);
-    
-    if (flush_count > 0) {
-        LOG_DRV_DEBUG("NVS flush: %d entries written to Flash\r\n", flush_count);
-    }
-    return flush_count;
-}
-
-// Flush all partitions' cache
-int storage_nvs_flush_all(void)
-{
-    return storage_nvs_flush(NVS_USER);
-}
-
-// Trigger NVS sync asynchronously (wake up background thread)
-void storage_nvs_sync_trigger(void)
-{
-    if (g_storage.is_init && g_storage.nvs_sync_sem != NULL) {
-        osSemaphoreRelease(g_storage.nvs_sync_sem);
-    }
-}
-
-// NVS sync background thread
-static void nvs_sync_thread(void *arg)
-{
-    (void)arg;
-    LOG_DRV_DEBUG("NVS sync thread started\r\n");
-    
-    while (1) {
-        // Wait for semaphore signal (from timer or manual trigger)
-        if (osSemaphoreAcquire(g_storage.nvs_sync_sem, osWaitForever) == osOK) {
-            if (g_storage.is_init) {
-                // Execute flush in background thread context
-                storage_nvs_flush_all();
-            }
-        }
-    }
-}
-
-// Periodic sync timer callback - just signal the thread
-static void nvs_sync_timer_callback(void *arg)
-{
-    (void)arg;
-    if (g_storage.is_init && g_storage.nvs_sync_sem != NULL) {
-        // Wake up sync thread by releasing semaphore
-        osSemaphoreRelease(g_storage.nvs_sync_sem);
-    }
 }
 
 void storage_lock(void)

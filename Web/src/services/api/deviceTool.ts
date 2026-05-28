@@ -91,29 +91,24 @@ const deviceTool = {
   // Get work mode status
   getWorkModeStatusReq: () => request.get('/api/v1/work-mode/status'),
   // Switch work mode
-  switchWorkModeReq: (data: WorkModeSwitchReq) =>
-    request.post('/api/v1/work-mode/switch', data),
+  switchWorkModeReq: (data: WorkModeSwitchReq) => request.post('/api/v1/work-mode/switch', data),
 
   // Configure video stream push
-  configVideoStreamPushReq: (data: VideoStreamPushReq) =>
-    request.post('/api/v1/work-mode/video-stream/config', data),
+  configVideoStreamPushReq: (data: VideoStreamPushReq) => request.post('/api/v1/work-mode/video-stream/config', data),
 
   // Configure image mode trigger
-  configTriggerConfigReq: (data: PirConfigReq) =>
-    request.post('/api/v1/work-mode/triggers', data),
+  configTriggerConfigReq: (data: PirConfigReq) => request.post('/api/v1/work-mode/triggers', data),
 
   getTriggerConfigReq: () => request.get('/api/v1/work-mode/triggers'),
 
   // Switch power mode
-  switchPowerModeReq: (data: { mode: string }) =>
-    request.post('api/v1/power-mode/switch', data),
+  switchPowerModeReq: (data: { mode: string }) => request.post('api/v1/power-mode/switch', data),
   getPowerModeReq: () => request.get('api/v1/power-mode/status'),
   // -----------------
 
   // Get AI status
   getAiStatusReq: () => request.get('/api/v1/ai/status'),
-  toggleAiReq: (data: { ai_enabled: boolean }) =>
-    request.post('/api/v1/ai/toggle', data),
+  toggleAiReq: (data: { ai_enabled: boolean }) => request.post('/api/v1/ai/toggle', data),
   getTriggerMethodReq: () => request.get('/api/v1/trigger-method/status'),
 
   // AI parameters
@@ -121,26 +116,26 @@ const deviceTool = {
   setAiParamsReq: (data: AiParams) => request.post('/api/v1/ai/params', data),
 
   // Photo capture
-  photoCaptureReq: (data: PhotoCaptureReq) =>
-    request.post('/api/v1/device/capture', data),
+  photoCaptureReq: (data: PhotoCaptureReq) => request.post('/api/v1/device/capture', data),
 
   // RTMP
   getRtmpConfigReq: () => request.get('/api/v1/apps/rtmp/config'),
-  setRtmpConfigReq: (data: RtmpConfigReq) =>
-    request.post('/api/v1/apps/rtmp/config', data),
-  startRtmpReq: (data: RtmpStartReq) =>
-    request.post('/api/v1/apps/rtmp/start', data),
+  setRtmpConfigReq: (data: RtmpConfigReq) => request.post('/api/v1/apps/rtmp/config', data),
+  startRtmpReq: (data: RtmpStartReq) => request.post('/api/v1/apps/rtmp/start', data),
   stopRtmpReq: () => request.post('/api/v1/apps/rtmp/stop'),
   getRtmpStatusReq: () => request.get('/api/v1/apps/rtmp/status'),
 
   // RTSP
   getRtspConfigReq: () => request.get('/api/v1/apps/rtsp/config'),
-  setRtspConfigReq: (data: RtspConfigReq) =>
-    request.put('/api/v1/apps/rtsp/config', data),
+  setRtspConfigReq: (data: RtspConfigReq) => request.put('/api/v1/apps/rtsp/config', data),
   getRtspStatusReq: () => request.get('/api/v1/apps/rtsp/status'),
   getRtspClientsReq: () => request.get('/api/v1/apps/rtsp/clients'),
-  kickRtspClientReq: (id: string) =>
-    request.delete(`/api/v1/apps/rtsp/clients/${id}`),
+  kickRtspClientReq: (id: string) => request.delete(`/api/v1/apps/rtsp/clients/${id}`),
+
+  getStreamTabPrefReq: () =>
+    request.get('/api/v1/device/preference/stream_tab'),
+  setStreamTabPrefReq: (data: { stream_tab: string }) =>
+    request.post('/api/v1/device/preference/stream_tab', data),
 
   // // PIR
   // getPirConfigReq: () => request.get('/api/v1/work-mode/triggers'),
