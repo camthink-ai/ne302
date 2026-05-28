@@ -640,14 +640,14 @@ void SPI6_IRQHandler(void)
   /* USER CODE END SPI6_IRQn 0 */
   /* SPI6 is shared between SPI mode (TFT) and I2S mode (audio).
    * Dispatch to the correct HAL handler based on which is active. */
-  if (hi2s6.State != HAL_I2S_STATE_RESET)
-  {
-    HAL_I2S_IRQHandler(&hi2s6);
-  }
-  else
-  {
+  // if (hi2s6.State != HAL_I2S_STATE_RESET)
+  // {
+  //   HAL_I2S_IRQHandler(&hi2s6);
+  // }
+  // else
+  // {
     HAL_SPI_IRQHandler(&hspi6);
-  }
+  // }
   /* USER CODE BEGIN SPI6_IRQn 1 */
 
   /* USER CODE END SPI6_IRQn 1 */

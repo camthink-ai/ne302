@@ -791,6 +791,37 @@ morse_error_t morse_trns_start(struct driver_data *driverd)
         goto exit;
     }
 
+    morse_trns_claim(driverd);
+
+    result = morse_cmd52_write(SDIO_CCCR_IEN_ADDR,
+                               SDIO_CCCR_IEN_IENM | SDIO_CCCR_IEN_IEN1,
+                               MMHAL_SDIO_FUNCTION_0);
+    if (result != MORSE_SUCCESS)
+    {
+        goto exit_cccr;
+    }
+
+    result = morse_cmd52_read(SDIO_CCCR_BIC_ADDR, &bic, MMHAL_SDIO_FUNCTION_0);
+    if (result != MORSE_SUCCESS)
+    {
+        goto exit_cccr;
+    }
+
+    bic |= SDIO_CCCR_BIC_ECSI;
+
+    result = morse_cmd52_write(SDIO_CCCR_BIC_ADDR, bic, MMHAL_SDIO_FUNCTION_0);
+    if (result != MORSE_SUCCESS)
+    {
+        goto exit_cccr;
+    }
+
+exit_cccr:
+    morse_trns_release(driverd);
+    if (result != MORSE_SUCCESS)
+    {
+        goto exit;
+    }
+
     spi_irq_task_run = true;
     spi_irq_task_has_finished = false;
 
@@ -804,29 +835,6 @@ morse_error_t morse_trns_start(struct driver_data *driverd)
         result = MORSE_FAILED;
         goto exit;
     }
-
-    result = morse_cmd52_write(SDIO_CCCR_IEN_ADDR,
-                               SDIO_CCCR_IEN_IENM | SDIO_CCCR_IEN_IEN1,
-                               MMHAL_SDIO_FUNCTION_0);
-    if (result != MORSE_SUCCESS)
-    {
-        goto exit;
-    }
-
-    result = morse_cmd52_read(SDIO_CCCR_BIC_ADDR, &bic, MMHAL_SDIO_FUNCTION_0);
-    if (result != MORSE_SUCCESS)
-    {
-        goto exit;
-    }
-
-    bic |= SDIO_CCCR_BIC_ECSI;
-
-    result = morse_cmd52_write(SDIO_CCCR_BIC_ADDR, bic, MMHAL_SDIO_FUNCTION_0);
-    if (result != MORSE_SUCCESS)
-    {
-        goto exit;
-    }
-
 
     mmhal_wlan_register_spi_irq_handler(morse_spi_irq_handler);
 

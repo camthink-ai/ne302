@@ -346,13 +346,34 @@ void StartMainTask(void *argument)
     }
 
     // Step 5: Service initialization
-    step_start_time_ms = rtc_get_uptime_ms();
-    service_init();
-    step_end_time_ms = rtc_get_uptime_ms();
-    step_duration_ms = step_end_time_ms - step_start_time_ms;
-    printf("[BOOT] Step 5 - service_init: %lu ms\r\n", (unsigned long)step_duration_ms);
+    // step_start_time_ms = rtc_get_uptime_ms();
+    // service_init();
+    // step_end_time_ms = rtc_get_uptime_ms();
+    // step_duration_ms = step_end_time_ms - step_start_time_ms;
+    // printf("[BOOT] Step 5 - service_init: %lu ms\r\n", (unsigned long)step_duration_ms);
     
-    // printf("[MAIN] All systems initialized successfully\r\n");
+    printf("[MAIN] All systems initialized successfully\r\n");
+
+    pwr_manager_acquire(pwr_manager_get_handle(PWR_CAT1_NAME));
+    // osDelay(3000);
+
+    extern void mm_halow_component_start(void *arg);
+
+
+    struct mmosal_task *init_task = mmosal_task_create(mm_halow_component_start,
+                                                       NULL,
+                                                       MMOSAL_TASK_PRI_LOW,
+                                                       2048,
+                                                       "init");
+    if (init_task == NULL)
+    {
+        printf("init task mm_halow_component_start failed!\r\n");
+        return;
+    }
+
+    for (;;) {
+      osDelay(100);
+    }
 
     // Step 6: Process wakeup event
     step_start_time_ms = rtc_get_uptime_ms();

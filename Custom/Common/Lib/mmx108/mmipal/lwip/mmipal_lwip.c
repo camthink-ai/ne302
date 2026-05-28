@@ -61,6 +61,11 @@ static inline struct mmipal_data *mmipal_get_data(void)
     return &mmipal_data;
 }
 
+struct netif *mmipal_get_lwip_netif(void)
+{
+    return &mmipal_data.lwip_mmnetif;
+}
+
 static void netif_status_callback(struct netif *netif);
 
 #if LWIP_IPV4

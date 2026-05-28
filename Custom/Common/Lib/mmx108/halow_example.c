@@ -8,7 +8,10 @@
 #include "mmwlan.h"
 #include "mmhal.h"
 #include "main.h"
+#include "lwip/netif.h"
+#if !defined(MMHAL_WLAN_USE_SOFT_SPI)
 #include "spi.h"
+#endif /* HAL SPI6 (default) or soft SPI */
 
 /*******************************************************************************
  * Definitions
@@ -19,14 +22,18 @@
 #define MORSE_DEFAULT_NETMASK "255.255.255.0"
 #define MORSE_DEFAULT_GW "192.168.1.1"
 
-#define MORSE_DEFAULT_SSID "test"
-#define MORSE_DEFAULT_PASSPHRASE "123456789"
+#define MORSE_DEFAULT_SSID "Gateway_FC209B_HaLow"
+#define MORSE_DEFAULT_PASSPHRASE ""
 
+#if !defined(MMHAL_WLAN_USE_SOFT_SPI)
 extern SPI_HandleTypeDef hspi6;
+#endif
 
 extern const struct mmwlan_s1g_channel_list s1g_channel_list_US;
 
 struct mmosal_semb *g_wifi_link_established = NULL;
+
+extern struct netif *mmipal_get_lwip_netif(void);
 
 /*******************************************************************************
  * Code
@@ -36,6 +43,9 @@ static void mm_halow_link_status_callback(const struct mmipal_link_status *link_
     if (link_status->link_state == MMIPAL_LINK_UP)
     {
         printf("Link is up!\r\nIP: %s, Netmask: %s, Gateway: %s\r\n", link_status->ip_addr, link_status->netmask, link_status->gateway);
+
+        struct netif *netif = mmipal_get_lwip_netif();
+        netif_set_default(netif);
 
         mmosal_semb_give(g_wifi_link_established);
     }
@@ -101,7 +111,7 @@ static void mm_halow_start()
 
 	strcpy((char *)sta_args.ssid, MORSE_DEFAULT_SSID);
 	sta_args.ssid_len = strlen(MORSE_DEFAULT_SSID);
-	sta_args.security_type = MMWLAN_SAE;
+	sta_args.security_type = MMWLAN_OPEN;
 	strcpy((char *)sta_args.passphrase, MORSE_DEFAULT_PASSPHRASE);
 	sta_args.passphrase_len = strlen(MORSE_DEFAULT_PASSPHRASE); 
 	
@@ -136,16 +146,16 @@ void mm_halow_gpios_init()
 	GPIO_InitStruct.Pin = MM_HALOW_RESET_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 	HAL_GPIO_Init(MM_HALOW_RESET_GPIO_Port, &GPIO_InitStruct);
 	//RESET output HIGH
-	HAL_GPIO_WritePin(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pins : MM_HALOW_WAKE_Pin */
 	GPIO_InitStruct.Pin = MM_HALOW_WAKE_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
 	HAL_GPIO_Init(MM_HALOW_WAKE_GPIO_Port, &GPIO_InitStruct);
 	//WAKE output HIGH
 	HAL_GPIO_WritePin(MM_HALOW_WAKE_GPIO_Port, MM_HALOW_WAKE_Pin, GPIO_PIN_SET);
@@ -175,7 +185,11 @@ void mm_halow_component_start(void *arg)
 {	
 	mm_halow_gpios_init();
 
+#if defined(MMHAL_WLAN_USE_SOFT_SPI)
+	/* GPIO bit-bang SPI: pins configured in mmhal_wlan_init() -> mm_soft_spi_init() */
+#else
 	MX_SPI6_Init();
+#endif
 
 	mmhal_init();
 	

@@ -87,9 +87,11 @@
  * See http://www.freertos.org/a00110.html
  *----------------------------------------------------------*/
 
-extern const uint32_t mmhal_system_clock;
+// extern const uint32_t mmhal_system_clock;
+extern uint32_t SystemCoreClock;
 
-#define configCPU_CLOCK_HZ (mmhal_system_clock)
+// #define configCPU_CLOCK_HZ (mmhal_system_clock)
+#define configCPU_CLOCK_HZ (SystemCoreClock)
 #ifndef configUSE_TICKLESS_IDLE
 #define configUSE_TICKLESS_IDLE 0
 #endif
@@ -99,7 +101,7 @@ extern const uint32_t mmhal_system_clock;
 #define configUSE_TIME_SLICING   1
 #define configUSE_IDLE_HOOK      1
 #define configUSE_TICK_HOOK      0
-#define configMAX_PRIORITIES     (8)
+#define configMAX_PRIORITIES     (64)
 #define configMINIMAL_STACK_SIZE ((unsigned short)200)
 
 #ifndef configTOTAL_HEAP_SIZE

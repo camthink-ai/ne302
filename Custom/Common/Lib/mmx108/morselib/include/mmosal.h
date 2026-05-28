@@ -177,7 +177,7 @@ typedef void (*mmosal_task_fn_t)(void *arg);
 enum mmosal_task_priority
 {
     /** Idle task priority. */
-    MMOSAL_TASK_PRI_IDLE,
+    MMOSAL_TASK_PRI_IDLE = 52,
     /** Minimum priority. */
     MMOSAL_TASK_PRI_MIN,
     /** Low priority. */
@@ -884,6 +884,8 @@ struct mmosal_failure_info
     /** Arbitrary platform-specific failure info.
      *  Will be zeroes in the case of assertion failure. */
     uint32_t platform_info[4];
+    /** Function name at which the assertion was triggered. */
+    const char *file_name;
 };
 
 /**
@@ -907,6 +909,7 @@ void mmosal_log_failure_info(const struct mmosal_failure_info *info);
             .lr = (uint32_t)MMPORT_GET_LR(),  \
             .fileid = MMOSAL_FILEID,          \
             .line = __LINE__,                 \
+            .file_name = __FILE__,            \
             .platform_info = { __VA_ARGS__ }, \
         };                                    \
         MMPORT_GET_PC(pc);                    \

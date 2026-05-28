@@ -65,6 +65,18 @@ void mmosal_log_failure_info(const struct mmosal_failure_info *info)
 }
 
 #if !(defined(ENABLE_MANUAL_FAILURE_LOG_PROCESSING) && ENABLE_MANUAL_FAILURE_LOG_PROCESSING)
+const char *get_filename(const char *path)
+{
+    const char *p = strrchr(path, '/');
+
+#ifdef _WIN32
+    const char *p2 = strrchr(path, '\\');
+    if (p2 && (!p || p2 > p))
+        p = p2;
+#endif
+
+    return p ? p + 1 : path;
+}
 static void mmosal_dump_failure_info(void)
 {
     unsigned first_failure_num = preserved_failure_info.displayed_failure_count;
@@ -85,12 +97,12 @@ static void mmosal_dump_failure_info(void)
         unsigned idx = FAST_MOD(first_failure_num + failure_offset, MMOSAL_MAX_FAILURE_RECORDS);
         struct mmosal_failure_info *info = &preserved_failure_info.info[idx];
 
-        printf("Failure %u logged at pc 0x%08lx, lr 0x%08lx, line %ld in %08lx\n",
+        printf("Failure %u logged at pc 0x%08lx, lr 0x%08lx, line %ld in %s\n",
                first_failure_num + failure_offset,
                info->pc,
                info->lr,
                info->line,
-               info->fileid);
+               get_filename(info->file_name));
 
         for (ii = 0; ii < sizeof(info->platform_info) / sizeof(info->platform_info[0]); ii++)
         {

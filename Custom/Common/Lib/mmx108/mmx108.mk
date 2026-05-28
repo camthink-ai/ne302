@@ -26,4 +26,9 @@ C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmutils
 
 CFLAGS += -DHALT_ON_ASSERT
 
+# HaLow SPI backend (pick at most one):
+#   (default)     HAL SPI6 in Appli/Core/Src/spi.c + mmhal_wlan.c
+#   MMHAL_WLAN_USE_SOFT_SPI — GPIO bit-bang fallback
+# CFLAGS += -DMMHAL_WLAN_USE_SOFT_SPI
+
 LDFLAGS += -L$(MMX108_ROOT_PATH) -lmorse

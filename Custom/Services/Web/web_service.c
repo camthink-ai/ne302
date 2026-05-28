@@ -36,7 +36,7 @@ typedef struct {
 } web_service_context_t;
 
 static web_service_context_t g_web_service = {0};
-#define WEB_ASSETS_FLASH_ADDRESS 0x70400000
+#define WEB_ASSETS_FLASH_ADDRESS 0x70480000
 
 
 /* ==================== Web Service Implementation ==================== */
