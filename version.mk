@@ -75,7 +75,7 @@ FSBL_VERSION_OVERRIDE    := 1.0.1.0
 APP_VERSION_OVERRIDE     := $(VERSION)
 WEB_VERSION_OVERRIDE     := 1.3.4.7
 MODEL_VERSION_OVERRIDE   := 2.0.0.0
-WAKECORE_VERSION_OVERRIDE := 0.2.7.4
+WAKECORE_VERSION_OVERRIDE := 0.2.7.5
 
 # Set component-specific version suffixes
 # - Leave undefined (commented or not set) to inherit main suffix

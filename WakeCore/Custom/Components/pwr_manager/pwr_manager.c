@@ -239,7 +239,7 @@ uint32_t pwr_get_wakeup_flags(void)
             __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF1);
         }
         if (__HAL_PWR_GET_FLAG(PWR_FLAG_WUF3) != RESET) {
-            if (global_wakeup_flags &= PWR_WAKEUP_FLAG_STANDBY) {
+            if (global_wakeup_flags & PWR_WAKEUP_FLAG_STANDBY) {
                 if (bkp_wakeup_flags & PWR_WAKEUP_FLAG_PIR_HIGH) global_wakeup_flags |= PWR_WAKEUP_FLAG_PIR_HIGH;
                 else if (bkp_wakeup_flags & PWR_WAKEUP_FLAG_PIR_LOW) global_wakeup_flags |= PWR_WAKEUP_FLAG_PIR_LOW;
             }
@@ -426,6 +426,9 @@ void pwr_enter_stop2(uint32_t wakeup_flags, uint32_t switch_bits, pwr_rtc_wakeup
     }
 
     usb_in_status = pwr_usb_is_active();
+    HAL_UART_DeInit(&huart1);
+	HAL_UART_DeInit(&hlpuart2);
+    HAL_NVIC_DisableIRQ(DMA1_Channel2_3_IRQn);
     GPIO_All_Config_Analog();
     if (!(switch_bits & PWR_3V3_SWITCH_BIT)) {
         HAL_GPIO_WritePin(PWR_3V3_GPIO_Port, PWR_3V3_Pin, GPIO_PIN_RESET);
@@ -477,7 +480,7 @@ void pwr_enter_stop2(uint32_t wakeup_flags, uint32_t switch_bits, pwr_rtc_wakeup
             HAL_GPIO_Init(PWR_N6_GPIO_Port, &GPIO_InitStruct);
         }
     }
-    HAL_Delay(200);
+    HAL_Delay(10);
     
     stop2_wakeup_falling_pins = 0;
     stop2_wakeup_rising_pins = 0;
@@ -586,9 +589,6 @@ void pwr_enter_stop2(uint32_t wakeup_flags, uint32_t switch_bits, pwr_rtc_wakeup
         }
     }
 
-    HAL_UART_DeInit(&huart1);
-	HAL_UART_DeInit(&hlpuart2);
-    HAL_NVIC_DisableIRQ(DMA1_Channel2_3_IRQn);
     do {
         global_wakeup_flags = 0;
         HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
