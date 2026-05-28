@@ -114,9 +114,9 @@ jobs:
           echo "Creating package..."
           make pkg
 
-          echo "Packing into HEX..."
-          python3 Script/pack_to_hex.py
-
+          echo "Packing HEX..."
+          make pack-hex
+          
           echo "::notice::Build completed successfully"
           echo "::endgroup::"
 
