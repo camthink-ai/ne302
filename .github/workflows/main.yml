@@ -113,6 +113,9 @@ jobs:
           
           echo "Creating package..."
           make pkg
+
+          echo "Packing HEX..."
+          make pack-hex
           
           echo "::notice::Build completed successfully"
           echo "::endgroup::"
@@ -143,6 +146,7 @@ jobs:
           name: ${{ steps.context.outputs.artifact_name }}
           path: |
             ./build/*.bin
+            ./build/*.hex
           retention-days: 30
           compression-level: 6
 
