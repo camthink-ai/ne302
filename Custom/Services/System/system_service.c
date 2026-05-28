@@ -3095,6 +3095,9 @@ aicam_result_t system_service_capture_request(const system_capture_request_t *re
         }
     }
 
+    // Early reject without touching global policies/state.
+    // The actual capture function also guards against busy/OTA, but doing this here
+    // prevents concurrent requests from temporarily overriding global policy knobs.
     if (g_capture_in_progress) {
         return AICAM_ERROR_BUSY;
     }
@@ -3104,7 +3107,6 @@ aicam_result_t system_service_capture_request(const system_capture_request_t *re
         return AICAM_ERROR_BUSY;
     }
 
-    g_capture_in_progress = AICAM_TRUE;
     g_fast_fail_mqtt_policy = resolved.fast_fail_mqtt;
 
     uint64_t start_ms = rtc_get_uptime_ms();
@@ -3115,7 +3117,6 @@ aicam_result_t system_service_capture_request(const system_capture_request_t *re
         resolved.trigger_type);
     uint64_t duration_ms = rtc_get_uptime_ms() - start_ms;
 
-    g_capture_in_progress = AICAM_FALSE;
     g_fast_fail_mqtt_policy = AICAM_FALSE;
 
     if (response) {
