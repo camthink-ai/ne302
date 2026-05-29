@@ -11,6 +11,7 @@
 #include <queue.h>
 #include <timers.h>
 #include <stdarg.h>
+#include <string.h>
 #include "mmosal.h"
 #include "mmhal_os.h"
 #include "mmlog.h"
@@ -638,18 +639,30 @@ struct mmosal_semb *mmosal_semb_create(const char *name)
 
 void mmosal_semb_delete(struct mmosal_semb *semb)
 {
-    vSemaphoreDelete((SemaphoreHandle_t)semb);
+    if (semb != NULL) {
+        vSemaphoreDelete((SemaphoreHandle_t)semb);
+    }
 }
 
 bool mmosal_semb_give(struct mmosal_semb *semb)
 {
+    if (semb == NULL) {
+        return false;
+    }
+
     return (xSemaphoreGive((xSemaphoreHandle)semb) == pdPASS);
 }
 
 bool mmosal_semb_give_from_isr(struct mmosal_semb *semb)
 {
     BaseType_t task_woken = pdFALSE;
-    BaseType_t ret = xSemaphoreGiveFromISR((xSemaphoreHandle)semb, &task_woken);
+    BaseType_t ret;
+
+    if (semb == NULL) {
+        return false;
+    }
+
+    ret = xSemaphoreGiveFromISR((xSemaphoreHandle)semb, &task_woken);
     if (ret == pdPASS)
     {
         portYIELD_FROM_ISR(task_woken);
@@ -774,9 +787,9 @@ struct mmosal_timer {
 static void mmosal_timer_trampoline(TimerHandle_t timer)
 {
     struct mmosal_timer *mt = (struct mmosal_timer *)pvTimerGetTimerID(timer);
-    if (mt != NULL && mt->cb != NULL) 
-	{
-        mt->cb(mt->arg);
+    if (mt != NULL && mt->cb != NULL)
+    {
+        mt->cb(mt);
     }
 }
 
@@ -807,44 +820,70 @@ struct mmosal_timer *mmosal_timer_create(const char *name, uint32_t timer_period
 
 void mmosal_timer_delete(struct mmosal_timer *timer)
 {
-    if (timer != NULL)
+    if (timer == NULL)
     {
-        BaseType_t ret = xTimerDelete((TimerHandle_t)timer, 0);
+        return;
+    }
+
+    if (timer->handle != NULL)
+    {
+        (void)xTimerStop(timer->handle, portMAX_DELAY);
+        BaseType_t ret = xTimerDelete(timer->handle, portMAX_DELAY);
+        timer->handle = NULL;
         configASSERT(ret == pdPASS);
     }
+
+    mmosal_free(timer);
 }
 
 bool mmosal_timer_start(struct mmosal_timer *timer)
 {
-    BaseType_t ret = xTimerStart((TimerHandle_t)timer, 0);
+    if (timer == NULL || timer->handle == NULL)
+    {
+        return false;
+    }
 
-    return (ret == pdPASS);
+    return (xTimerStart(timer->handle, portMAX_DELAY) == pdPASS);
 }
 
 bool mmosal_timer_stop(struct mmosal_timer *timer)
 {
-    BaseType_t ret = xTimerStop((TimerHandle_t)timer, 0);
+    if (timer == NULL || timer->handle == NULL)
+    {
+        return false;
+    }
 
-    return (ret == pdPASS);
+    return (xTimerStop(timer->handle, portMAX_DELAY) == pdPASS);
 }
 
 bool mmosal_timer_change_period(struct mmosal_timer *timer, uint32_t new_period)
 {
-    BaseType_t ret = xTimerChangePeriod((TimerHandle_t)timer, pdMS_TO_TICKS(new_period), 0);
+    if (timer == NULL || timer->handle == NULL)
+    {
+        return false;
+    }
 
-    return (ret == pdPASS);
+    return (xTimerChangePeriod(timer->handle, pdMS_TO_TICKS(new_period), portMAX_DELAY) == pdPASS);
 }
 
 void *mmosal_timer_get_arg(struct mmosal_timer *timer)
 {
-    return pvTimerGetTimerID((TimerHandle_t)timer);
+    if (timer == NULL)
+    {
+        return NULL;
+    }
+
+    return timer->arg;
 }
 
 bool mmosal_is_timer_active(struct mmosal_timer *timer)
 {
-    BaseType_t ret = xTimerIsTimerActive((TimerHandle_t)timer);
+    if (timer == NULL || timer->handle == NULL)
+    {
+        return false;
+    }
 
-    return (ret != pdFALSE);
+    return (xTimerIsTimerActive(timer->handle) != pdFALSE);
 }
 
 int mmosal_printf(const char *format, ...)

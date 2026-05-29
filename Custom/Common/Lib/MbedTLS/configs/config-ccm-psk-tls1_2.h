@@ -136,3 +136,11 @@
 #define MBEDTLS_ECDSA_C
 
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION
+
+/*
+ * Morse HaLow DPP (wpa_supplicant in libmorse.a): PK/CSR write and related X509.
+ */
+#ifndef CONFIG_DPP
+#define CONFIG_DPP
+#endif
+#include "../../mmx108/morselib/include/mm_mbedtls_config.h"

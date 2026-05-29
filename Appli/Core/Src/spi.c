@@ -156,7 +156,7 @@ void MX_SPI6_Init(void)
   hspi6.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi6.Init.NSS = SPI_NSS_SOFT;
   /* Morse HaLow (MM-APPNOTE-51 Mode 0): start ~DIV8–16; soft-SPI-stable boards often need DIV16. */
-  hspi6.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi6.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi6.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi6.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi6.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -185,6 +185,26 @@ void MX_SPI6_Init(void)
   }
   /* USER CODE END SPI6_Init 2 */
 
+}
+
+void MX_SPI6_DeInit(void)
+{
+  /* USER CODE BEGIN SPI6_DeInit 0 */
+
+  /* USER CODE END SPI6_DeInit 0 */
+
+  (void)HAL_SPI_Abort(&hspi6);
+  if (HAL_SPI_DeInit(&hspi6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN SPI6_DeInit 1 */
+  if (sem_spi6 != NULL) {
+    osSemaphoreDelete(sem_spi6);
+    sem_spi6 = NULL;
+  }
+  /* USER CODE END SPI6_DeInit 1 */
 }
 
 void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
@@ -668,7 +688,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
 
-	__HAL_RCC_GPIOB_CLK_ENABLE();
+	  __HAL_RCC_GPIOB_CLK_ENABLE();
 
     /**SPI6 GPIO Configuration
     PA5     ------> SPI6_SCK
@@ -687,18 +707,18 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     GPIO_InitStruct.Pin = MM_HALOW_SPI_CS_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     GPIO_InitStruct.Alternate = 0;
     HAL_GPIO_Init(MM_HALOW_SPI_CS_GPIO_Port, &GPIO_InitStruct);
 	HAL_GPIO_WritePin(MM_HALOW_SPI_CS_GPIO_Port, MM_HALOW_SPI_CS_Pin, GPIO_PIN_SET);
 #endif
 
     GPIO_InitStruct.Pin = MM_HALOW_SPI_MISO_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Alternate = GPIO_AF8_SPI6;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF8_SPI6;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* SPI6 DMA Init */
     /* HPDMA1_REQUEST_SPI6_RX Init */

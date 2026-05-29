@@ -21,6 +21,7 @@
 #include <mbedtls/version.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
+#include <mbedtls/error.h>
 #include <mbedtls/platform_util.h> /* mbedtls_platform_zeroize() */
 #include <mbedtls/asn1.h>
 #include <mbedtls/asn1write.h>
@@ -71,6 +72,18 @@
 #include "sha256.h"
 #include "sha384.h"
 #include "sha512.h"
+
+#include "mmhal_core.h"
+#include "mm_hal_common.h"
+#include "mmosal.h"
+
+/* HAL RNG entropy threshold (bytes) before mbedTLS accepts the source */
+#define MM_MBEDTLS_ENTROPY_THRESHOLD  32
+#define MM_ENTROPY_POLL_RETRY_MS      500u
+
+#if defined(MBEDTLS_THREADING_C) && defined(MBEDTLS_THREADING_ALT)
+extern void mbedtls_threading_alt_init(void);
+#endif
 
 /*
  * selective code inclusion based on preprocessor defines
@@ -236,8 +249,55 @@
 #endif /* crypto_rsa_*() */
 
 static int ctr_drbg_init_state;
+static int entropy_ctx_ready;
 static mbedtls_ctr_drbg_context ctr_drbg;
 static mbedtls_entropy_context entropy;
+
+static int mm_entropy_read_u32(uint32_t *value)
+{
+    uint32_t start = mmosal_get_time_ms();
+
+    while ((mmosal_get_time_ms() - start) < MM_ENTROPY_POLL_RETRY_MS) {
+        if (mmhal_random_get_u32(value)) {
+            return 1;
+        }
+        mmosal_task_sleep(1);
+    }
+
+    return 0;
+}
+
+static int entropy_poll(void *user_arg, uint8_t *output, size_t len, size_t *out_len)
+{
+    uint32_t r;
+    uint8_t *output_start = output;
+
+    (void) user_arg;
+
+    if (len == 0) {
+        if (out_len) {
+            *out_len = 0;
+        }
+        return 0;
+    }
+
+    while (len != 0) {
+        size_t cpylen = len < sizeof(uint32_t) ? len : sizeof(uint32_t);
+
+        if (!mm_entropy_read_u32(&r)) {
+            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+        }
+        os_memcpy(output, &r, cpylen);
+        len -= cpylen;
+        output += cpylen;
+    }
+
+    if (out_len) {
+        *out_len = output - output_start;
+    }
+
+    return 0;
+}
 
 #ifdef CRYPTO_MBEDTLS_CRYPTO_BIGNUM
 #include <mbedtls/bignum.h>
@@ -246,15 +306,55 @@ static mbedtls_mpi mpi_sw_A;
 
 __attribute_cold__ __attribute_noinline__ static mbedtls_ctr_drbg_context *ctr_drbg_init(void)
 {
-    mbedtls_ctr_drbg_init(&ctr_drbg);
-    mbedtls_entropy_init(&entropy);
-    if (mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, NULL, 0))
-    {
-        wpa_printf(MSG_ERROR, "Init of random number generator failed");
-        /* XXX: abort? */
+    uint32_t rng_probe;
+    int seed_ret;
+    char errbuf[80];
+    unsigned prime;
+
+#if defined(MBEDTLS_THREADING_C) && defined(MBEDTLS_THREADING_ALT)
+    mbedtls_threading_alt_init();
+#endif
+
+    if (ctr_drbg_init_state) {
+        return &ctr_drbg;
     }
-    else
-    {
+
+    if (!entropy_ctx_ready) {
+        mbedtls_entropy_init(&entropy);
+        if (mbedtls_entropy_add_source(&entropy,
+                                       entropy_poll,
+                                       NULL,
+                                       MM_MBEDTLS_ENTROPY_THRESHOLD,
+                                       MBEDTLS_ENTROPY_SOURCE_STRONG)) {
+            wpa_printf(MSG_ERROR, "Entropy add failed");
+        }
+        entropy_ctx_ready = 1;
+    }
+
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_ctr_drbg_set_entropy_len(&ctr_drbg, 32);
+
+    /* Prime HAL RNG (scan/SPI load can cause transient BUSY/mutex timeouts). */
+    for (prime = 0; prime < 24; prime++) {
+        if (mmhal_random_get_u32(&rng_probe)) {
+            break;
+        }
+        mmosal_task_sleep(1);
+    }
+    if (prime >= 24) {
+        wpa_printf(MSG_ERROR,
+                   "HAL RNG unavailable before ctr_drbg_seed (check MX_RNG_Init)");
+    }
+
+    seed_ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+                                     NULL, 0);
+    if (seed_ret != 0) {
+        mbedtls_strerror(seed_ret, errbuf, sizeof(errbuf));
+        wpa_printf(MSG_ERROR,
+                   "Init of random number generator failed: -0x%04x (%s)",
+                   (unsigned int)(-seed_ret), errbuf);
+        mbedtls_ctr_drbg_free(&ctr_drbg);
+    } else {
         ctr_drbg_init_state = 1;
     }
 
@@ -266,12 +366,16 @@ __attribute_cold__ void crypto_unload(void)
     if (ctr_drbg_init_state)
     {
         mbedtls_ctr_drbg_free(&ctr_drbg);
-        mbedtls_entropy_free(&entropy);
-#ifdef CRYPTO_MBEDTLS_CRYPTO_BIGNUM
-        mbedtls_mpi_free(&mpi_sw_A);
-#endif
         ctr_drbg_init_state = 0;
     }
+    if (entropy_ctx_ready)
+    {
+        mbedtls_entropy_free(&entropy);
+        entropy_ctx_ready = 0;
+    }
+#ifdef CRYPTO_MBEDTLS_CRYPTO_BIGNUM
+    mbedtls_mpi_free(&mpi_sw_A);
+#endif
 }
 
 /* init ctr_drbg on first use

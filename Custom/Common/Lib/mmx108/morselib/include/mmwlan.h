@@ -1265,8 +1265,15 @@ enum mmwlan_sta_state mmwlan_get_sta_state(void);
  */
 enum mmwlan_status mmwlan_set_power_save_mode(enum mmwlan_ps_mode mode);
 
-/** Default timeout after network activity to signal sleep */
-#define MMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS 100;
+/** Default timeout after network activity to signal sleep (override in build, e.g. mmx108.mk). */
+#ifndef MMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS
+#define MMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS (100U)
+#endif
+
+/** Default 802.11 power save mode at UMAC init (override in build). */
+#ifndef MMWLAN_DEFAULT_PS_MODE
+#define MMWLAN_DEFAULT_PS_MODE MMWLAN_PS_DISABLED
+#endif
 
 /**
  * Sets the time after network activity before the STA will notify the AP that it will go to sleep

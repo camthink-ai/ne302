@@ -33,3 +33,11 @@ uint32_t mmhal_get_deep_sleep_veto(void);
  * Initialize mmhal resources for random number generator
  */
 void mmhal_random_init(void);
+
+/**
+ * Read one 32-bit value from the STM32 hardware RNG.
+ *
+ * @param value  Output value on success.
+ * @return 1 on success, 0 if RNG is not ready or HAL_RNG_GenerateRandomNumber failed.
+ */
+int mmhal_random_get_u32(uint32_t *value);

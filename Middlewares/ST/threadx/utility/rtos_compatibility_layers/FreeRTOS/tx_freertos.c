@@ -42,6 +42,7 @@
 
 #include <stdint.h>
 #include <limits.h>
+#include <stdio.h>
 
 #include <tx_api.h>
 #include <tx_thread.h>
@@ -67,6 +68,8 @@ UBaseType_t g_txfr_task_count;
 #ifdef configTOTAL_HEAP_SIZE
 static uint8_t txfr_heap_mem[configTOTAL_HEAP_SIZE] __attribute__ ((section (".psram_bss")));
 static TX_BYTE_POOL txfr_heap;
+static TX_MUTEX txfr_heap_mutex;
+static UINT txfr_heap_mutex_ready;
 #endif
 
 static UINT txfr_heap_initialized;
@@ -75,36 +78,87 @@ static UINT txfr_initialized;
 static UINT txfr_scheduler_started;
 #endif // #if (TX_FREERTOS_AUTO_INIT == 1)
 
-// TODO - do something with malloc.
-void *txfr_malloc(size_t len)
+/* Serialize NO_WAIT alloc/free on txfr_heap. Concurrent searches can livelock in
+ * _tx_byte_allocate when another thread keeps taking tx_byte_pool_owner. */
+static void *txfr_malloc_nowait(size_t len)
 {
     void *p;
     UINT ret;
 
-    if(txfr_heap_initialized == 1u) {
-        ret = tx_byte_allocate(&txfr_heap, &p, len, 0u);
+    if(txfr_heap_mutex_ready == 1u) {
+        ret = tx_mutex_get(&txfr_heap_mutex, TX_WAIT_FOREVER);
         if(ret != TX_SUCCESS) {
             return NULL;
         }
-    } else {
+    }
+
+    (void)tx_byte_pool_prioritize(&txfr_heap);
+    ret = tx_byte_allocate(&txfr_heap, &p, len, TX_NO_WAIT);
+
+    if(txfr_heap_mutex_ready == 1u) {
+        (void)tx_mutex_put(&txfr_heap_mutex);
+    }
+
+    if(ret != TX_SUCCESS) {
         return NULL;
     }
 
     return p;
 }
 
+/* Task stacks/TCBs: retry until memory is available (all pool ops are serialized). */
+static void *txfr_malloc_blocking(size_t len)
+{
+    void *p;
+    ULONG retries = 0;
+
+    while(retries < 10000u) {
+        p = txfr_malloc_nowait(len);
+        if(p != NULL) {
+            return p;
+        }
+        (void)tx_thread_relinquish();
+        retries++;
+    }
+
+    return NULL;
+}
+
+// TODO - do something with malloc.
+void *txfr_malloc(size_t len)
+{
+    if(txfr_heap_initialized != 1u) {
+        return NULL;
+    }
+
+    return txfr_malloc_nowait(len);
+}
+
 void txfr_free(void *p)
 {
     UINT ret;
 
-    if(txfr_heap_initialized == 1u) {
-        ret = tx_byte_release(p);
+    if((txfr_heap_initialized != 1u) || (p == NULL)) {
+        return;
+    }
+
+    if(txfr_heap_mutex_ready == 1u) {
+        ret = tx_mutex_get(&txfr_heap_mutex, TX_WAIT_FOREVER);
         if(ret != TX_SUCCESS) {
             TX_FREERTOS_ASSERT_FAIL();
+            return;
         }
     }
 
-    return;
+    ret = tx_byte_release(p);
+
+    if(txfr_heap_mutex_ready == 1u) {
+        (void)tx_mutex_put(&txfr_heap_mutex);
+    }
+
+    if(ret != TX_SUCCESS) {
+        TX_FREERTOS_ASSERT_FAIL();
+    }
 }
 
 #if (INCLUDE_vTaskDelete == 1)
@@ -203,6 +257,13 @@ UINT tx_freertos_init(void)
         if(ret != TX_SUCCESS) {
             return ret;
         }
+
+        ret = tx_mutex_create(&txfr_heap_mutex, "txfr_heap_mtx", TX_NO_INHERIT);
+        if(ret != TX_SUCCESS) {
+            return ret;
+        }
+
+        txfr_heap_mutex_ready = 1u;
         txfr_heap_initialized = 1u;
     }
 #endif
@@ -422,12 +483,12 @@ BaseType_t xTaskCreate(TaskFunction_t pvTaskCode,
     }
     stack_depth_bytes = usStackDepth * sizeof(StackType_t);
 
-    p_stack = txfr_malloc((size_t)stack_depth_bytes);
+    p_stack = txfr_malloc_blocking((size_t)stack_depth_bytes);
     if(p_stack == NULL) {
         return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
     }
 
-    p_task = txfr_malloc(sizeof(txfr_task_t));
+    p_task = txfr_malloc_blocking(sizeof(txfr_task_t));
     if(p_task == NULL) {
         txfr_free(p_stack);
         return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;

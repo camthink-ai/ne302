@@ -19,6 +19,7 @@
 #include "driver/morse_driver/ps.h"
 #include "driver/morse_driver/skb_header.h"
 #include "driver/transport/morse_transport.h"
+#include "mmosal.h"
 
 
 #ifndef MAX_PAGES_PER_TX_TXN
@@ -28,6 +29,14 @@
 
 #ifndef MAX_PAGES_PER_RX_TXN
 #define MAX_PAGES_PER_RX_TXN 32
+#endif
+
+/** Retries when chip still owns the RX page (sync 0xBB) before host reads too early. */
+#ifndef MORSE_PAGESET_CHIP_OWNED_MAX_RETRIES
+#define MORSE_PAGESET_CHIP_OWNED_MAX_RETRIES 3
+#endif
+#ifndef MORSE_PAGESET_CHIP_OWNED_RETRY_MS
+#define MORSE_PAGESET_CHIP_OWNED_RETRY_MS 20
 #endif
 
 
@@ -606,23 +615,59 @@ static int morse_pageset_read(struct morse_pageset *pageset)
 
     hdr = (struct morse_buff_skb_header *)buf;
 
+    {
+        int chip_owned_round = 0;
+
+        while (hdr->sync == MORSE_SKB_HEADER_CHIP_OWNED_SYNC &&
+               chip_owned_round < MORSE_PAGESET_CHIP_OWNED_MAX_RETRIES)
+        {
+            chip_owned_round++;
+            if ((chip_owned_round % 4) == 0)
+            {
+                mmosal_task_yield();
+            }
+            mmosal_task_sleep(MORSE_PAGESET_CHIP_OWNED_RETRY_MS);
+            ret = populated_pager->ops->read_page(populated_pager, &page, 0, buf, mmpkt_len);
+            if (ret)
+            {
+                MMLOG_ERR("Failed to re-read chip-owned page: %d\n", ret);
+                mmdrv_host_stats_increment_datapath_driver_rx_read_failures();
+                goto exit;
+            }
+            hdr = (struct morse_buff_skb_header *)buf;
+        }
+
+        if (hdr->sync == MORSE_SKB_HEADER_SYNC && chip_owned_round > 0)
+        {
+            MMLOG_VRB("%s chip-owned page ready after %d retries\n",
+                      __func__,
+                      chip_owned_round);
+        }
+    }
 
     if (hdr->sync != MORSE_SKB_HEADER_SYNC)
     {
-
         bool chip_owned = (hdr->sync == MORSE_SKB_HEADER_CHIP_OWNED_SYNC);
+
+        if (chip_owned)
+        {
+            int put_ret = populated_pager->ops->put(populated_pager, &page);
+
+            MMLOG_VRB("%s chip-owned defer page[addr:0x%08lx len:%u] put=%d\n",
+                      __func__,
+                      page.addr,
+                      hdr->len,
+                      put_ret);
+            page.addr = 0;
+            ret = 0;
+            goto exit;
+        }
 
         MMLOG_WRN("%s sync error:0x%02X page[addr:0x%08lx len:%u]\n",
                   __func__,
                   hdr->sync,
                   page.addr,
                   hdr->len);
-
-        if (chip_owned)
-        {
-            page.addr = 0;
-        }
-
 
         ret = 0;
         mmdrv_host_stats_increment_datapath_driver_rx_read_failures();

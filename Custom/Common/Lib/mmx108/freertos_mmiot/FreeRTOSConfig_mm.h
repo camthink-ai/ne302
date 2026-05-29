@@ -115,7 +115,7 @@ extern uint32_t SystemCoreClock;
 #define AP_MODE_HEAP 0
 #endif
 #define configTOTAL_HEAP_SIZE \
-    ((size_t)((95 * 1024) + (APP_HEAP) + (IP_STACK_HEAP) + (AP_MODE_HEAP)))
+    ((size_t)((256 * 1024) + (APP_HEAP) + (IP_STACK_HEAP) + (AP_MODE_HEAP)))
 #endif
 
 #define configMAX_TASK_NAME_LEN (16)

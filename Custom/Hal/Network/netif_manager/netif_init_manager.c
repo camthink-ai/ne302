@@ -138,7 +138,11 @@ static void netif_init_task(void *argument)
         return;
     }
 
-    if (strcmp(if_name, NETIF_NAME_WIFI_STA) == 0 ) {
+    if (strcmp(if_name, NETIF_NAME_WIFI_STA) == 0
+#if NETIF_WIFI_HALOW_IS_ENABLE
+        || strcmp(if_name, NETIF_NAME_WIFI_HALOW) == 0
+#endif
+    ) {
         goto end;
     }
 

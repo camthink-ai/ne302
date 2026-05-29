@@ -16,6 +16,8 @@
 #include "main.h"
 #include "cmsis_os2.h"
 #include "common_utils.h"
+#include "chip_id_mac.h"
+#include "halow_platform_mac.h"
 
 #if defined(MMHAL_WLAN_USE_SOFT_SPI)
 #include "mm_soft_spi.h"
@@ -275,14 +277,20 @@ void mmhal_wlan_init(void)
 #if defined(MMHAL_WLAN_USE_SOFT_SPI)
     mm_soft_spi_init();
 #endif
+    if (dma_semb_handle != NULL) {
+        mmosal_semb_delete(dma_semb_handle);
+        dma_semb_handle = NULL;
+    }
     dma_semb_handle = mmosal_semb_create("dma_semb_handle");
     HAL_GPIO_WritePin(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin, GPIO_PIN_SET);
 }
 
 void mmhal_wlan_deinit(void)
 {
-    mmosal_semb_delete(dma_semb_handle);
-    dma_semb_handle = NULL;
+    if (dma_semb_handle != NULL) {
+        mmosal_semb_delete(dma_semb_handle);
+        dma_semb_handle = NULL;
+    }
 }
 
 void mmhal_wlan_wake_assert(void)
@@ -343,14 +351,26 @@ void MM_HALOW_SPI_IRQ_HANDLER(void)
     }
 }
 
+static uint8_t s_platform_mac[6];
+static uint8_t s_platform_mac_valid;
+
+void mmhal_wlan_use_platform_mac(const uint8_t *mac)
+{
+    if (mac != NULL) {
+        memcpy(s_platform_mac, mac, 6U);
+        s_platform_mac_valid = 1U;
+    } else {
+        s_platform_mac_valid = 0U;
+    }
+}
+
 void mmhal_read_mac_addr(uint8_t *mac_addr)
 {
-    mac_addr[0] = 0x0c;
-    mac_addr[1] = 0xc0;
-    mac_addr[2] = 0x01;
-    mac_addr[3] = 0x10;
-    mac_addr[4] = 0x02;
-    mac_addr[5] = 0x03;
+    if (s_platform_mac_valid) {
+        memcpy(mac_addr, s_platform_mac, 6U);
+        return;
+    }
+    netif_chip_id_get_mac(mac_addr, NETIF_CHIP_MAC_HALOW);
 }
 
 const struct mmhal_chip *mmhal_get_chip(void)

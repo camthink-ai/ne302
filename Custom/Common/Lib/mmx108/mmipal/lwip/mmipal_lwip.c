@@ -793,8 +793,19 @@ enum mmipal_status mmipal_init(const struct mmipal_init_args *args)
     }
 #endif
 
+    /*
+     * mmipal_init() may be called from non-tcpip threads in this project.
+     * With LWIP_TCPIP_CORE_LOCKING enabled, we must hold the core lock while
+     * manipulating netif state (netif_add, dhcp_start, etc.).
+     */
     //tcpip_init(tcpip_init_done_handler, lwip_args);
+#if LWIP_TCPIP_CORE_LOCKING
+    LOCK_TCPIP_CORE();
     tcpip_init_done_handler((void *)lwip_args);
+    UNLOCK_TCPIP_CORE();
+#else
+    tcpip_init_done_handler((void *)lwip_args);
+#endif
 
     /* Block until initialisation is complete */
     while (!tcpip_init_done)

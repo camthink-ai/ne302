@@ -72,7 +72,7 @@ void umac_config_init(struct umac_data *umacd)
     data->listen_interval = 0;
     data->ndp_probe_request_enabled = false;
     data->dynamic_ps_timeout_ms = MMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS;
-    data->ps_mode = MMWLAN_PS_ENABLED;
+    data->ps_mode = MMWLAN_DEFAULT_PS_MODE;
     data->supp_scan_dwell_time_ms = MMWLAN_SCAN_DEFAULT_DWELL_TIME_MS;
     data->beacon_vendor_ie_filter = NULL;
     data->min_health_check_intvl_ms = MMWLAN_DEFAULT_MIN_HEALTH_CHECK_INTERVAL_MS;

@@ -3314,7 +3314,9 @@ wpas_dpp_tx_pkex_status(struct wpa_supplicant *wpa_s,
 	}
 
 	if (result == OFFCHANNEL_SEND_ACTION_SUCCESS && wpa_s->dpp_pkex_wait_auth_req)
-		wpas_dpp_pkex_finish(wpa_s, src, freq);
+		wpa_printf(MSG_DEBUG,
+			   "DPP: PKEX Commit-Reveal Response TX complete, waiting for Authentication Request from "
+			   MACSTR, MAC2STR(dst));
 }
 
 
@@ -3471,6 +3473,7 @@ wpas_dpp_rx_pkex_commit_reveal_req(struct wpa_supplicant *wpa_s, const u8 *src,
 	struct wpabuf *msg;
 	unsigned int wait_time;
 	struct dpp_pkex *pkex = wpa_s->dpp_pkex;
+	struct dpp_bootstrap_info *bi;
 
 	wpa_printf(MSG_DEBUG, "DPP: PKEX Commit-Reveal Request from " MACSTR,
 		   MAC2STR(src));
@@ -3501,13 +3504,25 @@ wpas_dpp_rx_pkex_commit_reveal_req(struct wpa_supplicant *wpa_s, const u8 *src,
 		wait_time = 2000;
 	wpa_msg(wpa_s, MSG_INFO, DPP_EVENT_TX "dst=" MACSTR " freq=%u type=%d",
 		MAC2STR(src), freq, DPP_PA_PKEX_COMMIT_REVEAL_RESP);
+	wpa_s->dpp_pkex_wait_auth_req = true;
 	offchannel_send_action(wpa_s, freq, src, wpa_s->own_addr,
 			       broadcast,
 			       wpabuf_head(msg), wpabuf_len(msg),
 			       wait_time, wpas_dpp_tx_pkex_status, 0);
 	wpabuf_free(msg);
 
-	wpa_s->dpp_pkex_wait_auth_req = true;
+	/* Same as hostapd_dpp_rx_pkex_commit_reveal_req(): finish PKEX once the
+	 * Commit-Reveal Response is queued, do not wait for TX status (driver may
+	 * report status late or not match pending_action). */
+	bi = wpas_dpp_pkex_finish(wpa_s, src, freq);
+	if (!bi) {
+		wpa_s->dpp_pkex_wait_auth_req = false;
+		return;
+	}
+
+	wpa_printf(MSG_INFO,
+		   "DPP: PKEX complete, waiting for Authentication Request from "
+		   MACSTR, MAC2STR(src));
 }
 
 

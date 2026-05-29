@@ -29,6 +29,7 @@
 #include "SensorExt/i2c_tool/i2c_tool.h"
 #include "SensorExt/tft_st7789v/tft_st7789vw.h"
 #include "SensorExt/sensor_exemple/sensor_exemple.h"
+#include "mm_mbedtls_port.h"
 
 #define QUICK_SNAPSHOT_CARE_WAKEUP_FLAG_MASK    (PWR_WAKEUP_FLAG_RTC_TIMING | PWR_WAKEUP_FLAG_RTC_ALARM_A | PWR_WAKEUP_FLAG_RTC_ALARM_B | PWR_WAKEUP_FLAG_CONFIG_KEY | PWR_WAKEUP_FLAG_PIR_HIGH | PWR_WAKEUP_FLAG_PIR_LOW | PWR_WAKEUP_FLAG_PIR_RISING | PWR_WAKEUP_FLAG_PIR_FALLING)
 
@@ -43,6 +44,8 @@ bool driver_core_init(void)
     uint32_t wakeup_flag = 0;
 #endif
 
+    printf("driver_core_init \r\n");
+    mm_mbedtls_port_init();
     hal_mem_register();
     storage_register();
 #if ENABLE_U0_MODULE
