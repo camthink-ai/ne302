@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useLingui } from '@lingui/react';
 import SvgIcon from '@/components/svg-icon';
 import WifiNetworkPage from './wifi-network';
+import HalowNetworkPage from './halow-network';
 import CellularNetworkPage from './cellular-network';
 import { Label } from '@/components/ui/label';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
@@ -36,6 +37,7 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
             setCommunicationMode(res.data.selected_type);
             return res.data;
         } catch (error) {
+            // eslint-disable-next-line no-console
             console.error(error);
             throw error;
         } finally {
@@ -53,6 +55,9 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
     const handleChangeCommunicationMode = async () => {
         setIsCommunicationModeDialogOpen(false);
         setCommunicationMode(communicationModeDialogValue.current);
+        if (communicationModeDialogValue.current === 'halow') {
+            return;
+        }
         try {
             setIsLoading(true);
             await switchNetworkTypeReq({ type: communicationModeDialogValue.current, timeout_ms: 3000 });
@@ -68,6 +73,7 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
             // }
             await getNetworkStatus();
         } catch (error) {
+            // eslint-disable-next-line no-console
             console.error(error);
         } finally {
             setIsLoading(false);
@@ -120,6 +126,7 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
                     </SelectTrigger>
                     <SelectContent>
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'wifi') && <SelectItem value="wifi">{i18n._('sys.system_management.wifi')}</SelectItem>}
+                        <SelectItem value="halow">{i18n._('sys.system_management.halow')}</SelectItem>
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'cellular') && <SelectItem value="cellular">{i18n._('sys.system_management.cellular_network')}</SelectItem>}
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'poe') && <SelectItem value="poe">{i18n._('sys.system_management.poe_network')}</SelectItem>}
                     </SelectContent>
@@ -127,6 +134,7 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
             </div>
             {isLoading && <CommunicationSkeleton />}
             {communicationMode === 'wifi' && !isLoading && <WifiNetworkPage />}
+            {communicationMode === 'halow' && !isLoading && <HalowNetworkPage />}
             {communicationMode === 'cellular' && !isLoading && <CellularNetworkPage />}
             {communicationMode === 'poe' && !isLoading && <PoeNetworkPage />}
             {communicationModeDialog()}
