@@ -56,6 +56,7 @@ export default function Graphics() {
   const [captureSectionOpen, setCaptureSectionOpen] = useState(true);
   const ISP_MODE_CUSTOM = 255;
   const [ispMode, setIspMode] = useState(0);
+  const [grayscale, setGrayscale] = useState(false);
   const ispImportInputRef = useRef<HTMLInputElement>(null);
   const [luxRefDialogOpen, setLuxRefDialogOpen] = useState(false);
   const [luxRefForm, setLuxRefForm] = useState({
@@ -164,6 +165,9 @@ export default function Graphics() {
       if (typeof res.data.isp_mode === 'number') {
         setIspMode(res.data.isp_mode);
       }
+      if (typeof res.data.grayscale === 'boolean') {
+        setGrayscale(res.data.grayscale);
+      }
       // TODO: when ISP APIs are wired, hydrate ISP exposure state from /api/v1/isp/aec, /aec/manual, /sensor_delay, /statistics, etc.
     } catch (error) {
       console.error(error);
@@ -183,6 +187,7 @@ export default function Graphics() {
       vertical_flip: boolean;
       aec: number;
       isp_mode: number;
+      grayscale: boolean;
       fast_capture_skip_frames: number;
       fast_capture_resolution: number;
       fast_capture_jpeg_quality: number;
@@ -196,6 +201,7 @@ export default function Graphics() {
     vertical_flip: overrides.vertical_flip ?? flipVertical,
     aec: overrides.aec ?? aec,
     isp_mode: overrides.isp_mode ?? ispMode,
+    grayscale: overrides.grayscale ?? grayscale,
     fast_capture_skip_frames:
       overrides.fast_capture_skip_frames ?? fastSkipFrames,
     fast_capture_resolution:
@@ -252,6 +258,7 @@ export default function Graphics() {
           fast_capture_jpeg_quality: nextQuality,
         })
       );
+      toast.warning(i18n._('sys.hardware_management.capture_reboot_toast'));
     } catch (error) {
       console.error(error);
     }
@@ -310,6 +317,9 @@ export default function Graphics() {
           fast_capture_jpeg_quality: nextFastJpegQuality,
         })
       );
+      if (type === 'fast_resolution') {
+        toast.warning(i18n._('sys.hardware_management.capture_reboot_toast'));
+      }
     } catch (error) {
       console.error(error);
     }
@@ -445,7 +455,7 @@ export default function Graphics() {
                                 );
                                 toast.warning(
                                   i18n._(
-                                    'sys.hardware_management.camera_config_reboot_hint'
+                                    'sys.hardware_management.isp_mode_reboot_toast'
                                   )
                                 );
                               } catch (error) {
@@ -474,6 +484,52 @@ export default function Graphics() {
                               </SelectItem>
                             </SelectContent>
                           </Select>
+                        </div>
+                        <Separator />
+                        <div className='flex justify-between gap-4 items-center'>
+                          <div className='flex min-w-0 flex-1 items-center gap-2'>
+                            <Label className='shrink-0'>
+                              {i18n._('sys.hardware_management.grayscale')}
+                            </Label>
+                            <Tooltip mbEnhance>
+                              <TooltipTrigger>
+                                <div className='inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500'>
+                                  <SvgIcon
+                                    className='h-4 w-4 text-gray-500'
+                                    icon='info'
+                                  />
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent className='max-w-80 text-pretty'>
+                                <div>
+                                  <p>
+                                    {i18n._(
+                                      'sys.hardware_management.grayscale_hint'
+                                    )}
+                                  </p>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Switch
+                            checked={grayscale}
+                            onCheckedChange={async checked => {
+                              setGrayscale(checked);
+                              try {
+                                await setHardwareInfoReq(
+                                  buildImageConfigRequest({ grayscale: checked })
+                                );
+                                toast.warning(
+                                  i18n._(
+                                    'sys.hardware_management.grayscale_reboot_hint'
+                                  )
+                                );
+                              } catch (error) {
+                                console.error(error);
+                                setGrayscale(!checked);
+                              }
+                            }}
+                          />
                         </div>
                         {ispMode === ISP_MODE_CUSTOM && (
                           <>

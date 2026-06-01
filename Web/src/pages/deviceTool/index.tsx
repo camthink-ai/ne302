@@ -482,7 +482,7 @@ export default function DeviceTool() {
                                     try {
                                       await setSysClkConfigReq({ sys_clk_profile: next });
                                       setSysClkFlashValid(true);
-                                      toast.success(i18n._('sys.device_tool.sys_clk_saved_toast'));
+                                      toast.warning(i18n._('sys.device_tool.sys_clk_reboot_toast'));
                                     } catch (e) {
                                       console.error(e);
                                       toast.error('Save failed');

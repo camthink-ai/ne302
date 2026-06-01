@@ -340,8 +340,11 @@ static void qs_isp_config_to_iq_param(const isp_config_t *isp_config, ISP_IQPara
     isp_param->luxRef.calibFactor = isp_config->lux_calib_factor;
 }
 
-int quick_storage_fill_isp_iq_param(uint32_t isp_mode, ISP_IQParamTypeDef *isp_param)
+int quick_storage_fill_isp_iq_param(uint32_t isp_mode, uint8_t grayscale,
+                                    ISP_IQParamTypeDef *isp_param)
 {
+    aicam_bool_t gray_on = (grayscale != 0u) ? AICAM_TRUE : AICAM_FALSE;
+
     if (!isp_param) {
         return AICAM_ERROR_INVALID_PARAM;
     }
@@ -351,6 +354,7 @@ int quick_storage_fill_isp_iq_param(uint32_t isp_mode, ISP_IQParamTypeDef *isp_p
         qs_load_isp_config_from_nvs(&cfg);
         if (cfg.valid) {
             qs_isp_config_to_iq_param(&cfg, isp_param);
+            camera_apply_grayscale_iq(isp_param, gray_on);
             return AICAM_OK;
         }
     }
@@ -358,8 +362,12 @@ int quick_storage_fill_isp_iq_param(uint32_t isp_mode, ISP_IQParamTypeDef *isp_p
     cam_iq_scene_t scene = CAM_IQ_SCENE_INDOOR;
     if (isp_mode == QS_IMAGE_ISP_MODE_OUTDOOR) {
         scene = CAM_IQ_SCENE_OUTDOOR;
+    } else if (isp_mode == QS_IMAGE_ISP_MODE_CUSTOM) {
+        /* Align with device_service_build_isp_iq_param: custom without valid NVS profile. */
+        scene = CAM_IQ_SCENE_INDOOR;
     }
     camera_fill_isp_iq_scene(scene, isp_param);
+    camera_apply_grayscale_iq(isp_param, gray_on);
     return AICAM_OK;
 }
 
@@ -536,6 +544,7 @@ int quick_storage_read_snapshot_config(qs_snapshot_config_t *snapshot_config)
     snapshot_config->fast_capture_jpeg_quality = default_config.device_service.image_config.fast_capture_jpeg_quality;
     snapshot_config->capture_storage_ai = default_config.device_service.image_config.capture_storage_ai;
     snapshot_config->isp_mode = default_config.device_service.image_config.isp_mode;
+    snapshot_config->grayscale = (uint8_t)default_config.device_service.image_config.grayscale;
 
     aicam_result_t result;
     aicam_bool_t temp_bool = AICAM_FALSE;
@@ -619,6 +628,11 @@ int quick_storage_read_snapshot_config(qs_snapshot_config_t *snapshot_config)
         snapshot_config->isp_mode != QS_IMAGE_ISP_MODE_OUTDOOR &&
         snapshot_config->isp_mode != QS_IMAGE_ISP_MODE_CUSTOM) {
         snapshot_config->isp_mode = default_config.device_service.image_config.isp_mode;
+    }
+
+    result = qs_nvs_read_bool(NVS_KEY_IMAGE_GRAYSCALE, &temp_bool);
+    if (result == AICAM_OK) {
+        snapshot_config->grayscale = (uint8_t)temp_bool;
     }
 
     return AICAM_OK;

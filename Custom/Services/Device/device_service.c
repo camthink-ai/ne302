@@ -196,6 +196,26 @@ static aicam_result_t apply_camera_config_to_hardware(const camera_config_t *con
     return AICAM_OK;
 }
 
+static void device_service_build_isp_iq_param(const image_config_t *img_cfg, ISP_IQParamTypeDef *out_iq)
+{
+    if (img_cfg == NULL || out_iq == NULL) {
+        return;
+    }
+
+    if (img_cfg->isp_mode == IMAGE_ISP_MODE_CUSTOM && g_device_service.isp_config.valid) {
+        json_config_config_to_isp_param(&g_device_service.isp_config, out_iq);
+    } else {
+        cam_iq_scene_t scene = CAM_IQ_SCENE_INDOOR;
+        if (img_cfg->isp_mode == IMAGE_ISP_MODE_OUTDOOR) {
+            scene = CAM_IQ_SCENE_OUTDOOR;
+        } else if (img_cfg->isp_mode == IMAGE_ISP_MODE_CUSTOM && !g_device_service.isp_config.valid) {
+            LOG_SVC_WARN("ISP mode custom without valid saved profile; using indoor IQ defaults");
+        }
+        camera_fill_isp_iq_scene(scene, out_iq);
+    }
+    camera_apply_grayscale_iq(out_iq, img_cfg->grayscale);
+}
+
 /**
  * @brief Initialize default device information
  */
@@ -281,14 +301,16 @@ static void init_default_camera_config(camera_config_t *config)
     config->image_config.capture_disable_comm = image_config.capture_disable_comm;
     config->image_config.capture_storage_ai = image_config.capture_storage_ai;
     config->image_config.isp_mode = image_config.isp_mode;
+    config->image_config.grayscale = image_config.grayscale;
 
-    LOG_SVC_DEBUG("Image configuration updated: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, aec=%d, isp_mode=%u, startup_skip=%u, fast_skip=%u, fast_res=%u, fast_jpeg_q=%u, cap_dis_comm=%d, cap_stor_ai=%d",
+    LOG_SVC_DEBUG("Image configuration updated: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, aec=%d, isp_mode=%u, grayscale=%d, startup_skip=%u, fast_skip=%u, fast_res=%u, fast_jpeg_q=%u, cap_dis_comm=%d, cap_stor_ai=%d",
                 config->image_config.brightness,
                 config->image_config.contrast,
                 config->image_config.horizontal_flip,
                 config->image_config.vertical_flip,
                 config->image_config.aec,
                 config->image_config.isp_mode,
+                config->image_config.grayscale,
                 config->image_config.startup_skip_frames,
                 config->image_config.fast_capture_skip_frames,
                 config->image_config.fast_capture_resolution,
@@ -1104,35 +1126,7 @@ aicam_result_t device_service_image_set_config(const image_config_t *config)
         return AICAM_ERROR_INVALID_PARAM;
     }
 
-    uint32_t prev_isp_mode = g_device_service.camera_config.image_config.isp_mode;
     memcpy(&g_device_service.camera_config.image_config, config, sizeof(image_config_t));
-
-    /* ISP mode affects IQ init buffer; refresh while camera is idle or restart stream */
-    if (prev_isp_mode != config->isp_mode && g_device_service.camera_initialized && g_device_service.camera_device) {
-        aicam_bool_t cam_streaming = g_device_service.camera_config.enabled;
-        if (cam_streaming) {
-            (void)device_service_camera_stop();
-        }
-        ISP_IQParamTypeDef iq = {0};
-        if (config->isp_mode == IMAGE_ISP_MODE_CUSTOM && g_device_service.isp_config.valid) {
-            json_config_config_to_isp_param(&g_device_service.isp_config, &iq);
-        } else {
-            cam_iq_scene_t scene = CAM_IQ_SCENE_INDOOR;
-            if (config->isp_mode == IMAGE_ISP_MODE_OUTDOOR) {
-                scene = CAM_IQ_SCENE_OUTDOOR;
-            } else if (config->isp_mode == IMAGE_ISP_MODE_CUSTOM && !g_device_service.isp_config.valid) {
-                LOG_SVC_WARN("ISP mode custom without valid saved profile; using indoor IQ defaults");
-            }
-            camera_fill_isp_iq_scene(scene, &iq);
-        }
-        (void)device_ioctl(g_device_service.camera_device,
-                    CAM_CMD_SET_ISP_PARAM,
-                    (uint8_t *)&iq,
-                    sizeof(ISP_IQParamTypeDef));
-        if (cam_streaming) {
-            (void)device_service_camera_start();
-        }
-    }
 
     
     // Apply configuration to camera device if initialized
@@ -1151,9 +1145,9 @@ aicam_result_t device_service_image_set_config(const image_config_t *config)
     }
 
 
-    LOG_SVC_INFO("Image configuration applied: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, isp_mode=%u",
+    LOG_SVC_INFO("Image configuration applied: brightness=%u, contrast=%u, h_flip=%d, v_flip=%d, isp_mode=%u, grayscale=%d",
                 config->brightness, config->contrast, config->horizontal_flip, config->vertical_flip,
-                config->isp_mode);
+                config->isp_mode, config->grayscale);
 
     return AICAM_OK;
 }
@@ -1334,6 +1328,8 @@ aicam_result_t device_service_camera_init(void)
 
 aicam_result_t device_service_camera_start(void)
 {
+    aicam_result_t result;
+
     if (!g_device_service.camera_initialized) {
         return AICAM_ERROR_NOT_INITIALIZED;
     }
@@ -1350,28 +1346,17 @@ aicam_result_t device_service_camera_start(void)
                     g_device_service.camera_config.image_config.startup_skip_frames);
     }
 
-    // apply isp IQ init buffer (built-in scene or custom profile from NVS)
+    // apply isp IQ init buffer (built-in scene or custom profile from NVS) + grayscale overlay
     {
         ISP_IQParamTypeDef isp_param = {0};
-        uint32_t m = g_device_service.camera_config.image_config.isp_mode;
-        if (m == IMAGE_ISP_MODE_CUSTOM && g_device_service.isp_config.valid) {
-            json_config_config_to_isp_param(&g_device_service.isp_config, &isp_param);
-        } else {
-            cam_iq_scene_t scene = CAM_IQ_SCENE_INDOOR;
-            if (m == IMAGE_ISP_MODE_OUTDOOR) {
-                scene = CAM_IQ_SCENE_OUTDOOR;
-            } else if (m == IMAGE_ISP_MODE_CUSTOM && !g_device_service.isp_config.valid) {
-                LOG_SVC_WARN("ISP mode custom without valid saved profile; using indoor IQ defaults");
-            }
-            camera_fill_isp_iq_scene(scene, &isp_param);
-        }
+        device_service_build_isp_iq_param(&g_device_service.camera_config.image_config, &isp_param);
         device_ioctl(g_device_service.camera_device,
                     CAM_CMD_SET_ISP_PARAM,
                     (uint8_t *)&isp_param,
                     sizeof(ISP_IQParamTypeDef));
     }
 
-    aicam_result_t result = device_start(g_device_service.camera_device);
+    result = device_start(g_device_service.camera_device);
     if (result != AICAM_OK) {
         LOG_SVC_ERROR("Failed to start camera: %d", result);
         return result;
@@ -1862,18 +1847,7 @@ aicam_result_t device_service_camera_capture_fast(uint8_t **buffer, int *out_len
 
         {
             ISP_IQParamTypeDef isp_param = {0};
-            uint32_t m = g_device_service.camera_config.image_config.isp_mode;
-            if (m == IMAGE_ISP_MODE_CUSTOM && g_device_service.isp_config.valid) {
-                json_config_config_to_isp_param(&g_device_service.isp_config, &isp_param);
-            } else {
-                cam_iq_scene_t scene = CAM_IQ_SCENE_INDOOR;
-                if (m == IMAGE_ISP_MODE_OUTDOOR) {
-                    scene = CAM_IQ_SCENE_OUTDOOR;
-                } else if (m == IMAGE_ISP_MODE_CUSTOM && !g_device_service.isp_config.valid) {
-                    LOG_SVC_WARN("[FAST] ISP mode custom without valid saved profile; using indoor IQ defaults");
-                }
-                camera_fill_isp_iq_scene(scene, &isp_param);
-            }
+            device_service_build_isp_iq_param(&g_device_service.camera_config.image_config, &isp_param);
             device_ioctl(g_device_service.camera_device,
                         CAM_CMD_SET_ISP_PARAM,
                         (uint8_t *)&isp_param,

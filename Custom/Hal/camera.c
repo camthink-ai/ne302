@@ -589,6 +589,44 @@ void camera_fill_isp_iq_scene(cam_iq_scene_t scene, ISP_IQParamTypeDef *out_iq)
     }
 }
 
+#define CAMERA_ISP_COEFF_UNIT   100000000
+#define CAMERA_LUMA_COEFF_R     29900000
+#define CAMERA_LUMA_COEFF_G     58700000
+#define CAMERA_LUMA_COEFF_B     11400000
+
+void camera_apply_grayscale_iq(ISP_IQParamTypeDef *iq, aicam_bool_t grayscale)
+{
+    int row;
+
+    if (iq == NULL) {
+        return;
+    }
+    if (grayscale != AICAM_TRUE) {
+        return;
+    }
+
+    iq->AWBAlgo.enable = 0;
+    iq->colorConvStatic.enable = 1;
+    for (row = 0; row < 3; row++) {
+        iq->colorConvStatic.coeff[row][0] = CAMERA_LUMA_COEFF_R;
+        iq->colorConvStatic.coeff[row][1] = CAMERA_LUMA_COEFF_G;
+        iq->colorConvStatic.coeff[row][2] = CAMERA_LUMA_COEFF_B;
+    }
+    if (iq->ispGainStatic.enable) {
+        iq->ispGainStatic.ispGainR = CAMERA_ISP_COEFF_UNIT;
+        iq->ispGainStatic.ispGainG = CAMERA_ISP_COEFF_UNIT;
+        iq->ispGainStatic.ispGainB = CAMERA_ISP_COEFF_UNIT;
+    }
+}
+
+void camera_configure_pipe1_grayscale(pipe_params_t *pipe1, aicam_bool_t grayscale)
+{
+    (void)pipe1;
+    (void)grayscale;
+    /* Grayscale is applied via ISP (camera_apply_grayscale_iq); keep PIPE1 RGB565 so
+     * video pipeline / encoder stride (bpp=2) stays consistent. */
+}
+
 static void CAM_setSensorInfo(CMW_Sensor_Name_t sensor, camera_t *camera)
 {
     CMW_Sensor_Name_t sensor_id = sensor;

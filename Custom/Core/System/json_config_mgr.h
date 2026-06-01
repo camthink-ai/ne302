@@ -344,6 +344,10 @@ typedef struct {
 #define IMAGE_ISP_MODE_INDOOR   1u
 #define IMAGE_ISP_MODE_CUSTOM   255u   /* 0xFF: use isp_config_t from NVS when valid */
 
+/** Stored in image_config_t.grayscale — ISP luma matrix when enabled (PIPE1 stays RGB565). */
+#define IMAGE_GRAYSCALE_OFF     AICAM_FALSE
+#define IMAGE_GRAYSCALE_ON      AICAM_TRUE
+
 //device service configuration structure
 typedef struct {
     uint32_t brightness;                     // image brightness (0-100)
@@ -351,6 +355,7 @@ typedef struct {
     aicam_bool_t horizontal_flip;            // image horizontal flip
     aicam_bool_t vertical_flip;              // image vertical flip
     uint32_t isp_mode;                       // IMAGE_ISP_MODE_OUTDOOR(0) / INDOOR(1) / CUSTOM
+    aicam_bool_t grayscale;                  // AICAM_TRUE: ISP grayscale overlay (PIPE1 RGB565)
     uint32_t aec;                            // image auto exposure control (0=manual, 1=auto)
     uint32_t startup_skip_frames;            // frames to skip on camera startup for stabilization (1-300)
     uint32_t fast_capture_skip_frames;       // frames to skip for fast capture (number of skipped frames for snapshot capture)

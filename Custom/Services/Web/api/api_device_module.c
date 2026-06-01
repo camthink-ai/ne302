@@ -368,6 +368,7 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddBoolToObject(response_json, "vertical_flip", camera_config.image_config.vertical_flip);
         cJSON_AddNumberToObject(response_json, "aec", camera_config.image_config.aec);
         cJSON_AddNumberToObject(response_json, "isp_mode", camera_config.image_config.isp_mode);
+        cJSON_AddBoolToObject(response_json, "grayscale", camera_config.image_config.grayscale);
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
@@ -466,6 +467,11 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
             }
         }
 
+        cJSON* grayscale_item = cJSON_GetObjectItem(request_json, "grayscale");
+        if (grayscale_item && cJSON_IsBool(grayscale_item)) {
+            image_config.grayscale = cJSON_IsTrue(grayscale_item) ? AICAM_TRUE : AICAM_FALSE;
+        }
+
         // Update fast capture skip frames if provided (0-300 to match CAM_CMD_SET_STARTUP_SKIP_FRAMES)
         cJSON* fast_skip_item = cJSON_GetObjectItem(request_json, "fast_capture_skip_frames");
         if (fast_skip_item && cJSON_IsNumber(fast_skip_item)) {
@@ -514,8 +520,7 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
             old_image_config.contrast != image_config.contrast ||
             old_image_config.horizontal_flip != image_config.horizontal_flip ||
             old_image_config.vertical_flip != image_config.vertical_flip ||
-            old_image_config.aec != image_config.aec ||
-            old_image_config.isp_mode != image_config.isp_mode) {
+            old_image_config.aec != image_config.aec) {
             need_restart_pipeline = AICAM_TRUE;
         }
 
@@ -545,6 +550,7 @@ aicam_result_t device_image_config_handler(http_handler_context_t *ctx) {
         cJSON_AddBoolToObject(response_json, "vertical_flip", image_config.vertical_flip);
         cJSON_AddNumberToObject(response_json, "aec", image_config.aec);
         cJSON_AddNumberToObject(response_json, "isp_mode", image_config.isp_mode);
+        cJSON_AddBoolToObject(response_json, "grayscale", image_config.grayscale);
         cJSON_AddNumberToObject(response_json, "fast_capture_skip_frames", image_config.fast_capture_skip_frames);
         cJSON_AddNumberToObject(response_json, "fast_capture_resolution", image_config.fast_capture_resolution);
         cJSON_AddNumberToObject(response_json, "fast_capture_jpeg_quality", image_config.fast_capture_jpeg_quality);
@@ -950,6 +956,7 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddBoolToObject(image_config_json, "vertical_flip", camera_config.image_config.vertical_flip);
             cJSON_AddNumberToObject(image_config_json, "aec", camera_config.image_config.aec);
             cJSON_AddNumberToObject(image_config_json, "isp_mode", camera_config.image_config.isp_mode);
+            cJSON_AddBoolToObject(image_config_json, "grayscale", camera_config.image_config.grayscale);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_json, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);
@@ -1066,6 +1073,12 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
                 }
             }
 
+            cJSON* grayscale_nested = cJSON_GetObjectItem(image_config_item, "grayscale");
+            if (grayscale_nested && cJSON_IsBool(grayscale_nested)) {
+                camera_config.image_config.grayscale =
+                    cJSON_IsTrue(grayscale_nested) ? AICAM_TRUE : AICAM_FALSE;
+            }
+
             cJSON* cap_dis_comm_item = cJSON_GetObjectItem(image_config_item, "capture_disable_comm");
             if (cap_dis_comm_item && cJSON_IsBool(cap_dis_comm_item)) {
                 camera_config.image_config.capture_disable_comm =
@@ -1107,6 +1120,7 @@ aicam_result_t device_camera_config_handler(http_handler_context_t *ctx) {
             cJSON_AddBoolToObject(image_config_response, "vertical_flip", camera_config.image_config.vertical_flip);
             cJSON_AddNumberToObject(image_config_response, "aec", camera_config.image_config.aec);
             cJSON_AddNumberToObject(image_config_response, "isp_mode", camera_config.image_config.isp_mode);
+            cJSON_AddBoolToObject(image_config_response, "grayscale", camera_config.image_config.grayscale);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_skip_frames", camera_config.image_config.fast_capture_skip_frames);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_resolution", camera_config.image_config.fast_capture_resolution);
             cJSON_AddNumberToObject(image_config_response, "fast_capture_jpeg_quality", camera_config.image_config.fast_capture_jpeg_quality);

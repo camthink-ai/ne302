@@ -212,7 +212,7 @@ static int qs_prepare_camera_and_jpeg(const qs_snapshot_config_t *cfg, const nn_
     /* ISP IQ before start: NVS + stock profiles via quick_storage (no json_config init). */
     {
         ISP_IQParamTypeDef isp_param = {0};
-        (void)quick_storage_fill_isp_iq_param(cfg->isp_mode, &isp_param);
+        (void)quick_storage_fill_isp_iq_param(cfg->isp_mode, cfg->grayscale, &isp_param);
         (void)device_ioctl(s_cam_dev, CAM_CMD_SET_ISP_PARAM, (uint8_t *)&isp_param, sizeof(isp_param));
     }
 

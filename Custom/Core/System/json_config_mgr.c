@@ -129,6 +129,7 @@
              .vertical_flip = AICAM_FALSE,
              .aec = 1,  // Auto exposure enabled
              .isp_mode = IMAGE_ISP_MODE_OUTDOOR,
+             .grayscale = IMAGE_GRAYSCALE_OFF,
              .startup_skip_frames = 10,  // Default frames to skip for camera stabilization
              .fast_capture_skip_frames = 10,
              .fast_capture_resolution = 0,   // 0: 1280x720

@@ -505,6 +505,10 @@ aicam_result_t json_config_save_device_service_image_config_to_nvs(const image_c
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image ISP mode to NVS");
 
+    result = json_config_nvs_write_bool(NVS_KEY_IMAGE_GRAYSCALE, config->grayscale);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save image grayscale to NVS");
+
     result = json_config_nvs_write_uint32(NVS_KEY_IMAGE_SKIP_FRAMES, config->startup_skip_frames);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save image startup skip frames to NVS");
@@ -1602,6 +1606,12 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->device_service.image_config.isp_mode = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_IMAGE_ISP_MODE, config->device_service.image_config.isp_mode);
+
+    result = json_config_nvs_read_bool(NVS_KEY_IMAGE_GRAYSCALE, &temp_bool);
+    if (result == AICAM_OK)
+        config->device_service.image_config.grayscale = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_IMAGE_GRAYSCALE, config->device_service.image_config.grayscale);
 
     result = json_config_nvs_read_uint32(NVS_KEY_IMAGE_SKIP_FRAMES, &temp_uint32);
     if (result == AICAM_OK)

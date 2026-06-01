@@ -7,6 +7,7 @@ export interface SetHardwareInfoReq {
     vertical_flip: boolean;
     aec: number;
     isp_mode: number;
+    grayscale: boolean;
     fast_capture_skip_frames: number;
     fast_capture_resolution: number;
     fast_capture_jpeg_quality: number;
