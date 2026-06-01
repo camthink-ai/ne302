@@ -53,6 +53,7 @@
     "total_boxes": 1344,
     "raw_output_scale": 0.003921569,
     "raw_output_zero_point": 0,
+    "kpts_conf_thresh": 0.15,
     "keypoint_names": [
       "nose", "left_eye", "right_eye", "left_ear", "right_ear",
       "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
