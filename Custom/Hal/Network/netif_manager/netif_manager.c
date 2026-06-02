@@ -393,7 +393,7 @@ static int netif_manager_cmd(int argc, char* argv[])
             return -1;
         }
         if (!mm_halow_regdomain_is_supported(argv[3])) {
-            LOG_SIMPLE("Regdomain %s not in firmware BCF (ifconfig hw reg_list)\r\n", argv[3]);
+            LOG_SIMPLE("Regdomain %s not in regulatory_db (ifconfig hw reg_list)\r\n", argv[3]);
             return -1;
         }
         ret = mm_halow_set_regdomain(argv[3]);
@@ -429,6 +429,16 @@ static int netif_manager_cmd(int argc, char* argv[])
             return -1;
         }
         ret = mm_halow_print_version();
+    } else if (strcmp(argv[2], "bcf_info") == 0) {
+        if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {
+            LOG_SIMPLE("Only hw supports bcf_info cmd\r\n");
+            return -1;
+        }
+        if (argc >= 4) {
+            ret = mm_halow_print_bcf_info(argv[3]);
+        } else {
+            ret = mm_halow_print_bcf_info(NULL);
+        }
     } else if (strcmp(argv[2], "dpp") == 0) {
         uint32_t timeout_ms = 120000U;
         if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {

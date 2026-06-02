@@ -32,6 +32,13 @@ int mm_halow_set_tx_power(uint16_t tx_power_dbm);
 int mm_halow_set_power_save(uint8_t enable);
 int mm_halow_set_scan_config(uint32_t dwell_ms, uint8_t ndp_probe_enabled);
 int mm_halow_print_version(void);
+/**
+ * Print current BCF metadata.
+ *
+ * @param country_code Optional 2-letter country code. If provided, selects the matching BCF first
+ *                     and then prints metadata. If NULL, uses the current HaLow config country code.
+ */
+int mm_halow_print_bcf_info(const char *country_code);
 
 /** HaLow DPP (Wi-Fi Easy Connect) completion events. */
 typedef enum {

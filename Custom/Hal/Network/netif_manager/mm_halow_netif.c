@@ -37,7 +37,6 @@ struct netif *mmipal_get_lwip_netif(void);
 enum mmwlan_status mmwlan_sta_set_mac_addr(const uint8_t *mac_addr);
 
 #define HALOW_SCAN_RESULT_MAX           (64)
-#define HALOW_BCF_REGDOM_MAX            (16U)
 #define HALOW_LINK_WAIT_MS              (30000U)
 #define HALOW_DPP_DEFAULT_TIMEOUT_MS    (120000U)
 
@@ -85,12 +84,6 @@ static wireless_scan_info_t *halow_async_scan_buf = NULL;
 static wireless_scan_result_t halow_async_scan_result = {0};
 static PowerHandle halow_pwr_handle = 0;
 
-/** Country codes present in the embedded BCF (firmware), not the full mmregdb. */
-static struct {
-    uint8_t parsed;
-    uint8_t count;
-    char cc[HALOW_BCF_REGDOM_MAX][MM_HALOW_REGDOMAIN_CC_LEN];
-} halow_bcf_regdoms;
 static uint8_t halow_pwr_acquired = 0;
 
 static void halow_resolve_sta_mac(uint8_t mac[6])
@@ -112,11 +105,11 @@ static void halow_apply_sta_mac_policy(void)
 
 static int halow_apply_halow_hw_config_locked(void);
 static int halow_apply_regdomain_locked(const char *country_code);
-static int halow_bcf_load_regdomain_list(void);
-static int halow_bcf_has_regdom(const char *country_code);
 static int halow_regdomain_supported(const char *country_code);
 static int halow_pick_fallback_regdomain(char *out, size_t out_len);
 static int halow_mmwlan_boot_locked(void);
+/* Select which embedded BCF the driver will use at next boot (mmhal_wlan_binaries.c). */
+extern void mmhal_wlan_select_bcf_for_country(const char *country_code);
 #if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
 static void halow_dpp_timeout_eloop(void *eloop_ctx, void *timeout_ctx);
 static void halow_dpp_cancel_timeout_timer(void);
@@ -477,6 +470,9 @@ static int halow_mmwlan_boot_locked(void)
 {
     struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
 
+    /* Ensure the HAL BCF callback uses a region-appropriate BCF at next boot. */
+    mmhal_wlan_select_bcf_for_country(halow_netif_cfg.halow_cfg.country_code);
+
     if (mmwlan_boot(&boot_args) != MMWLAN_SUCCESS) {
         LOG_DRV_ERROR("HaLow mmwlan_boot failed");
         return -1;
@@ -497,6 +493,7 @@ static int halow_ensure_mmwlan_booted_locked(void)
     return halow_mmwlan_boot_locked();
 }
 
+#if 0 /* legacy: parsing regdomains from embedded BCF */
 static void halow_bcf_robuf_cleanup(struct mmhal_robuf *robuf)
 {
     if (robuf != NULL && robuf->free_cb != NULL) {
@@ -660,6 +657,7 @@ static int halow_bcf_has_regdom(const char *country_code)
     }
     return 0;
 }
+#endif /* 0 */
 
 static int halow_regdomain_supported(const char *country_code)
 {
@@ -671,7 +669,7 @@ static int halow_regdomain_supported(const char *country_code)
     if (mmwlan_lookup_regulatory_domain(db, country_code) == NULL) {
         return 0;
     }
-    return halow_bcf_has_regdom(country_code);
+    return 1;
 }
 
 static int halow_pick_fallback_regdomain(char *out, size_t out_len)
@@ -697,11 +695,9 @@ static int halow_pick_fallback_regdomain(char *out, size_t out_len)
         cc[0] = (char)domain->country_code[0];
         cc[1] = (char)domain->country_code[1];
         cc[2] = '\0';
-        if (halow_bcf_has_regdom(cc)) {
-            strncpy(out, cc, out_len - 1U);
-            out[out_len - 1U] = '\0';
-            return 0;
-        }
+        strncpy(out, cc, out_len - 1U);
+        out[out_len - 1U] = '\0';
+        return 0;
     }
     return -1;
 }
@@ -717,15 +713,8 @@ static const struct mmwlan_s1g_channel_list *halow_regdomain_get_supported(unsig
     }
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
-        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
 
         if (domain == NULL) {
-            continue;
-        }
-        cc[0] = (char)domain->country_code[0];
-        cc[1] = (char)domain->country_code[1];
-        cc[2] = '\0';
-        if (!halow_bcf_has_regdom(cc)) {
             continue;
         }
         if (n == index) {
@@ -749,11 +738,6 @@ static int halow_apply_regdomain_locked(const char *country_code)
     list = mmwlan_lookup_regulatory_domain(db, country_code);
     if (list == NULL) {
         LOG_DRV_ERROR("HaLow regdomain not found: %s", country_code);
-        return -1;
-    }
-
-    if (!halow_bcf_has_regdom(country_code)) {
-        LOG_DRV_ERROR("HaLow regdomain %s not in firmware BCF (ifconfig hw reg_list)", country_code);
         return -1;
     }
 
@@ -1731,22 +1715,16 @@ unsigned mm_halow_regdomain_count(void)
     unsigned i;
     unsigned n = 0;
 
-    if (db == NULL || halow_bcf_load_regdomain_list() != 0) {
+    if (db == NULL) {
         return 0;
     }
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
-        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
 
         if (domain == NULL) {
             continue;
         }
-        cc[0] = (char)domain->country_code[0];
-        cc[1] = (char)domain->country_code[1];
-        cc[2] = '\0';
-        if (halow_bcf_has_regdom(cc)) {
-            n++;
-        }
+        n++;
     }
     return n;
 }
@@ -1785,12 +1763,8 @@ int mm_halow_list_regdomains(void)
         printf("HaLow regdomain DB unavailable\r\n");
         return -1;
     }
-    if (halow_bcf_load_regdomain_list() != 0) {
-        printf("HaLow firmware BCF regdomain list unavailable\r\n");
-        return -1;
-    }
 
-    printf("HaLow regdomains (firmware BCF, %u):\r\n", mm_halow_regdomain_count());
+    printf("HaLow regdomains (regulatory_db_domains, %u):\r\n", mm_halow_regdomain_count());
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
         char cc[MM_HALOW_REGDOMAIN_CC_LEN];
@@ -1801,9 +1775,6 @@ int mm_halow_list_regdomains(void)
         cc[0] = (char)domain->country_code[0];
         cc[1] = (char)domain->country_code[1];
         cc[2] = '\0';
-        if (!halow_bcf_has_regdom(cc)) {
-            continue;
-        }
 
         printf("  %s (%u ch)", cc, domain->num_channels);
         listed++;
@@ -1819,7 +1790,7 @@ int mm_halow_list_regdomains(void)
     if (current[0] != '\0') {
         printf("Current cfg: %s", current);
         if (!halow_regdomain_supported(current)) {
-            printf(" (not in BCF)");
+            printf(" (not in regulatory_db)");
         }
         printf("\r\n");
     }
@@ -1838,6 +1809,36 @@ int mm_halow_print_version(void)
     printf("HaLow FW: %s\r\n", version.morse_fw_version);
     printf("HaLow Lib: %s\r\n", version.morselib_version);
     printf("HaLow Chip: %s (0x%08lX)\r\n", version.morse_chip_id_string, (unsigned long)version.morse_chip_id);
+    return 0;
+}
+
+int mm_halow_print_bcf_info(const char *country_code)
+{
+    struct mmwlan_bcf_metadata meta;
+    const char *cc = country_code;
+
+    if (cc == NULL) {
+        cc = halow_netif_cfg.halow_cfg.country_code;
+    }
+    if (cc == NULL || cc[0] == '\0' || cc[1] == '\0') {
+        printf("HaLow BCF: invalid country code\r\n");
+        return -1;
+    }
+
+    mmhal_wlan_select_bcf_for_country(cc);
+
+    if (mmwlan_get_bcf_metadata(&meta) != MMWLAN_SUCCESS) {
+        printf("HaLow BCF metadata query failed\r\n");
+        return -1;
+    }
+
+    printf("HaLow BCF (for %c%c):\r\n", cc[0], cc[1]);
+    printf("  Version: %u.%u.%u\r\n",
+           (unsigned)meta.version.major,
+           (unsigned)meta.version.minor,
+           (unsigned)meta.version.patch);
+    printf("  Board: %s\r\n", meta.board_desc);
+    printf("  Build: %s\r\n", meta.build_version);
     return 0;
 }
 
