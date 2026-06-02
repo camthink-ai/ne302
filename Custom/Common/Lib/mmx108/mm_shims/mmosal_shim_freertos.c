@@ -295,10 +295,7 @@ void mmosal_free(void *p)
 
 void *mmosal_realloc(void *ptr, size_t size)
 {
-    //return pvPortRealloc_(ptr, size);
-    vPortFree(ptr);
-	ptr = pvPortMalloc(size);
-	return ptr;
+    return pvPortRealloc(ptr, size);
 }
 
 void *mmosal_calloc(size_t nitems, size_t size)

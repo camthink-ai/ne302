@@ -334,11 +334,11 @@ void StartMainTask(void *argument)
     step_duration_ms = step_end_time_ms - step_start_time_ms;
     printf("[BOOT] Step 4 - core_system_init: %lu ms\r\n", (unsigned long)step_duration_ms);
 
-// #if POWER_MODULE_TEST
+#if POWER_MODULE_TEST
     for (;;) {
         osDelay(1000);
     }
-// #endif
+#endif
 
     if (is_wifi_ant()) {
       for (;;) {

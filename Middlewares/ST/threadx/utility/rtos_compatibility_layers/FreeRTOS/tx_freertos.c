@@ -43,8 +43,10 @@
 #include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <tx_api.h>
+#include <tx_byte_pool.h>
 #include <tx_thread.h>
 #include <tx_semaphore.h>
 #include <tx_queue.h>
@@ -159,6 +161,77 @@ void txfr_free(void *p)
     if(ret != TX_SUCCESS) {
         TX_FREERTOS_ASSERT_FAIL();
     }
+}
+
+/* User payload size of a block allocated from txfr_heap (ThreadX byte-pool layout). */
+static size_t txfr_block_user_size(void *ptr)
+{
+    UCHAR               *work_ptr;
+    UCHAR               **block_link_ptr;
+    UCHAR               *next_block_ptr;
+    ALIGN_TYPE          *free_ptr;
+    UCHAR               *temp_ptr;
+    ULONG               block_bytes;
+    const ULONG         header_size = (ULONG)(sizeof(UCHAR *)) + (ULONG)(sizeof(ALIGN_TYPE));
+
+    if(ptr == NULL) {
+        return 0;
+    }
+
+    work_ptr = TX_VOID_TO_UCHAR_POINTER_CONVERT(ptr);
+    work_ptr = TX_UCHAR_POINTER_SUB(work_ptr, header_size);
+
+    temp_ptr = TX_UCHAR_POINTER_ADD(work_ptr, (sizeof(UCHAR *)));
+    free_ptr = TX_UCHAR_TO_ALIGN_TYPE_POINTER_CONVERT(temp_ptr);
+    if((*free_ptr) == TX_BYTE_BLOCK_FREE) {
+        return 0;
+    }
+
+    block_link_ptr = TX_UCHAR_TO_INDIRECT_UCHAR_POINTER_CONVERT(work_ptr);
+    next_block_ptr = *block_link_ptr;
+    block_bytes = TX_UCHAR_POINTER_DIF(next_block_ptr, work_ptr);
+    if(block_bytes <= header_size) {
+        return 0;
+    }
+
+    return (size_t)(block_bytes - header_size);
+}
+
+void *txfr_realloc(void *ptr, size_t size)
+{
+    void   *new_ptr;
+    size_t  old_size;
+    size_t  copy_len;
+
+    if(txfr_heap_initialized != 1u) {
+        return NULL;
+    }
+
+    if(ptr == NULL) {
+        return txfr_malloc(size);
+    }
+
+    if(size == 0) {
+        txfr_free(ptr);
+        return NULL;
+    }
+
+    old_size = txfr_block_user_size(ptr);
+    new_ptr = txfr_malloc(size);
+    if(new_ptr == NULL) {
+        return NULL;
+    }
+
+    copy_len = old_size;
+    if(copy_len > size) {
+        copy_len = size;
+    }
+    if(copy_len > 0) {
+        (void)memcpy(new_ptr, ptr, copy_len);
+    }
+
+    txfr_free(ptr);
+    return new_ptr;
 }
 
 #if (INCLUDE_vTaskDelete == 1)
@@ -313,6 +386,11 @@ void vPortFree(void *pv)
     txfr_free(pv);
 
     return;
+}
+
+void *pvPortRealloc(void *pv, size_t xWantedSize)
+{
+    return txfr_realloc(pv, xWantedSize);
 }
 
 void vPortEnterCritical(void)

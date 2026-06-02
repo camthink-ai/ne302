@@ -23,17 +23,44 @@ int mm_halow_set_regdomain(const char *country_code);
 #define MM_HALOW_REGDOMAIN_CC_LEN           (3U)
 
 unsigned mm_halow_regdomain_count(void);
+/** 1 if @p country_code is in mmregdb and the embedded firmware BCF. */
+int mm_halow_regdomain_is_supported(const char *country_code);
 int mm_halow_regdomain_get_code(unsigned index, char *country_code, size_t len);
-/** Print supported regdomain codes from mmregdb (no HaLow init required). */
+/** Print regdomains present in firmware BCF (no HaLow init required). */
 int mm_halow_list_regdomains(void);
 int mm_halow_set_tx_power(uint16_t tx_power_dbm);
 int mm_halow_set_power_save(uint8_t enable);
 int mm_halow_set_scan_config(uint32_t dwell_ms, uint8_t ndp_probe_enabled);
 int mm_halow_print_version(void);
 
-/** Wi-Fi Easy Connect (DPP) push-button provisioning; blocks until done or @p timeout_ms. */
-int mm_halow_dpp_start(uint32_t timeout_ms, uint8_t auto_up);
-/** Stop an in-progress DPP session. */
+/** HaLow DPP (Wi-Fi Easy Connect) completion events. */
+typedef enum {
+    MM_HALOW_DPP_EVT_SUCCESS = 0,
+    MM_HALOW_DPP_EVT_FAILED,
+    MM_HALOW_DPP_EVT_SESSION_OVERLAP,
+    MM_HALOW_DPP_EVT_TIMEOUT,
+    MM_HALOW_DPP_EVT_STOPPED,
+} mm_halow_dpp_evt_t;
+
+/** Payload passed to @ref mm_halow_dpp_callback_t (valid only for the duration of the call). */
+typedef struct {
+    mm_halow_dpp_evt_t event;
+    /** Set on @ref MM_HALOW_DPP_EVT_SUCCESS; points at saved netif credentials. */
+    const char *ssid;
+    /** @ref WIRELESS_OPEN or @ref WIRELESS_SAE on success. */
+    uint8_t security;
+} mm_halow_dpp_evt_info_t;
+
+typedef void (*mm_halow_dpp_callback_t)(const mm_halow_dpp_evt_info_t *info, void *user_arg);
+
+/**
+ * Start DPP push-button provisioning (non-blocking).
+ * @p timeout_ms 0 uses @ref HALOW_DPP_DEFAULT_TIMEOUT_MS.
+ * @p cb          Optional; invoked on success, failure, overlap, timeout, or stop.
+ * @return 0 if started, -1 on precondition or start failure (no callback).
+ */
+int mm_halow_dpp_start(uint32_t timeout_ms, mm_halow_dpp_callback_t cb, void *user_arg);
+/** Stop an in-progress DPP session; invokes @p cb with @ref MM_HALOW_DPP_EVT_STOPPED if active. */
 int mm_halow_dpp_stop(void);
 uint8_t mm_halow_dpp_is_active(void);
 

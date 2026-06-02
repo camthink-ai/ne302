@@ -84,7 +84,6 @@ bool driver_core_init(void)
 #else
     netif_manager_register();
 #endif
-    netif_manager_register();
     netif_manager_register_commands();
     // wifi_register();
     // tls_test_register();

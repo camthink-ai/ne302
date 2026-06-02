@@ -81,7 +81,7 @@
 #define NETIF_WIFI_HALOW_DEFAULT_MASK         {255, 255, 255, 0}
 #define NETIF_WIFI_HALOW_DEFAULT_GW           {192, 168, 12, 1}
 #define NETIF_WIFI_HALOW_DEFAULT_IP_MODE      (NETIF_IP_MODE_STATIC)
-#define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (120)
+#define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (30)
 #endif
 #define NETIF_NAME_ETH_WAN                  "wn"
 #define NETIF_NAME_4G_CAT1                  "4g"

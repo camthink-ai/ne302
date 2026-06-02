@@ -281,6 +281,8 @@ UINT tx_freertos_init(void);
 
 void *pvPortMalloc(size_t xWantedSize);
 void vPortFree(void *pv);
+void *pvPortRealloc(void *pv, size_t xWantedSize);
+void *txfr_realloc(void *ptr, size_t size);
 void vPortEnterCritical(void);
 void vPortExitCritical(void);
 

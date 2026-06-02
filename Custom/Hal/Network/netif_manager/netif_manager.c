@@ -106,6 +106,38 @@ static void wireless_scan_callback_func(int recode, wireless_scan_result_t *scan
     }
 }
 
+#if NETIF_WIFI_HALOW_IS_ENABLE
+static void netif_cli_halow_dpp_cb(const mm_halow_dpp_evt_info_t *info, void *user_arg)
+{
+    (void)user_arg;
+
+    if (info == NULL) {
+        return;
+    }
+
+    switch (info->event) {
+    case MM_HALOW_DPP_EVT_SUCCESS:
+        LOG_SIMPLE("HaLow DPP OK: ssid=%s sec=%s -> 'ifconfig hw up'\r\n",
+                   info->ssid != NULL ? info->ssid : "",
+                   info->security == WIRELESS_SAE ? "sae" : "open");
+        break;
+    case MM_HALOW_DPP_EVT_SESSION_OVERLAP:
+        LOG_SIMPLE("HaLow DPP: session overlap\r\n");
+        break;
+    case MM_HALOW_DPP_EVT_TIMEOUT:
+        LOG_SIMPLE("HaLow DPP: timeout\r\n");
+        break;
+    case MM_HALOW_DPP_EVT_STOPPED:
+        LOG_SIMPLE("HaLow DPP: stopped\r\n");
+        break;
+    case MM_HALOW_DPP_EVT_FAILED:
+    default:
+        LOG_SIMPLE("HaLow DPP: failed\r\n");
+        break;
+    }
+}
+#endif
+
 static int netif_manager_cmd(int argc, char* argv[]) 
 {
     int ret = 0;
@@ -192,6 +224,10 @@ static int netif_manager_cmd(int argc, char* argv[])
             strcmp(argv[3], "reg") == 0) {
             if (argc < 5 || strlen(argv[4]) < 2U) {
                 LOG_SIMPLE("Usage: ifconfig hw cfg reg <CC>\r\n");
+                return -1;
+            }
+            if (!mm_halow_regdomain_is_supported(argv[4])) {
+                LOG_SIMPLE("Regdomain %s not in firmware BCF (ifconfig hw reg_list)\r\n", argv[4]);
                 return -1;
             }
             strncpy(if_cfg.halow_cfg.country_code, argv[4],
@@ -356,6 +392,10 @@ static int netif_manager_cmd(int argc, char* argv[])
             LOG_SIMPLE("Usage: ifconfig hw reg <CC>\r\n");
             return -1;
         }
+        if (!mm_halow_regdomain_is_supported(argv[3])) {
+            LOG_SIMPLE("Regdomain %s not in firmware BCF (ifconfig hw reg_list)\r\n", argv[3]);
+            return -1;
+        }
         ret = mm_halow_set_regdomain(argv[3]);
     } else if (strcmp(argv[2], "reg_list") == 0) {
         if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {
@@ -391,7 +431,6 @@ static int netif_manager_cmd(int argc, char* argv[])
         ret = mm_halow_print_version();
     } else if (strcmp(argv[2], "dpp") == 0) {
         uint32_t timeout_ms = 120000U;
-        uint8_t auto_up = 0;
         if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {
             LOG_SIMPLE("Only hw supports dpp cmd\r\n");
             return -1;
@@ -402,10 +441,7 @@ static int netif_manager_cmd(int argc, char* argv[])
             if (argc >= 4) {
                 timeout_ms = (uint32_t)atoi(argv[3]) * 1000U;
             }
-            if (argc >= 5 && (strcmp(argv[4], "auto") == 0 || strcmp(argv[4], "1") == 0)) {
-                auto_up = 1;
-            }
-            ret = mm_halow_dpp_start(timeout_ms, auto_up);
+            ret = mm_halow_dpp_start(timeout_ms, netif_cli_halow_dpp_cb, NULL);
         }
     } else if (strcmp(argv[2], "dpp_stop") == 0) {
         if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {

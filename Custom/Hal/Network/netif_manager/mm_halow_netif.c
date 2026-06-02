@@ -19,8 +19,11 @@
 #include "mmwlan.h"
 #include "mmipal.h"
 #include "mmregdb.h"
+#include "mbin.h"
 #include "mmosal.h"
 #include "mmutils.h"
+#include "os.h"
+#include "eloop.h"
 #include "lwip/netif.h"
 
 #if !defined(MMHAL_WLAN_USE_SOFT_SPI)
@@ -33,6 +36,7 @@ struct netif *mmipal_get_lwip_netif(void);
 enum mmwlan_status mmwlan_sta_set_mac_addr(const uint8_t *mac_addr);
 
 #define HALOW_SCAN_RESULT_MAX           (64)
+#define HALOW_BCF_REGDOM_MAX            (16U)
 #define HALOW_LINK_WAIT_MS              (30000U)
 #define HALOW_DPP_DEFAULT_TIMEOUT_MS    (120000U)
 
@@ -76,10 +80,16 @@ static wireless_scan_result_t halow_storage_scan_result = {0};
 static osSemaphoreId_t halow_scan_sem = NULL;
 static wireless_scan_callback_t halow_scan_user_cb = NULL;
 static uint8_t halow_scan_in_progress = 0;
-static uint8_t halow_scan_need_restore = 0;
 static wireless_scan_info_t *halow_async_scan_buf = NULL;
 static wireless_scan_result_t halow_async_scan_result = {0};
 static PowerHandle halow_pwr_handle = 0;
+
+/** Country codes present in the embedded BCF (firmware), not the full mmregdb. */
+static struct {
+    uint8_t parsed;
+    uint8_t count;
+    char cc[HALOW_BCF_REGDOM_MAX][MM_HALOW_REGDOMAIN_CC_LEN];
+} halow_bcf_regdoms;
 static uint8_t halow_pwr_acquired = 0;
 
 static void halow_resolve_sta_mac(uint8_t mac[6])
@@ -101,7 +111,37 @@ static void halow_apply_sta_mac_policy(void)
 
 static int halow_apply_halow_hw_config_locked(void);
 static int halow_apply_regdomain_locked(const char *country_code);
+static int halow_bcf_load_regdomain_list(void);
+static int halow_bcf_has_regdom(const char *country_code);
+static int halow_regdomain_supported(const char *country_code);
+static int halow_pick_fallback_regdomain(char *out, size_t out_len);
 static int halow_mmwlan_boot_locked(void);
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+static void halow_dpp_timeout_eloop(void *eloop_ctx, void *timeout_ctx);
+static void halow_dpp_cancel_timeout_timer(void);
+static void halow_dpp_ensure_umac_idle_cli(void);
+static void halow_dpp_finish(mm_halow_dpp_evt_t event);
+#endif
+
+static volatile uint8_t halow_dpp_active = 0;
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+static mm_halow_dpp_callback_t halow_dpp_user_cb = NULL;
+static void *halow_dpp_user_arg = NULL;
+static volatile uint8_t halow_dpp_deferred_cb_pending = 0;
+static mm_halow_dpp_evt_t halow_dpp_deferred_evt;
+#endif
+
+/** @return 1 if rejected (DPP active); caller holds halow_mutex and should return -1. */
+static int halow_dpp_reject_if_active_locked(void)
+{
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+    if (halow_dpp_active) {
+        LOG_DRV_ERROR("HaLow: not supported during DPP (ifconfig hw dpp_stop first)");
+        return 1;
+    }
+#endif
+    return 0;
+}
 
 static void halow_try_set_sta_mac_runtime(const uint8_t mac[6])
 {
@@ -117,10 +157,6 @@ static void halow_try_set_sta_mac_runtime(const uint8_t mac[6])
         LOG_DRV_WARN("HaLow STA MAC differs from cfg; down+up or deinit to apply");
     }
 }
-
-static volatile uint8_t halow_dpp_active = 0;
-static struct mmosal_semb *halow_dpp_done_sem = NULL;
-static enum mmwlan_dpp_pb_result halow_dpp_last_result = MMWLAN_DPP_PB_RESULT_ERROR;
 
 static int halow_power_acquire(void)
 {
@@ -232,6 +268,42 @@ static void mm_halow_sta_status_callback(enum mmwlan_sta_state sta_state)
     }
 }
 
+static int halow_link_is_up_locked(void)
+{
+    struct netif *nif;
+
+    if (mmipal_get_link_state() != MMIPAL_LINK_UP) {
+        return 0;
+    }
+    nif = mmipal_get_lwip_netif();
+    return (nif != NULL && netif_is_link_up(nif));
+}
+
+static void halow_drain_link_sem(void)
+{
+    if (halow_link_sem == NULL) {
+        return;
+    }
+    while (mmosal_semb_wait(halow_link_sem, 0)) {
+    }
+}
+
+/** Wait for MMIPAL link-up; skip if already up (avoids stale sem after reconnect). */
+static int halow_wait_for_link_locked(void)
+{
+    if (halow_link_is_up_locked()) {
+        return 0;
+    }
+    halow_drain_link_sem();
+    if (halow_link_sem == NULL) {
+        return 0;
+    }
+    if (!mmosal_semb_wait(halow_link_sem, HALOW_LINK_WAIT_MS)) {
+        return -1;
+    }
+    return halow_link_is_up_locked() ? 0 : -1;
+}
+
 static enum mmwlan_security_type halow_map_security(wireless_security_t security)
 {
     switch (security) {
@@ -262,10 +334,7 @@ static void halow_abort_operations_locked(void)
     if (halow_scan_in_progress) {
         (void)mmwlan_scan_abort();
         halow_scan_in_progress = 0;
-        halow_scan_need_restore = 0;
     }
-
-    (void)mm_halow_dpp_stop();
 
     if (halow_state == NETIF_STATE_UP) {
         (void)mmwlan_sta_disable();
@@ -306,7 +375,17 @@ static int halow_stack_init_locked(void)
     halow_mmwlan_inited = 1;
 
     if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
-        return -1;
+        char fallback[MM_HALOW_REGDOMAIN_CC_LEN];
+
+        if (halow_pick_fallback_regdomain(fallback, sizeof(fallback)) != 0) {
+            LOG_DRV_ERROR("HaLow: no regdomain in firmware BCF");
+            return -1;
+        }
+        LOG_DRV_WARN("HaLow regdomain '%s' not in firmware BCF, using %s",
+                     halow_netif_cfg.halow_cfg.country_code, fallback);
+        if (halow_apply_regdomain_locked(fallback) != 0) {
+            return -1;
+        }
     }
 
     (void)halow_apply_halow_hw_config_locked();
@@ -356,11 +435,11 @@ static void halow_netif_resources_deinit_locked(void)
         halow_link_sem = NULL;
     }
 
-    if (halow_dpp_done_sem != NULL) {
-        mmosal_semb_delete(halow_dpp_done_sem);
-        halow_dpp_done_sem = NULL;
-    }
     halow_dpp_active = 0;
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+    halow_dpp_user_cb = NULL;
+    halow_dpp_user_arg = NULL;
+#endif
 
     halow_power_release();              /* ↔ halow_power_acquire() in init */
 }
@@ -373,7 +452,6 @@ static int halow_mmwlan_teardown_locked(void)
     if (halow_scan_in_progress) {
         (void)mmwlan_scan_abort();
         halow_scan_in_progress = 0;
-        halow_scan_need_restore = 0;
     }
 
     if (halow_state == NETIF_STATE_UP) {
@@ -418,6 +496,245 @@ static int halow_ensure_mmwlan_booted_locked(void)
     return halow_mmwlan_boot_locked();
 }
 
+static void halow_bcf_robuf_cleanup(struct mmhal_robuf *robuf)
+{
+    if (robuf != NULL && robuf->free_cb != NULL) {
+        robuf->free_cb(robuf->free_arg);
+    }
+    if (robuf != NULL) {
+        memset(robuf, 0, sizeof(*robuf));
+    }
+}
+
+static uint16_t halow_bcf_le16(const uint8_t *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8U);
+}
+
+static int halow_bcf_read(uint32_t offset, uint32_t len, struct mmhal_robuf *robuf)
+{
+    memset(robuf, 0, sizeof(*robuf));
+    mmhal_wlan_read_bcf_file(offset, len, robuf);
+    if (robuf->buf == NULL || robuf->len < MMHAL_WLAN_FW_BCF_MIN_READ_LENGTH) {
+        halow_bcf_robuf_cleanup(robuf);
+        return -1;
+    }
+    if (robuf->len > len) {
+        robuf->len = len;
+    }
+    return 0;
+}
+
+static int halow_bcf_read_tlv_hdr(uint32_t *offset, struct mbin_tlv_hdr *tlv_hdr)
+{
+    struct mmhal_robuf robuf = {0};
+    const struct mbin_tlv_hdr *hdr;
+
+    if (halow_bcf_read(*offset, sizeof(*tlv_hdr), &robuf) != 0) {
+        return -1;
+    }
+    hdr = (const struct mbin_tlv_hdr *)robuf.buf;
+    tlv_hdr->type = halow_bcf_le16((const uint8_t *)&hdr->type);
+    tlv_hdr->len = halow_bcf_le16((const uint8_t *)&hdr->len);
+    *offset += robuf.len;
+    halow_bcf_robuf_cleanup(&robuf);
+    return 0;
+}
+
+static int halow_bcf_validate_magic(uint32_t *offset)
+{
+    struct mbin_tlv_hdr tlv_hdr;
+    struct mmhal_robuf robuf = {0};
+    uint32_t magic;
+
+    if (halow_bcf_read_tlv_hdr(offset, &tlv_hdr) != 0) {
+        return -1;
+    }
+    if (tlv_hdr.type != FIELD_TYPE_MAGIC || tlv_hdr.len != sizeof(magic)) {
+        return -1;
+    }
+    if (halow_bcf_read(*offset, tlv_hdr.len, &robuf) != 0) {
+        return -1;
+    }
+    magic = (uint32_t)robuf.buf[0] | ((uint32_t)robuf.buf[1] << 8U) |
+            ((uint32_t)robuf.buf[2] << 16U) | ((uint32_t)robuf.buf[3] << 24U);
+    *offset += robuf.len;
+    halow_bcf_robuf_cleanup(&robuf);
+    return (magic == MBIN_BCF_MAGIC_NUMBER) ? 0 : -1;
+}
+
+static int halow_bcf_regdom_add(const char *cc)
+{
+    unsigned i;
+
+    if (cc == NULL || cc[0] == '\0' || cc[1] == '\0') {
+        return -1;
+    }
+    for (i = 0; i < halow_bcf_regdoms.count; i++) {
+        if (halow_bcf_regdoms.cc[i][0] == cc[0] && halow_bcf_regdoms.cc[i][1] == cc[1]) {
+            return 0;
+        }
+    }
+    if (halow_bcf_regdoms.count >= HALOW_BCF_REGDOM_MAX) {
+        return -1;
+    }
+    halow_bcf_regdoms.cc[halow_bcf_regdoms.count][0] = cc[0];
+    halow_bcf_regdoms.cc[halow_bcf_regdoms.count][1] = cc[1];
+    halow_bcf_regdoms.cc[halow_bcf_regdoms.count][2] = '\0';
+    halow_bcf_regdoms.count++;
+    return 0;
+}
+
+/** Parse embedded BCF and collect FIELD_TYPE_BCF_REGDOM country codes. */
+static int halow_bcf_load_regdomain_list(void)
+{
+    uint32_t offset = 0;
+    struct mbin_tlv_hdr tlv_hdr;
+    int ret = -1;
+
+    if (halow_bcf_regdoms.parsed) {
+        return (halow_bcf_regdoms.count > 0) ? 0 : -1;
+    }
+    halow_bcf_regdoms.parsed = 1;
+
+    if (halow_bcf_validate_magic(&offset) != 0) {
+        return -1;
+    }
+    if (halow_bcf_read_tlv_hdr(&offset, &tlv_hdr) != 0) {
+        return -1;
+    }
+    if (tlv_hdr.type != FIELD_TYPE_BCF_BOARD_CONFIG) {
+        return -1;
+    }
+    offset += tlv_hdr.len;
+
+    while (halow_bcf_read_tlv_hdr(&offset, &tlv_hdr) == 0) {
+        if (tlv_hdr.type == FIELD_TYPE_EOF || tlv_hdr.type == FIELD_TYPE_EOF_WITH_SIGNATURE) {
+            ret = 0;
+            break;
+        }
+        if (tlv_hdr.type == FIELD_TYPE_BCF_REGDOM) {
+            struct mmhal_robuf robuf = {0};
+            const struct mbin_regdom_hdr *hdr;
+            char cc[MM_HALOW_REGDOMAIN_CC_LEN];
+
+            if (tlv_hdr.len < sizeof(*hdr)) {
+                ret = -1;
+                break;
+            }
+            if (halow_bcf_read(offset, sizeof(*hdr), &robuf) != 0) {
+                ret = -1;
+                break;
+            }
+            hdr = (const struct mbin_regdom_hdr *)robuf.buf;
+            cc[0] = (char)hdr->country_code[0];
+            cc[1] = (char)hdr->country_code[1];
+            cc[2] = '\0';
+            halow_bcf_robuf_cleanup(&robuf);
+            (void)halow_bcf_regdom_add(cc);
+            offset += tlv_hdr.len;
+            continue;
+        }
+        offset += tlv_hdr.len;
+    }
+
+    return (halow_bcf_regdoms.count > 0 && ret == 0) ? 0 : -1;
+}
+
+static int halow_bcf_has_regdom(const char *country_code)
+{
+    unsigned i;
+
+    if (halow_bcf_load_regdomain_list() != 0) {
+        return 0;
+    }
+    if (country_code == NULL || country_code[0] == '\0' || country_code[1] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < halow_bcf_regdoms.count; i++) {
+        if (halow_bcf_regdoms.cc[i][0] == country_code[0] &&
+            halow_bcf_regdoms.cc[i][1] == country_code[1]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int halow_regdomain_supported(const char *country_code)
+{
+    const struct mmwlan_regulatory_db *db = get_regulatory_db();
+
+    if (db == NULL || country_code == NULL || country_code[0] == '\0') {
+        return 0;
+    }
+    if (mmwlan_lookup_regulatory_domain(db, country_code) == NULL) {
+        return 0;
+    }
+    return halow_bcf_has_regdom(country_code);
+}
+
+static int halow_pick_fallback_regdomain(char *out, size_t out_len)
+{
+    const struct mmwlan_regulatory_db *db = get_regulatory_db();
+    unsigned i;
+
+    if (out == NULL || out_len < MM_HALOW_REGDOMAIN_CC_LEN || db == NULL) {
+        return -1;
+    }
+    if (halow_regdomain_supported(NETIF_WIFI_HALOW_DEFAULT_COUNTRY)) {
+        strncpy(out, NETIF_WIFI_HALOW_DEFAULT_COUNTRY, out_len - 1U);
+        out[out_len - 1U] = '\0';
+        return 0;
+    }
+    for (i = 0; i < db->num_domains; i++) {
+        const struct mmwlan_s1g_channel_list *domain = db->domains[i];
+        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
+
+        if (domain == NULL) {
+            continue;
+        }
+        cc[0] = (char)domain->country_code[0];
+        cc[1] = (char)domain->country_code[1];
+        cc[2] = '\0';
+        if (halow_bcf_has_regdom(cc)) {
+            strncpy(out, cc, out_len - 1U);
+            out[out_len - 1U] = '\0';
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static const struct mmwlan_s1g_channel_list *halow_regdomain_get_supported(unsigned index)
+{
+    const struct mmwlan_regulatory_db *db = get_regulatory_db();
+    unsigned i;
+    unsigned n = 0;
+
+    if (db == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < db->num_domains; i++) {
+        const struct mmwlan_s1g_channel_list *domain = db->domains[i];
+        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
+
+        if (domain == NULL) {
+            continue;
+        }
+        cc[0] = (char)domain->country_code[0];
+        cc[1] = (char)domain->country_code[1];
+        cc[2] = '\0';
+        if (!halow_bcf_has_regdom(cc)) {
+            continue;
+        }
+        if (n == index) {
+            return domain;
+        }
+        n++;
+    }
+    return NULL;
+}
+
 static int halow_apply_regdomain_locked(const char *country_code)
 {
     const struct mmwlan_regulatory_db *db = get_regulatory_db();
@@ -431,6 +748,11 @@ static int halow_apply_regdomain_locked(const char *country_code)
     list = mmwlan_lookup_regulatory_domain(db, country_code);
     if (list == NULL) {
         LOG_DRV_ERROR("HaLow regdomain not found: %s", country_code);
+        return -1;
+    }
+
+    if (!halow_bcf_has_regdom(country_code)) {
+        LOG_DRV_ERROR("HaLow regdomain %s not in firmware BCF (ifconfig hw reg_list)", country_code);
         return -1;
     }
 
@@ -484,6 +806,16 @@ static int halow_apply_halow_hw_config_locked(void)
     return 0;
 }
 
+static void halow_set_lwip_netif_name(void)
+{
+    struct netif *nif = mmipal_get_lwip_netif();
+
+    if (nif != NULL) {
+        nif->name[0] = NETIF_NAME_WIFI_HALOW[0];
+        nif->name[1] = NETIF_NAME_WIFI_HALOW[1];
+    }
+}
+
 static int halow_mmipal_init_from_cfg(void)
 {
     struct mmipal_init_args ip_init_args;
@@ -511,22 +843,61 @@ static int halow_mmipal_init_from_cfg(void)
     }
 
     mmipal_set_link_status_callback(mm_halow_link_status_callback);
+    halow_set_lwip_netif_name();
     halow_stack_ready = 1;
     return 0;
+}
+
+static int halow_wireless_cfg_valid_for_sta(const wireless_config_t *wc)
+{
+    size_t ssid_len;
+    size_t pass_len;
+
+    if (wc == NULL) {
+        return 0;
+    }
+
+    ssid_len = strlen(wc->ssid);
+    if (ssid_len == 0 || ssid_len > MMWLAN_SSID_MAXLEN) {
+        return 0;
+    }
+
+    if (wc->security == WIRELESS_SAE || wc->security == WIRELESS_WPA3) {
+        pass_len = strlen(wc->pw);
+        if (pass_len == 0 || pass_len > MMWLAN_PASSPHRASE_MAXLEN) {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 static void halow_fill_sta_args(struct mmwlan_sta_args *sta_args)
 {
     const wireless_config_t *wc = &halow_netif_cfg.wireless_cfg;
     const halow_wireless_config_t *hc = &halow_netif_cfg.halow_cfg;
+    size_t ssid_len;
+    size_t pass_len;
 
     struct mmwlan_sta_args defaults = MMWLAN_STA_ARGS_INIT;
     memcpy(sta_args, &defaults, sizeof(*sta_args));
 
-    strncpy((char *)sta_args->ssid, wc->ssid, MMWLAN_SSID_MAXLEN - 1);
-    sta_args->ssid_len = (uint16_t)strlen(wc->ssid);
-    strncpy(sta_args->passphrase, wc->pw, MMWLAN_PASSPHRASE_MAXLEN);
-    sta_args->passphrase_len = (uint16_t)strlen(wc->pw);
+    ssid_len = strlen(wc->ssid);
+    if (ssid_len > MMWLAN_SSID_MAXLEN) {
+        ssid_len = MMWLAN_SSID_MAXLEN;
+    }
+    memcpy(sta_args->ssid, wc->ssid, ssid_len);
+    sta_args->ssid[ssid_len] = '\0';
+    sta_args->ssid_len = (uint16_t)ssid_len;
+
+    pass_len = strlen(wc->pw);
+    if (pass_len > MMWLAN_PASSPHRASE_MAXLEN) {
+        pass_len = MMWLAN_PASSPHRASE_MAXLEN;
+    }
+    memcpy(sta_args->passphrase, wc->pw, pass_len);
+    sta_args->passphrase[pass_len] = '\0';
+    sta_args->passphrase_len = (uint16_t)pass_len;
+
     sta_args->security_type = halow_map_security(wc->security);
     sta_args->pmf_mode = (hc->pmf_mode != 0) ? MMWLAN_PMF_DISABLED : MMWLAN_PMF_REQUIRED;
 
@@ -697,22 +1068,6 @@ static void halow_scan_rx_handler(const struct mmwlan_scan_result *result, void 
     target->scan_count++;
 }
 
-static void halow_scan_restore_sta_if_needed(void)
-{
-    struct mmwlan_sta_args sta_args;
-
-    if (!halow_scan_need_restore) {
-        return;
-    }
-
-    halow_scan_need_restore = 0;
-    halow_fill_sta_args(&sta_args);
-    (void)mmwlan_set_power_save_mode(halow_netif_cfg.halow_cfg.ps_mode ? MMWLAN_PS_ENABLED : MMWLAN_PS_DISABLED);
-    if (mmwlan_sta_enable(&sta_args, mm_halow_sta_status_callback) == MMWLAN_SUCCESS) {
-        halow_state = NETIF_STATE_UP;
-    }
-}
-
 static void halow_scan_complete_handler(enum mmwlan_scan_state scan_state, void *arg)
 {
     wireless_scan_result_t *target = (wireless_scan_result_t *)arg;
@@ -740,8 +1095,6 @@ static void halow_scan_complete_handler(enum mmwlan_scan_state scan_state, void 
         halow_async_scan_result.scan_count = 0;
     }
 
-    halow_scan_restore_sta_if_needed();
-
     if (halow_scan_sem != NULL) {
         osSemaphoreRelease(halow_scan_sem);
     }
@@ -755,6 +1108,10 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
     int ret = 0;
 
     if (halow_state == NETIF_STATE_DEINIT || halow_scan_in_progress) {
+        return -1;
+    }
+
+    if (halow_dpp_reject_if_active_locked()) {
         return -1;
     }
 
@@ -794,11 +1151,11 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
         scan_target->scan_count = 0;
     }
 
-    halow_scan_need_restore = (halow_state == NETIF_STATE_UP) ? 1 : 0;
-    if (halow_scan_need_restore) {
-        (void)mmwlan_sta_disable();
-        halow_state = NETIF_STATE_DOWN;
-    }
+    /*
+     * Morse supports hw scan while STA is connected (dwell_on_home_ms). Do not
+     * mmwlan_sta_disable() here — that drops the link and the minimal restore in
+     * the scan-complete path left the netif DOWN / second UP stuck on link_sem.
+     */
 
     halow_scan_user_cb = callback;
     halow_scan_in_progress = 1;
@@ -815,7 +1172,6 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
     if (status != MMWLAN_SUCCESS) {
         halow_scan_in_progress = 0;
         halow_scan_user_cb = NULL;
-        halow_scan_need_restore = 0;
         LOG_DRV_ERROR("HaLow scan_request failed: %d", (int)status);
         if (halow_async_scan_buf != NULL) {
             hal_mem_free(halow_async_scan_buf);
@@ -831,7 +1187,6 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
         } else if (scan_target != NULL && scan_target->scan_count == 0) {
             ret = -1;
         }
-        /* STA restore handled in complete handler when wait_ms > 0 */
     }
 
     return ret;
@@ -849,6 +1204,10 @@ int mm_halow_netif_init(void)
     osMutexAcquire(halow_mutex, osWaitForever);
 
     if (halow_state != NETIF_STATE_DEINIT) {
+        if (halow_dpp_reject_if_active_locked()) {
+            osMutexRelease(halow_mutex);
+            return -1;
+        }
         LOG_DRV_INFO("HaLow re-init: resetting previous session");
         halow_abort_operations_locked();
         halow_stack_deinit_locked();
@@ -879,6 +1238,14 @@ int mm_halow_netif_init(void)
     return 0;
 
 init_fail:
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+    halow_dpp_cancel_timeout_timer();
+#endif
+    halow_dpp_active = 0;
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+    halow_dpp_user_cb = NULL;
+    halow_dpp_user_arg = NULL;
+#endif
     halow_stack_deinit_locked();
     halow_netif_resources_deinit_locked();
     osMutexRelease(halow_mutex);
@@ -907,12 +1274,41 @@ int mm_halow_netif_up(void)
         }
     }
 
-    if (halow_state == NETIF_STATE_UP) {
+    if (halow_scan_in_progress) {
+        LOG_DRV_ERROR("HaLow UP: wait for scan to finish");
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+
+    if (halow_state == NETIF_STATE_UP && halow_link_is_up_locked()) {
         osMutexRelease(halow_mutex);
         return 0;
     }
 
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+
     if (halow_ensure_mmwlan_booted_locked() != 0) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+
+#if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
+    /*
+     * DPP success leaves UMAC in listen mode until mmwlan_dpp_stop(); active is
+     * already cleared — release mutex before blocking stop.
+     */
+    osMutexRelease(halow_mutex);
+    halow_dpp_ensure_umac_idle_cli();
+    osMutexAcquire(halow_mutex, osWaitForever);
+#endif
+
+    if (!halow_wireless_cfg_valid_for_sta(&halow_netif_cfg.wireless_cfg)) {
+        LOG_DRV_ERROR("HaLow UP: invalid wireless cfg (ssid='%s' sec=%d) - run DPP or set ssid/pass",
+                      halow_netif_cfg.wireless_cfg.ssid,
+                      (int)halow_netif_cfg.wireless_cfg.security);
         osMutexRelease(halow_mutex);
         return -1;
     }
@@ -943,7 +1339,15 @@ int mm_halow_netif_up(void)
     LOG_DRV_INFO("HaLow mmwlan_sta_enable ret=%d sta_state=%d",
                  (int)status, (int)mmwlan_get_sta_state());
     if (status != MMWLAN_SUCCESS) {
-        LOG_DRV_ERROR("mmwlan_sta_enable failed: %d", (int)status);
+        if (status == MMWLAN_UNAVAILABLE) {
+            LOG_DRV_ERROR("mmwlan_sta_enable failed: %d (UMAC busy, e.g. DPP still active)",
+                          (int)status);
+        } else if (status == MMWLAN_INVALID_ARGUMENT) {
+            LOG_DRV_ERROR("mmwlan_sta_enable failed: %d (bad ssid/pass/security)",
+                          (int)status);
+        } else {
+            LOG_DRV_ERROR("mmwlan_sta_enable failed: %d", (int)status);
+        }
         osMutexRelease(halow_mutex);
         return -1;
     }
@@ -980,13 +1384,11 @@ int mm_halow_netif_up(void)
         osDelay(200);
     }
 
-    if (halow_link_sem != NULL) {
-        if (!mmosal_semb_wait(halow_link_sem, HALOW_LINK_WAIT_MS)) {
-            LOG_DRV_ERROR("HaLow link wait timeout");
-            (void)mmwlan_sta_disable();
-            osMutexRelease(halow_mutex);
-            return -1;
-        }
+    if (halow_wait_for_link_locked() != 0) {
+        LOG_DRV_ERROR("HaLow link wait timeout");
+        (void)mmwlan_sta_disable();
+        osMutexRelease(halow_mutex);
+        return -1;
     }
 
     halow_state = NETIF_STATE_UP;
@@ -1003,6 +1405,11 @@ int mm_halow_netif_down(void)
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
+
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
 
     if (halow_state == NETIF_STATE_UP) {
         status = mmwlan_sta_disable();
@@ -1030,6 +1437,11 @@ void mm_halow_netif_deinit(void)
         return;
     }
 
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return;
+    }
+
     halow_abort_operations_locked();
     halow_stack_deinit_locked();
     halow_netif_resources_deinit_locked();
@@ -1044,6 +1456,15 @@ int mm_halow_netif_config(netif_config_t *netif_cfg)
     }
     if (halow_state == NETIF_STATE_UP) {
         return -1;
+    }
+
+    if (halow_state != NETIF_STATE_DEINIT && halow_mutex != NULL) {
+        osMutexAcquire(halow_mutex, osWaitForever);
+        if (halow_dpp_reject_if_active_locked()) {
+            osMutexRelease(halow_mutex);
+            return -1;
+        }
+        osMutexRelease(halow_mutex);
     }
 
     if (netif_cfg->host_name != NULL) {
@@ -1067,11 +1488,21 @@ int mm_halow_netif_config(netif_config_t *netif_cfg)
         return 0;
     }
 
-    if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
+    if (halow_mutex == NULL) {
         return -1;
     }
 
-    return halow_apply_halow_hw_config_locked();
+    osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+    if (halow_apply_halow_hw_config_locked() != 0) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+    osMutexRelease(halow_mutex);
+    return 0;
 }
 
 static void halow_u8_from_ip_str(const char *str, uint8_t *ip)
@@ -1217,6 +1648,10 @@ int mm_halow_set_regdomain(const char *country_code)
         osMutexRelease(halow_mutex);
         return -1;
     }
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
     ret = halow_apply_regdomain_locked(country_code);
     osMutexRelease(halow_mutex);
     return ret;
@@ -1231,6 +1666,10 @@ int mm_halow_set_tx_power(uint16_t tx_power_dbm)
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
     halow_netif_cfg.halow_cfg.tx_power_dbm = tx_power_dbm;
     status = mmwlan_override_max_tx_power(tx_power_dbm);
     osMutexRelease(halow_mutex);
@@ -1247,6 +1686,10 @@ int mm_halow_set_power_save(uint8_t enable)
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
     halow_netif_cfg.halow_cfg.ps_mode = enable ? 1 : 0;
     status = mmwlan_set_power_save_mode(enable ? MMWLAN_PS_ENABLED : MMWLAN_PS_DISABLED);
     osMutexRelease(halow_mutex);
@@ -1264,6 +1707,10 @@ int mm_halow_set_scan_config(uint32_t dwell_ms, uint8_t ndp_probe_enabled)
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
     halow_netif_cfg.halow_cfg.scan_dwell_ms = dwell_ms;
     halow_netif_cfg.halow_cfg.ndp_probe_enabled = ndp_probe_enabled;
     scan_cfg.dwell_time_ms = dwell_ms;
@@ -1278,26 +1725,43 @@ int mm_halow_set_scan_config(uint32_t dwell_ms, uint8_t ndp_probe_enabled)
 unsigned mm_halow_regdomain_count(void)
 {
     const struct mmwlan_regulatory_db *db = get_regulatory_db();
+    unsigned i;
+    unsigned n = 0;
 
-    if (db == NULL) {
+    if (db == NULL || halow_bcf_load_regdomain_list() != 0) {
         return 0;
     }
-    return db->num_domains;
+    for (i = 0; i < db->num_domains; i++) {
+        const struct mmwlan_s1g_channel_list *domain = db->domains[i];
+        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
+
+        if (domain == NULL) {
+            continue;
+        }
+        cc[0] = (char)domain->country_code[0];
+        cc[1] = (char)domain->country_code[1];
+        cc[2] = '\0';
+        if (halow_bcf_has_regdom(cc)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int mm_halow_regdomain_is_supported(const char *country_code)
+{
+    return halow_regdomain_supported(country_code) ? 1 : 0;
 }
 
 int mm_halow_regdomain_get_code(unsigned index, char *country_code, size_t len)
 {
-    const struct mmwlan_regulatory_db *db = get_regulatory_db();
     const struct mmwlan_s1g_channel_list *domain;
 
-    if (db == NULL || country_code == NULL || len < MM_HALOW_REGDOMAIN_CC_LEN) {
-        return -1;
-    }
-    if (index >= db->num_domains) {
+    if (country_code == NULL || len < MM_HALOW_REGDOMAIN_CC_LEN) {
         return -1;
     }
 
-    domain = db->domains[index];
+    domain = halow_regdomain_get_supported(index);
     if (domain == NULL) {
         return -1;
     }
@@ -1312,13 +1776,18 @@ int mm_halow_list_regdomains(void)
     const struct mmwlan_regulatory_db *db = get_regulatory_db();
     const char *current = halow_netif_cfg.halow_cfg.country_code;
     unsigned i;
+    unsigned listed = 0;
 
     if (db == NULL) {
         printf("HaLow regdomain DB unavailable\r\n");
         return -1;
     }
+    if (halow_bcf_load_regdomain_list() != 0) {
+        printf("HaLow firmware BCF regdomain list unavailable\r\n");
+        return -1;
+    }
 
-    printf("HaLow regdomains (%u):\r\n", db->num_domains);
+    printf("HaLow regdomains (firmware BCF, %u):\r\n", mm_halow_regdomain_count());
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
         char cc[MM_HALOW_REGDOMAIN_CC_LEN];
@@ -1326,19 +1795,30 @@ int mm_halow_list_regdomains(void)
         if (domain == NULL) {
             continue;
         }
-        memcpy(cc, domain->country_code, sizeof(cc));
-        cc[sizeof(cc) - 1U] = '\0';
+        cc[0] = (char)domain->country_code[0];
+        cc[1] = (char)domain->country_code[1];
+        cc[2] = '\0';
+        if (!halow_bcf_has_regdom(cc)) {
+            continue;
+        }
 
         printf("  %s (%u ch)", cc, domain->num_channels);
-        if (current[0] != '\0' &&
-            strncmp(current, cc, 2) == 0) {
+        listed++;
+        if (current[0] != '\0' && strncmp(current, cc, 2) == 0) {
             printf(" *");
         }
         printf("\r\n");
     }
 
+    if (listed == 0U) {
+        printf("  (none)\r\n");
+    }
     if (current[0] != '\0') {
-        printf("Current cfg: %s\r\n", current);
+        printf("Current cfg: %s", current);
+        if (!halow_regdomain_supported(current)) {
+            printf(" (not in BCF)");
+        }
+        printf("\r\n");
     }
     return 0;
 }
@@ -1360,10 +1840,11 @@ int mm_halow_print_version(void)
 
 #if defined(MMWLAN_DPP_DISABLED) && MMWLAN_DPP_DISABLED
 
-int mm_halow_dpp_start(uint32_t timeout_ms, uint8_t auto_up)
+int mm_halow_dpp_start(uint32_t timeout_ms, mm_halow_dpp_callback_t cb, void *user_arg)
 {
     MM_UNUSED(timeout_ms);
-    MM_UNUSED(auto_up);
+    MM_UNUSED(cb);
+    MM_UNUSED(user_arg);
     LOG_DRV_ERROR("HaLow DPP not available (MMWLAN_DPP_DISABLED in libmorse)");
     return -1;
 }
@@ -1380,7 +1861,7 @@ uint8_t mm_halow_dpp_is_active(void)
 
 #else /* MMWLAN_DPP_DISABLED */
 
-static void halow_dpp_apply_credentials(const struct mmwlan_dpp_cb_args *ev)
+static int halow_dpp_apply_credentials(const struct mmwlan_dpp_cb_args *ev)
 {
     const uint8_t *ssid;
     uint16_t ssid_len;
@@ -1388,21 +1869,24 @@ static void halow_dpp_apply_credentials(const struct mmwlan_dpp_cb_args *ev)
     size_t copy_len;
 
     if (ev == NULL) {
-        return;
+        return -1;
     }
 
     ssid = ev->args.pb_result.ssid;
     ssid_len = ev->args.pb_result.ssid_len;
     pass = ev->args.pb_result.passphrase;
 
-    if (ssid != NULL && ssid_len > 0) {
-        copy_len = ssid_len;
-        if (copy_len >= NETIF_SSID_VALUE_SIZE) {
-            copy_len = NETIF_SSID_VALUE_SIZE - 1;
-        }
-        memcpy(halow_netif_cfg.wireless_cfg.ssid, ssid, copy_len);
-        halow_netif_cfg.wireless_cfg.ssid[copy_len] = '\0';
+    if (ssid == NULL || ssid_len == 0) {
+        LOG_DRV_ERROR("HaLow DPP: no SSID in PB result");
+        return -1;
     }
+
+    copy_len = ssid_len;
+    if (copy_len >= NETIF_SSID_VALUE_SIZE) {
+        copy_len = NETIF_SSID_VALUE_SIZE - 1;
+    }
+    memcpy(halow_netif_cfg.wireless_cfg.ssid, ssid, copy_len);
+    halow_netif_cfg.wireless_cfg.ssid[copy_len] = '\0';
 
     if (pass != NULL && pass[0] != '\0') {
         strncpy(halow_netif_cfg.wireless_cfg.pw, pass, NETIF_PW_VALUE_SIZE - 1);
@@ -1411,31 +1895,177 @@ static void halow_dpp_apply_credentials(const struct mmwlan_dpp_cb_args *ev)
     } else {
         memset(halow_netif_cfg.wireless_cfg.pw, 0, sizeof(halow_netif_cfg.wireless_cfg.pw));
         halow_netif_cfg.wireless_cfg.security = WIRELESS_OPEN;
+        LOG_DRV_WARN("HaLow DPP: no passphrase in PB result, using open");
     }
+
+    return 0;
+}
+
+static void halow_dpp_cancel_timeout_timer(void)
+{
+    (void)eloop_cancel_timeout(halow_dpp_timeout_eloop, NULL, NULL);
+}
+
+/**
+ * Tear down UMAC DPP listen mode from a normal task (never from UMAC/eloop).
+ * No-op when the radio was never booted or UMAC evtloop is not running.
+ */
+static void halow_dpp_ensure_umac_idle_cli(void)
+{
+    enum mmwlan_status status;
+    int i;
+
+    if (!halow_mmwlan_booted && !halow_dpp_active) {
+        return;
+    }
+
+    osDelay(20);
+
+    for (i = 0; i < 10; i++) {
+        status = mmwlan_dpp_stop();
+        if (status == MMWLAN_SUCCESS) {
+            return;
+        }
+        if (status == MMWLAN_UNAVAILABLE || status == MMWLAN_NOT_RUNNING ||
+            status == MMWLAN_NOT_INITIALIZED) {
+            return;
+        }
+        osDelay(10);
+    }
+
+    LOG_DRV_WARN("HaLow mmwlan_dpp_stop failed (last ret=%d)", (int)status);
+}
+
+static void halow_dpp_invoke_user_cb(mm_halow_dpp_evt_t event)
+{
+    mm_halow_dpp_evt_info_t info = { .event = event };
+    mm_halow_dpp_callback_t cb = halow_dpp_user_cb;
+    void *arg = halow_dpp_user_arg;
+
+    halow_dpp_user_cb = NULL;
+    halow_dpp_user_arg = NULL;
+
+    if (event == MM_HALOW_DPP_EVT_SUCCESS) {
+        info.ssid = halow_netif_cfg.wireless_cfg.ssid;
+        info.security = halow_netif_cfg.wireless_cfg.security;
+    }
+
+    if (cb != NULL) {
+        cb(&info, arg);
+    }
+}
+
+static void halow_dpp_deferred_user_cb_eloop(void *eloop_ctx, void *timeout_ctx)
+{
+    mm_halow_dpp_evt_t evt;
+
+    MM_UNUSED(eloop_ctx);
+    MM_UNUSED(timeout_ctx);
+
+    if (!halow_dpp_deferred_cb_pending) {
+        return;
+    }
+    halow_dpp_deferred_cb_pending = 0;
+    evt = halow_dpp_deferred_evt;
+    halow_dpp_invoke_user_cb(evt);
+}
+
+static void halow_dpp_schedule_user_cb(mm_halow_dpp_evt_t event)
+{
+    int ret;
+
+    halow_dpp_deferred_evt = event;
+    halow_dpp_deferred_cb_pending = 1;
+    (void)eloop_cancel_timeout(halow_dpp_deferred_user_cb_eloop, NULL, NULL);
+    ret = eloop_register_timeout(0, 0, halow_dpp_deferred_user_cb_eloop, NULL, NULL);
+    if (ret <= 0) {
+        halow_dpp_deferred_cb_pending = 0;
+        LOG_DRV_WARN("HaLow DPP: deferred user cb failed (ret=%d), invoke inline", ret);
+        halow_dpp_invoke_user_cb(event);
+    }
+}
+
+static void halow_dpp_finish(mm_halow_dpp_evt_t event)
+{
+    if (!halow_dpp_active) {
+        return;
+    }
+
+    halow_dpp_cancel_timeout_timer();
+    halow_dpp_active = 0;
+    /*
+     * User cb runs on eloop (not UMAC). mmwlan_dpp_stop() only from CLI via
+     * halow_dpp_ensure_umac_idle_cli() (e.g. after DPP OK, before ifconfig hw up).
+     */
+    halow_dpp_schedule_user_cb(event);
+}
+
+static void halow_dpp_timeout_eloop(void *eloop_ctx, void *timeout_ctx)
+{
+    MM_UNUSED(eloop_ctx);
+    MM_UNUSED(timeout_ctx);
+
+    if (!halow_dpp_active) {
+        return;
+    }
+
+    LOG_DRV_ERROR("HaLow DPP wait timeout");
+    halow_dpp_finish(MM_HALOW_DPP_EVT_TIMEOUT);
+}
+
+static int halow_dpp_arm_timeout(uint32_t timeout_ms)
+{
+    unsigned int secs = timeout_ms / 1000U;
+    unsigned int usecs = (timeout_ms % 1000U) * 1000U;
+    int ret;
+
+    halow_dpp_cancel_timeout_timer();
+    /*
+     * Morse eloop shim returns 1 on success (bool), not hostap's 0.
+     * Treat non-positive as failure.
+     */
+    ret = eloop_register_timeout(secs, usecs, halow_dpp_timeout_eloop, NULL, NULL);
+    if (ret <= 0) {
+        LOG_DRV_ERROR("HaLow DPP: eloop_register_timeout failed (ret=%d)", ret);
+        return -1;
+    }
+    return 0;
 }
 
 static void mm_halow_dpp_event_cb(const struct mmwlan_dpp_cb_args *dpp_event, void *arg)
 {
+    enum mmwlan_dpp_pb_result result;
+    mm_halow_dpp_evt_t evt = MM_HALOW_DPP_EVT_FAILED;
+
     MM_UNUSED(arg);
 
     if (dpp_event == NULL || dpp_event->event != MMWLAN_DPP_EVT_PB_RESULT) {
         return;
     }
 
-    halow_dpp_last_result = dpp_event->args.pb_result.result;
+    if (!halow_dpp_active) {
+        return;
+    }
 
-    if (halow_dpp_last_result == MMWLAN_DPP_PB_RESULT_SUCCESS) {
-        halow_dpp_apply_credentials(dpp_event);
-        LOG_DRV_INFO("HaLow DPP success: ssid='%s'", halow_netif_cfg.wireless_cfg.ssid);
-    } else if (halow_dpp_last_result == MMWLAN_DPP_PB_RESULT_SESSION_OVERLAP) {
+    result = dpp_event->args.pb_result.result;
+
+    if (result == MMWLAN_DPP_PB_RESULT_SUCCESS) {
+        if (halow_dpp_apply_credentials(dpp_event) == 0) {
+            evt = MM_HALOW_DPP_EVT_SUCCESS;
+            LOG_DRV_INFO("HaLow DPP success: ssid='%s' sec=%d",
+                         halow_netif_cfg.wireless_cfg.ssid,
+                         (int)halow_netif_cfg.wireless_cfg.security);
+        } else {
+            LOG_DRV_ERROR("HaLow DPP: PB success but credentials missing");
+        }
+    } else if (result == MMWLAN_DPP_PB_RESULT_SESSION_OVERLAP) {
+        evt = MM_HALOW_DPP_EVT_SESSION_OVERLAP;
         LOG_DRV_WARN("HaLow DPP session overlap (multiple configurators?)");
     } else {
-        LOG_DRV_ERROR("HaLow DPP failed (result=%d)", (int)halow_dpp_last_result);
+        LOG_DRV_ERROR("HaLow DPP failed (mmwlan result=%d)", (int)result);
     }
 
-    if (halow_dpp_done_sem != NULL) {
-        (void)mmosal_semb_give(halow_dpp_done_sem);
-    }
+    halow_dpp_finish(evt);
 }
 
 uint8_t mm_halow_dpp_is_active(void)
@@ -1445,21 +2075,36 @@ uint8_t mm_halow_dpp_is_active(void)
 
 int mm_halow_dpp_stop(void)
 {
-    (void)mmwlan_dpp_stop();
-    if (halow_dpp_active) {
-        halow_dpp_active = 0;
-        if (halow_dpp_done_sem != NULL) {
-            (void)mmosal_semb_give(halow_dpp_done_sem);
+    if (halow_mutex != NULL) {
+        osMutexAcquire(halow_mutex, osWaitForever);
+    }
+    if (!halow_dpp_active) {
+        if (halow_mutex != NULL) {
+            osMutexRelease(halow_mutex);
         }
+        halow_dpp_ensure_umac_idle_cli();
+        if (halow_mutex != NULL) {
+            osMutexAcquire(halow_mutex, osWaitForever);
+        }
+        return 0;
+    }
+
+    LOG_DRV_INFO("HaLow DPP stop requested");
+    halow_dpp_finish(MM_HALOW_DPP_EVT_STOPPED);
+    if (halow_mutex != NULL) {
+        osMutexRelease(halow_mutex);
+    }
+    halow_dpp_ensure_umac_idle_cli();
+    if (halow_mutex != NULL) {
+        osMutexAcquire(halow_mutex, osWaitForever);
     }
     return 0;
 }
 
-int mm_halow_dpp_start(uint32_t timeout_ms, uint8_t auto_up)
+int mm_halow_dpp_start(uint32_t timeout_ms, mm_halow_dpp_callback_t cb, void *user_arg)
 {
     struct mmwlan_dpp_args dpp_args = {0};
     enum mmwlan_status status;
-    int ret = -1;
 
     if (timeout_ms == 0) {
         timeout_ms = HALOW_DPP_DEFAULT_TIMEOUT_MS;
@@ -1468,6 +2113,17 @@ int mm_halow_dpp_start(uint32_t timeout_ms, uint8_t auto_up)
     if (halow_mutex == NULL || halow_state == NETIF_STATE_DEINIT) {
         LOG_DRV_ERROR("HaLow DPP: call 'ifconfig hw init' first");
         return -1;
+    }
+
+    LOG_SIMPLE("HaLow DPP: preparing (may take a few seconds)...\r\n");
+
+    if (halow_dpp_active) {
+        LOG_DRV_WARN("HaLow DPP: replacing previous session");
+        halow_dpp_cancel_timeout_timer();
+        halow_dpp_active = 0;
+        halow_dpp_user_cb = NULL;
+        halow_dpp_user_arg = NULL;
+        halow_dpp_ensure_umac_idle_cli();
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
@@ -1487,64 +2143,32 @@ int mm_halow_dpp_start(uint32_t timeout_ms, uint8_t auto_up)
     }
     osMutexRelease(halow_mutex);
 
-    if (halow_dpp_done_sem == NULL) {
-        halow_dpp_done_sem = mmosal_semb_create("halow_dpp");
-        if (halow_dpp_done_sem == NULL) {
-            return -1;
-        }
-    }
-
-    while (mmosal_semb_wait(halow_dpp_done_sem, 0)) {
-        /* drain stale completion */
-    }
-
-    (void)mm_halow_dpp_stop();
+    halow_dpp_user_cb = cb;
+    halow_dpp_user_arg = user_arg;
 
     dpp_args.dpp_event_cb = mm_halow_dpp_event_cb;
     dpp_args.dpp_event_cb_arg = NULL;
 
-    printf("HaLow DPP: press the AP/configurator button now (timeout %lu s)\r\n",
-           (unsigned long)(timeout_ms / 1000U));
-
     status = mmwlan_dpp_start(&dpp_args);
     if (status != MMWLAN_SUCCESS) {
+        halow_dpp_user_cb = NULL;
+        halow_dpp_user_arg = NULL;
+        halow_dpp_ensure_umac_idle_cli();
         LOG_DRV_ERROR("mmwlan_dpp_start failed: %d (set regdomain?)", (int)status);
         return -1;
     }
+
+    if (halow_dpp_arm_timeout(timeout_ms) != 0) {
+        halow_dpp_user_cb = NULL;
+        halow_dpp_user_arg = NULL;
+        halow_dpp_ensure_umac_idle_cli();
+        LOG_DRV_ERROR("HaLow DPP: timeout timer failed");
+        return -1;
+    }
+
     halow_dpp_active = 1;
-
-    if (!mmosal_semb_wait(halow_dpp_done_sem, timeout_ms)) {
-        LOG_DRV_ERROR("HaLow DPP wait timeout");
-        (void)mm_halow_dpp_stop();
-        return -1;
-    }
-
-    (void)mmwlan_dpp_stop();
-    halow_dpp_active = 0;
-
-    if (halow_dpp_last_result == MMWLAN_DPP_PB_RESULT_SESSION_OVERLAP) {
-        printf("HaLow DPP: session overlap\r\n");
-        return -1;
-    }
-
-    if (halow_dpp_last_result != MMWLAN_DPP_PB_RESULT_SUCCESS) {
-        printf("HaLow DPP: failed\r\n");
-        return -1;
-    }
-
-    printf("HaLow DPP OK: ssid=%s sec=%s\r\n",
-           halow_netif_cfg.wireless_cfg.ssid,
-           halow_netif_cfg.wireless_cfg.security == WIRELESS_SAE ? "sae" : "open");
-
-    if (auto_up) {
-        ret = mm_halow_netif_up();
-        if (ret != 0) {
-            printf("HaLow DPP: credentials saved, but 'up' failed\r\n");
-        }
-        return ret;
-    }
-
-    printf("HaLow DPP: run 'ifconfig hw up' to connect\r\n");
+    LOG_SIMPLE("HaLow DPP: listening - press AP/configurator button (%lu s)\r\n",
+               (unsigned long)(timeout_ms / 1000U));
     return 0;
 }
 
