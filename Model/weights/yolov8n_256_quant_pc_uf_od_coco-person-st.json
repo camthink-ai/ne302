@@ -46,7 +46,7 @@
   "postprocess_params": {
     "num_classes": 1,
     "class_names": ["person"],
-    "confidence_threshold": 0.6,
+    "confidence_threshold": 0.25,
     "iou_threshold": 0.5,
     "max_detections": 100,
     "total_boxes": 1344,

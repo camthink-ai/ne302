@@ -419,11 +419,9 @@ export default function Graphics() {
                           />
                         </div>
                         <Separator />
-                        <div className='flex justify-between gap-4 items-center'>
-                          <div className='flex min-w-0 flex-1 items-center gap-2'>
-                            <Label className='shrink-0'>
-                              {i18n._('sys.hardware_management.isp_mode')}
-                            </Label>
+                        <div className="flex justify-between gap-4 items-center">
+                          <div className="flex min-w-0  items-center gap-2 shrink-0">
+                            <Label className="shrink-0">{i18n._('sys.hardware_management.isp_mode')}</Label>
                             <Tooltip mbEnhance>
                               <TooltipTrigger>
                                 <div className='inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500'>
@@ -463,7 +461,7 @@ export default function Graphics() {
                               }
                             }}
                           >
-                            <SelectTrigger className='w-44 border-0 shadow-none focus-visible:ring-0'>
+                            <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 w-fit">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
