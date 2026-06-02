@@ -23,6 +23,7 @@
 #include "api_webhook_module.h"
 #include "api_preview_module.h"
 #include "api_isp_module.h"
+#include "mem_map.h"
 #include <string.h>
 
 /* ==================== Web Service Context ==================== */
@@ -36,7 +37,7 @@ typedef struct {
 } web_service_context_t;
 
 static web_service_context_t g_web_service = {0};
-#define WEB_ASSETS_FLASH_ADDRESS 0x70480000
+#define WEB_ASSETS_FLASH_ADDRESS WEB_BASE
 
 
 /* ==================== Web Service Implementation ==================== */

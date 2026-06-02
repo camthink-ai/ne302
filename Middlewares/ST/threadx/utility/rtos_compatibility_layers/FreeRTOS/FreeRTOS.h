@@ -35,8 +35,8 @@
 
 #include <tx_api.h>
 
-//#include <FreeRTOSConfig.h>
-#include "FreeRTOSConfig_mm.h"
+#include <FreeRTOSConfig.h>
+// #include "FreeRTOSConfig_mm.h"
 
 
 //// Hard coded configurations and other preprocessor definitions for compatibility.

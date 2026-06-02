@@ -40,7 +40,7 @@ ADDRESS_MAP = {
     },
     'WEB': {
         'pattern': 'ne301_Web_v*_pkg.bin',
-        'address': 0x70480000,
+        'address': 0x77B00000,
         'required': True
     },
     'MODEL': {

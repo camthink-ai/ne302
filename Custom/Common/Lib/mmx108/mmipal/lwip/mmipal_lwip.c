@@ -822,7 +822,7 @@ exit:
 
 void mmipal_get_link_packet_counts(uint32_t *tx_packets, uint32_t *rx_packets)
 {
-#if LWIP_STATS
+#if LWIP_STATS && LINK_STATS
     *tx_packets = lwip_stats.link.xmit;
     *rx_packets = lwip_stats.link.recv;
 #else

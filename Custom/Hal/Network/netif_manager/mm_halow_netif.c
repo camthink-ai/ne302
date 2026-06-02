@@ -25,6 +25,7 @@
 #include "os.h"
 #include "eloop.h"
 #include "lwip/netif.h"
+#include "mm_mbedtls_port.h"
 
 #if !defined(MMHAL_WLAN_USE_SOFT_SPI)
 #include "spi.h"
@@ -1202,6 +1203,8 @@ int mm_halow_netif_init(void)
     }
 
     osMutexAcquire(halow_mutex, osWaitForever);
+
+    mm_mbedtls_port_init();
 
     if (halow_state != NETIF_STATE_DEINIT) {
         if (halow_dpp_reject_if_active_locked()) {
