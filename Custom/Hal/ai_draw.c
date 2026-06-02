@@ -364,3 +364,248 @@ int od_draw_result(od_draw_conf_t *od_conf, od_detect_t *result)
     return 0;
 
 }
+
+/* ==================== ISEG Drawing ==================== */
+
+static const uint32_t iseg_color_palette[NUMBER_COLORS] = {
+    COLOR_RED, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW,
+    COLOR_CYAN, COLOR_MAGENTA, COLOR_GRAY, COLOR_LIGHTGRAY, COLOR_DARKGRAY
+};
+
+int iseg_draw_init(iseg_draw_conf_t *iseg_conf)
+{
+    if (iseg_conf == NULL) {
+        LOG_DRV_ERROR("iseg_draw_init invalid param\r\n");
+        return -1;
+    }
+
+    device_t *draw = device_find_pattern(DRAW_DEVICE_NAME, DEV_TYPE_VIDEO);
+    if (draw == NULL) {
+        return -1;
+    }
+
+    iseg_conf->line_width = 2;
+    iseg_conf->draw_dev = draw;
+
+    draw_fontsetup_param_t font_param = {0};
+    if (iseg_conf->font.data) {
+        hal_mem_free(iseg_conf->font.data);
+        iseg_conf->font.data = NULL;
+    }
+    font_param.p_font_in = &Font16;
+    font_param.p_font = &iseg_conf->font;
+    int ret = device_ioctl(draw, DRAW_CMD_FONT_SETUP, (uint8_t *)&font_param, sizeof(draw_fontsetup_param_t));
+    if (ret < 0) {
+        LOG_DRV_ERROR("iseg_draw_init failed\r\n");
+        return -1;
+    }
+    return 0;
+}
+
+int iseg_draw_deinit(iseg_draw_conf_t *iseg_conf)
+{
+    if (iseg_conf == NULL) {
+        LOG_DRV_ERROR("iseg_draw_deinit invalid param\r\n");
+        return -1;
+    }
+    if (iseg_conf->font.data) {
+        hal_mem_free(iseg_conf->font.data);
+        iseg_conf->font.data = NULL;
+    }
+    return 0;
+}
+
+/**
+ * @brief Integer square root using Newton's method.
+ * @param n Input value (must be a perfect square for exact result)
+ * @return Integer square root of n
+ */
+static uint32_t isqrt32(uint32_t n)
+{
+    if (n == 0) return 0;
+    uint32_t x = n;
+    uint32_t y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+/**
+ * @brief Blend a single pixel with ARGB8888 color onto an RGB565 framebuffer.
+ * @param fb Framebuffer pointer (RGB565 format)
+ * @param fb_width Framebuffer width in pixels
+ * @param x Pixel x coordinate
+ * @param y Pixel y coordinate
+ * @param color_argb Source color in ARGB8888 format
+ * @param alpha Blend alpha (0-255)
+ */
+static void blend_rgb565_pixel(uint8_t *fb, uint32_t fb_width, uint32_t fb_height,
+                                int x, int y,
+                                uint32_t color_argb, uint8_t alpha)
+{
+    if (alpha == 0) return;
+    if (x < 0 || y < 0 || x >= (int)fb_width || y >= (int)fb_height) return;
+    uint16_t *pixel = (uint16_t *)(fb + (y * fb_width + x) * 2);
+    uint16_t dst = *pixel;
+
+    /* Unpack destination RGB565 */
+    uint16_t dst_r = (dst >> 11) & 0x1F;
+    uint16_t dst_g = (dst >> 5) & 0x3F;
+    uint16_t dst_b = dst & 0x1F;
+
+    /* Unpack source ARGB8888 to RGB565 channels */
+    uint16_t src_r = (color_argb >> 19) & 0x1F;
+    uint16_t src_g = (color_argb >> 10) & 0x3F;
+    uint16_t src_b = (color_argb >> 3) & 0x1F;
+
+    /* Alpha blend (integer math) */
+    uint16_t inv_alpha = 255 - alpha;
+    uint16_t out_r = (uint16_t)((src_r * alpha + dst_r * inv_alpha) / 255);
+    uint16_t out_g = (uint16_t)((src_g * alpha + dst_g * inv_alpha) / 255);
+    uint16_t out_b = (uint16_t)((src_b * alpha + dst_b * inv_alpha) / 255);
+
+    /* Repack to RGB565 */
+    *pixel = (out_r << 11) | (out_g << 5) | out_b;
+}
+
+int iseg_draw_result(iseg_draw_conf_t *iseg_conf, iseg_detect_t *result, uint32_t instance_index)
+{
+    if (iseg_conf == NULL || result == NULL) {
+        LOG_DRV_ERROR("iseg_draw_result invalid param\r\n");
+        return -1;
+    }
+
+    device_t *draw = (device_t *)iseg_conf->draw_dev;
+    if (draw == NULL) {
+        return -1;
+    }
+
+    int x0, y0, w, h;
+    convert_value(iseg_conf->image_width, iseg_conf->image_height, result->x, result->y, &x0, &y0);
+    convert_value(iseg_conf->image_width, iseg_conf->image_height, result->width, result->height, &w, &h);
+    clamp_point(iseg_conf->image_width, iseg_conf->image_height, &x0, &y0);
+
+    uint32_t instance_color = iseg_color_palette[instance_index % NUMBER_COLORS];
+    uint8_t base_alpha = iseg_conf->mask_alpha;
+
+    /* Bilinear interpolation mask rendering for smooth anti-aliased edges.
+       Scans mask for non-zero region, maps to image pixels, and blends
+       with proportional alpha at mask boundaries using 8-bit fixed-point math. */
+    if (result->mask != NULL && result->mask_size > 0) {
+        uint32_t mask_side = isqrt32(result->mask_size);
+        if (mask_side > 1 && mask_side * mask_side == result->mask_size) {
+            uint32_t img_w = iseg_conf->image_width;
+            uint32_t img_h = iseg_conf->image_height;
+
+            /* Scan mask for non-zero region bounding box */
+            int m_y0 = (int)mask_side, m_y1 = -1;
+            int m_x0 = (int)mask_side, m_x1 = -1;
+            for (uint32_t my = 0; my < mask_side; my++) {
+                for (uint32_t mx = 0; mx < mask_side; mx++) {
+                    if (result->mask[my * mask_side + mx]) {
+                        if ((int)my < m_y0) m_y0 = (int)my;
+                        if ((int)my > m_y1) m_y1 = (int)my;
+                        if ((int)mx < m_x0) m_x0 = (int)mx;
+                        if ((int)mx > m_x1) m_x1 = (int)mx;
+                    }
+                }
+            }
+
+            if (m_y1 >= 0) {
+                /* Add 1-mask-pixel margin for interpolation at edges */
+                int margin_px = (int)img_w / (int)mask_side + 1;
+                int margin_py = (int)img_h / (int)mask_side + 1;
+                int px_start = MAX(0, m_x0 * (int)img_w / (int)mask_side - margin_px);
+                int px_end = MIN((int)img_w - 1, (m_x1 + 1) * (int)img_w / (int)mask_side + margin_px);
+                int py_start = MAX(0, m_y0 * (int)img_h / (int)mask_side - margin_py);
+                int py_end = MIN((int)img_h - 1, (m_y1 + 1) * (int)img_h / (int)mask_side + margin_py);
+
+                /* Clip mask rendering to detection bounding box.
+                   YOLOv8-seg standard: mask is cropped to bbox to prevent bleeding. */
+                int bbox_x1 = MIN((int)img_w - 1, x0 + w);
+                int bbox_y1 = MIN((int)img_h - 1, y0 + h);
+                px_start = MAX(px_start, x0);
+                px_end = MIN(px_end, bbox_x1);
+                py_start = MAX(py_start, y0);
+                py_end = MIN(py_end, bbox_y1);
+
+                if (px_start <= px_end && py_start <= py_end) {
+                    /* Coordinate mapping step (16.16 fixed point) */
+                    int32_t step_x = ((int32_t)mask_side << 16) / (int32_t)img_w;
+                    int32_t step_y = ((int32_t)mask_side << 16) / (int32_t)img_h;
+
+                    for (int py = py_start; py <= py_end; py++) {
+                        int32_t fy = (int32_t)py * step_y;
+                        int my0 = (int)(fy >> 16);
+                        int my1 = MIN(my0 + 1, (int)mask_side - 1);
+                        uint8_t fy8 = (uint8_t)((fy >> 8) & 0xFF);
+                        uint8_t fy8i = 255u - fy8;
+                        uint8_t *row0 = result->mask + my0 * mask_side;
+                        uint8_t *row1 = result->mask + my1 * mask_side;
+
+                        int32_t fx = (int32_t)px_start * step_x;
+                        for (int px = px_start; px <= px_end; px++, fx += step_x) {
+                            int mx0 = (int)(fx >> 16);
+                            int mx1 = MIN(mx0 + 1, (int)mask_side - 1);
+                            uint8_t fx8 = (uint8_t)((fx >> 8) & 0xFF);
+                            uint8_t fx8i = 255u - fx8;
+
+                            uint8_t v00 = row0[mx0];
+                            uint8_t v10 = row0[mx1];
+                            uint8_t v01 = row1[mx0];
+                            uint8_t v11 = row1[mx1];
+
+                            uint32_t w00 = (uint32_t)fx8i * fy8i;
+                            uint32_t w10 = (uint32_t)fx8 * fy8i;
+                            uint32_t w01 = (uint32_t)fx8i * fy8;
+                            uint32_t w11 = (uint32_t)fx8 * fy8;
+                            uint32_t interp = ((uint32_t)v00 * w00 + (uint32_t)v10 * w10 +
+                                               (uint32_t)v01 * w01 + (uint32_t)v11 * w11) / 255u;
+
+                            if (interp > 0) {
+                                uint8_t min_alpha = base_alpha >> 2;
+                                uint8_t a = min_alpha + (uint8_t)((uint32_t)(base_alpha - min_alpha) * interp / 255u);
+                                blend_rgb565_pixel(iseg_conf->p_dst, img_w, img_h,
+                                                  px, py, instance_color, a);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        /* Fallback: semi-transparent filled bbox when no mask data */
+        draw_colorrect_param_t colorrect_param = {0};
+        colorrect_param.p_dst = iseg_conf->p_dst;
+        colorrect_param.dst_width = iseg_conf->image_width;
+        colorrect_param.dst_height = iseg_conf->image_height;
+        colorrect_param.x_pos = x0;
+        colorrect_param.y_pos = y0;
+        colorrect_param.width = w;
+        colorrect_param.height = h;
+        colorrect_param.color = instance_color;
+        colorrect_param.alpha = base_alpha;
+        if (colorrect_param.x_pos + colorrect_param.width > colorrect_param.dst_width) {
+            colorrect_param.width = colorrect_param.dst_width - colorrect_param.x_pos;
+        }
+        if (colorrect_param.y_pos + colorrect_param.height > colorrect_param.dst_height) {
+            colorrect_param.height = colorrect_param.dst_height - colorrect_param.y_pos;
+        }
+        device_ioctl(draw, DRAW_CMD_BLEND_COLOR_RECT, (uint8_t *)&colorrect_param, sizeof(draw_colorrect_param_t));
+    }
+
+    /* Class label + confidence (no bounding box — mask+label only) */
+    draw_printf_param_t print_param = {0};
+    snprintf(print_param.str, sizeof(print_param.str), "%s %5.2f", result->class_name, result->conf);
+    print_param.p_font = &iseg_conf->font;
+    print_param.p_dst = iseg_conf->p_dst;
+    print_param.dst_width = iseg_conf->image_width;
+    print_param.dst_height = iseg_conf->image_height;
+    print_param.x_pos = x0 + iseg_conf->line_width;
+    print_param.y_pos = y0 + iseg_conf->line_width;
+    device_ioctl(draw, DRAW_CMD_PRINTF, (uint8_t *)&print_param, sizeof(draw_printf_param_t));
+
+    return 0;
+}

@@ -155,6 +155,7 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
         cJSON *data_type = cJSON_GetObjectItemCaseSensitive(json, "data_type");
         if (cJSON_IsString(data_type)) {
             strncpy(info->input_data_type, data_type->valuestring, sizeof(info->input_data_type) - 1);
+            info->is_int8_input = (strcmp(data_type->valuestring, "int8") == 0);
         }
         cJSON *color_format = cJSON_GetObjectItemCaseSensitive(json, "color_format");
         if (cJSON_IsString(color_format)) {
@@ -701,7 +702,18 @@ int nn_instance_inference_frame(nn_handle_t handle, uint8_t *input_data, uint32_
         osMutexRelease(nn->mtx_id);
         return -1;
     }
-    memcpy(nn->input_buffer[0], input_data, input_size);
+
+    /* Models with int8 input (e.g. ST ISEG, zp=-128) need uint8→int8 conversion.
+       OD/FD models use uint8 input (zp=0) and work correctly with plain memcpy. */
+    if (nn->model.is_int8_input) {
+        int8_t *dst = (int8_t *)nn->input_buffer[0];
+        for (uint32_t i = 0; i < input_size; i++) {
+            dst[i] = (int8_t)((int)input_data[i] - 128);
+        }
+    } else {
+        memcpy(nn->input_buffer[0], input_data, input_size);
+    }
+
     int ret = model_run(nn, result, false);
     osMutexRelease(nn->mtx_id);
 
@@ -822,7 +834,26 @@ static cJSON* create_detection_json(const od_detect_t* detection, int index) {
     cJSON_AddNumberToObject(detection_json, "y", detection->y);
     cJSON_AddNumberToObject(detection_json, "width", detection->width);
     cJSON_AddNumberToObject(detection_json, "height", detection->height);
-    
+
+    return detection_json;
+}
+
+/**
+ * @brief Create ISEG segment detection JSON
+ */
+static cJSON* create_iseg_detection_json(const iseg_detect_t* detection, int index) {
+    cJSON* detection_json = cJSON_CreateObject();
+    if (!detection_json) return NULL;
+
+    cJSON_AddNumberToObject(detection_json, "index", index);
+    cJSON_AddStringToObject(detection_json, "class_name", detection->class_name);
+    cJSON_AddNumberToObject(detection_json, "confidence", detection->conf);
+    cJSON_AddNumberToObject(detection_json, "x", detection->x);
+    cJSON_AddNumberToObject(detection_json, "y", detection->y);
+    cJSON_AddNumberToObject(detection_json, "width", detection->width);
+    cJSON_AddNumberToObject(detection_json, "height", detection->height);
+    cJSON_AddNumberToObject(detection_json, "mask_size", detection->mask_size);
+
     return detection_json;
 }
 
@@ -937,7 +968,26 @@ cJSON* nn_create_ai_result_json(const nn_result_t* ai_result) {
         // Add empty detection results for consistency
         cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
         cJSON_AddNumberToObject(result_json, "detection_count", 0);
-        
+
+    } else if (ai_result->type == PP_TYPE_ISEG && ai_result->iseg.nb_detect > 0) {
+        /* Instance Segmentation results */
+        cJSON* segments_array = cJSON_CreateArray();
+        if (segments_array) {
+            for (int i = 0; i < ai_result->iseg.nb_detect; i++) {
+                cJSON* seg = create_iseg_detection_json(&ai_result->iseg.detects[i], i);
+                if (seg) {
+                    cJSON_AddItemToArray(segments_array, seg);
+                }
+            }
+            cJSON_AddItemToObject(result_json, "segments", segments_array);
+        }
+        cJSON_AddNumberToObject(result_json, "segment_count", ai_result->iseg.nb_detect);
+
+        cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
+        cJSON_AddNumberToObject(result_json, "detection_count", 0);
+        cJSON_AddItemToObject(result_json, "poses", cJSON_CreateArray());
+        cJSON_AddNumberToObject(result_json, "pose_count", 0);
+
     } else {
         // No results or unsupported type
         cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());

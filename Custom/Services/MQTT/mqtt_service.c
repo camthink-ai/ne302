@@ -3389,6 +3389,8 @@ int mqtt_service_publish_ai_result(const char *topic,
             detection_count = ai_result->ai_result.od.nb_detect;
         } else if (ai_result->ai_result.type == PP_TYPE_MPE) {
             detection_count = ai_result->ai_result.mpe.nb_detect;
+        } else if (ai_result->ai_result.type == PP_TYPE_ISEG) {
+            detection_count = ai_result->ai_result.iseg.nb_detect;
         }
     }
     
