@@ -69,20 +69,26 @@ The following table lists all post-processing types defined in `app_postprocess.
 | ✅ | `pp_od_yolo_v8_ui` | `POSTPROCESS_OD_YOLO_V8_UI` (104) | YOLOv8 object detection | uint8 | int8 | ✅ yolov8n 415ms (coco) |
 | ✅ | `pp_od_yolo_v8_ui` | `POSTPROCESS_OD_YOLO_V8_UI` (104) | YOLOv8 object detection (meter) | uint8 | int8 | ✅ yolov8n 8/8 digits recognized |
 | ✅ | `pp_od_yolo_v11_uf` | — | YOLO11n object detection | uint8 | float32 | ✅ yolo11n 348ms (person-st) |
-| ✅ | `pp_od_st_yolox_uf` | `POSTPROCESS_OD_ST_YOLOX_UF` (105) | ST YOLOX object detection | uint8 | float32 | ✅ nano_480 passed |
-| | `pp_od_st_yolox_ui` | `POSTPROCESS_OD_ST_YOLOX_UI` (106) | ST YOLOX object detection | uint8 | int8 | — |
+| ✅ | `pp_od_st_yolox_uf` | `POSTPROCESS_OD_ST_YOLOX_UF` (105) | ST YOLOX object detection | uint8 | float32 | ✅ nano_480 passed || | `pp_od_st_yolox_ui` | `POSTPROCESS_OD_ST_YOLOX_UI` (106) | ST YOLOX object detection | uint8 | int8 | — |
 | | `pp_od_st_ssd_uf` | `POSTPROCESS_OD_ST_SSD_UF` (107) | ST SSD object detection | uint8 | float32 | — |
-| | `pp_od_fd_blazeface_uf` | `POSTPROCESS_OD_FD_BLAZEFACE_UF` (110) | BlazeFace face detection | uint8 | float32 | — |
-| | `pp_od_fd_blazeface_uu` | `POSTPROCESS_OD_FD_BLAZEFACE_UU` (111) | BlazeFace face detection | uint8 | uint8 | — |
-| | `pp_od_fd_blazeface_ui` | `POSTPROCESS_OD_FD_BLAZEFACE_UI` (112) | BlazeFace face detection | uint8 | int8 | — |
+| | `pp_od_blazeface_uf` | `POSTPROCESS_OD_BLAZEFACE_UF` (110) | BlazeFace face detection (OD mode) | uint8 | float32 | — |
+| | `pp_od_blazeface_uu` | `POSTPROCESS_OD_BLAZEFACE_UU` (111) | BlazeFace face detection (OD mode) | uint8 | uint8 | — |
+| | `pp_od_blazeface_ui` | `POSTPROCESS_OD_BLAZEFACE_UI` (112) | BlazeFace face detection (OD mode) | uint8 | int8 | — |
 
 ### Multi-Person Pose Estimation (MPE)
 
 | Status | Postprocess Type | C Define | Description | Input | Output | Verification |
 |--------|-----------------|----------|-------------|-------|--------|-------------|
 | ✅ | `pp_mpe_yolo_v8_uf` | `POSTPROCESS_MPE_YOLO_V8_UF` (200) | YOLOv8 multi-person pose estimation | uint8 | float32 | ✅ 3 poses (87%/81%/77%), 17 keypoints each |
-| | `pp_mpe_yolo_v8_ui` | `POSTPROCESS_MPE_YOLO_V8_UI` (201) | YOLOv8 multi-person pose estimation | uint8 | int8 | — |
+| ✅ | `pp_mpe_yolo_v8_uf` | `POSTPROCESS_MPE_YOLO_V8_UF` (200) | YOLO11n multi-person pose estimation | uint8 | float32 | ✅ yolo11n 3 poses (80%/70%/63%), 17 kpts |
+| ✅ | `pp_mpe_yolo_v8_ui` | `POSTPROCESS_MPE_YOLO_V8_UI` (201) | YOLOv8 multi-person pose estimation | uint8 | int8 | ✅ yolov8n 3 poses (86%/81%/74%), 17 kpts |
 | | `pp_mpe_pd_uf` | `POSTPROCESS_MPE_PD_UF` (202) | Palm detector | uint8 | float32 | — |
+
+### Face Detection (FD)
+
+| Status | Postprocess Type | C Define | Description | Input | Output | Verification |
+|--------|-----------------|----------|-------------|-------|--------|-------------|
+| ✅ | `pp_fd_blazeface_ui` | `POSTPROCESS_FD_BLAZEFACE_UI` (113) | BlazeFace face detection with keypoints | uint8 | int8 | ✅ 1 face 89%, 6 keypoints (eyes/nose/mouth/ears), 5 connections |
 
 ### Single Person Pose Estimation (SPE)
 
@@ -95,7 +101,7 @@ The following table lists all post-processing types defined in `app_postprocess.
 
 | Status | Postprocess Type | C Define | Description | Input | Output | Verification |
 |--------|-----------------|----------|-------------|-------|--------|-------------|
-| | `pp_iseg_yolo_v8_ui` | `POSTPROCESS_ISEG_YOLO_V8_UI` (300) | YOLOv8 instance segmentation | uint8 | int8 | — |
+| ✅ | `pp_iseg_yolo_v8_ui` | `POSTPROCESS_ISEG_YOLO_V8_UI` (300) | YOLOv8 instance segmentation | uint8 | int8 | ✅ 4 segments (person 86%/83%/77%/73%) |
 
 ### Semantic Segmentation (SSEG)
 
@@ -170,4 +176,4 @@ The Makefile uses the following scripts:
 
 ---
 
-**Last Updated:** 2026-05-28
+**Last Updated:** 2026-06-03
