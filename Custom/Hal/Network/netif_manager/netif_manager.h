@@ -82,6 +82,10 @@
 #define NETIF_WIFI_HALOW_DEFAULT_GW           {192, 168, 12, 1}
 #define NETIF_WIFI_HALOW_DEFAULT_IP_MODE      (NETIF_IP_MODE_DHCP)
 #define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (30)
+/** 1: scan de-dup by BSSID+SSID+freq+bw; 0 (default): BSSID+SSID only */
+#ifndef NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW
+#define NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW  (0)
+#endif
 #endif
 #define NETIF_NAME_ETH_WAN                  "wn"
 #define NETIF_NAME_4G_CAT1                  "4g"

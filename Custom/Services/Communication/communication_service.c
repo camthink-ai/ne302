@@ -70,9 +70,16 @@ typedef struct {
     // Cellular management
     aicam_bool_t cellular_available;                // 4G module hardware available
     aicam_bool_t cellular_initialized;              // 4G module initialized
+    aicam_bool_t cellular_init_started;             // 4G async init started (may be deferred after HaLow)
     cellular_connection_settings_t cellular_settings;  // Cellular settings
     cellular_detail_info_t cellular_info;           // Cellular detailed info
     uint32_t cellular_connect_start_time;           // Connection start timestamp
+
+    // HaLow management
+    aicam_bool_t halow_available;                   // HaLow hardware available
+    aicam_bool_t halow_initialized;                 // HaLow initialized
+    aicam_bool_t halow_init_started;                // HaLow init async started
+    aicam_bool_t halow_ready;                       // HaLow init completed
     
     // PoE/Ethernet management
     aicam_bool_t poe_available;                     // PoE hardware available
@@ -114,6 +121,7 @@ static void communication_service_unlock(void)
 static const communication_service_config_t default_config = {
     .auto_start_wifi_ap = AICAM_TRUE,
     .auto_start_wifi_sta = AICAM_TRUE,
+    .auto_start_halow = AICAM_TRUE,
     .auto_start_cellular = AICAM_TRUE,
     .auto_start_poe = AICAM_TRUE,
     .enable_network_scan = AICAM_TRUE,
@@ -129,11 +137,22 @@ static const communication_service_config_t default_config = {
 
 static aicam_bool_t is_connected(const char *ssid, const char *bssid);
 static void add_known_network(const network_scan_result_t *network);
+static aicam_bool_t comm_should_scan_before_connect(void);
+static aicam_result_t wifi_refresh_scan_results(uint32_t timeout_ms);
+static aicam_bool_t wifi_scan_contains_ssid(const char *ssid);
+static aicam_result_t try_connect_known_networks(aicam_bool_t scan_before_connect);
 
 /* ==================== Network Interface Ready Callbacks ==================== */
 
 static void on_wifi_ap_ready(const char *if_name, aicam_result_t result);
 static void on_wifi_sta_ready(const char *if_name, aicam_result_t result);
+#if NETIF_WIFI_HALOW_IS_ENABLE
+static void on_halow_ready(const char *if_name, aicam_result_t result);
+
+/* Normal boot: scan before connect; web / low-power wakeup connect directly. */
+static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_timeout_ms);
+static aicam_result_t apply_halow_config_from_json(void);
+#endif
 #if NETIF_4G_CAT1_IS_ENABLE
 static void on_cellular_ready(const char *if_name, aicam_result_t result);
 #endif
@@ -237,11 +256,64 @@ static aicam_result_t load_known_networks_from_nvs(void)
     return AICAM_OK;
 }
 
+static aicam_bool_t comm_should_scan_before_connect(void)
+{
+    wakeup_source_type_t wakeup_source = system_service_get_wakeup_source_type();
+    return system_service_requires_time_optimized_mode(wakeup_source) ? AICAM_FALSE : AICAM_TRUE;
+}
+
+static aicam_result_t wifi_refresh_scan_results(uint32_t timeout_ms)
+{
+    if (nm_wireless_update_scan_result(timeout_ms) != 0) {
+        LOG_SVC_WARN("WiFi scan failed or timed out");
+        return AICAM_ERROR;
+    }
+
+    wireless_scan_result_t *scan_result = nm_wireless_get_scan_result();
+    g_communication_service.scan_result_count = 0;
+    if (scan_result == NULL || scan_result->scan_info == NULL || scan_result->scan_count == 0) {
+        LOG_SVC_INFO("WiFi scan finished with no APs visible");
+        return AICAM_OK;
+    }
+
+    for (uint32_t i = 0; i < scan_result->scan_count && i < MAX_SCAN_RESULTS; i++) {
+        network_scan_result_t *result = &g_communication_service.scan_results[i];
+        strncpy(result->ssid, scan_result->scan_info[i].ssid, sizeof(result->ssid) - 1);
+        result->ssid[sizeof(result->ssid) - 1] = '\0';
+        snprintf(result->bssid, sizeof(result->bssid), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 scan_result->scan_info[i].bssid[0], scan_result->scan_info[i].bssid[1],
+                 scan_result->scan_info[i].bssid[2], scan_result->scan_info[i].bssid[3],
+                 scan_result->scan_info[i].bssid[4], scan_result->scan_info[i].bssid[5]);
+        result->rssi = scan_result->scan_info[i].rssi;
+        result->channel = scan_result->scan_info[i].channel;
+        result->security = (wireless_security_t)scan_result->scan_info[i].security;
+        result->connected = AICAM_FALSE;
+        result->is_known = AICAM_FALSE;
+        result->last_connected_time = 0;
+        g_communication_service.scan_result_count++;
+    }
+    return AICAM_OK;
+}
+
+static aicam_bool_t wifi_scan_contains_ssid(const char *ssid)
+{
+    if (ssid == NULL || ssid[0] == '\0') {
+        return AICAM_TRUE;
+    }
+    for (uint32_t i = 0; i < g_communication_service.scan_result_count; i++) {
+        if (strcmp(g_communication_service.scan_results[i].ssid, ssid) == 0) {
+            return AICAM_TRUE;
+        }
+    }
+    return AICAM_FALSE;
+}
+
 /**
- * @brief Try to connect to known networks (optimized for low power mode fast startup)
- * @note In low power mode, prioritizes last connected network for fastest connection
+ * @brief Try to connect to known networks
+ * @param scan_before_connect AICAM_TRUE: scan first and only connect if SSID seen (normal boot)
+ *                            AICAM_FALSE: connect directly (web / low-power wakeup)
  */
-static aicam_result_t try_connect_known_networks(void)
+static aicam_result_t try_connect_known_networks(aicam_bool_t scan_before_connect)
 {
     if (g_communication_service.known_network_count == 0) {
         LOG_SVC_INFO("No known networks to connect");
@@ -253,8 +325,15 @@ static aicam_result_t try_connect_known_networks(void)
     wakeup_source_type_t wakeup_source = system_service_get_wakeup_source_type();
     aicam_bool_t requires_time_optimized = system_service_requires_time_optimized_mode(wakeup_source);
     
-    LOG_SVC_INFO("Trying to connect to known networks (time-optimized mode: %s)...", 
+    LOG_SVC_INFO("Trying to connect to known networks (scan-first: %s, time-optimized: %s)...",
+                 scan_before_connect ? "YES" : "NO",
                  requires_time_optimized ? "YES" : "NO");
+
+    if (scan_before_connect) {
+        if (wifi_refresh_scan_results(3000U) != AICAM_OK) {
+            return AICAM_ERROR;
+        }
+    }
     
     // Create a sorted index array
     uint32_t sorted_indices[MAX_KNOWN_NETWORKS];
@@ -307,8 +386,8 @@ static aicam_result_t try_connect_known_networks(void)
         }
     }
     
-    // In RTC wakeup mode, try last connected network first without waiting for scan
-    if (requires_time_optimized && g_communication_service.known_network_count > 0) {
+    // In RTC wakeup mode, try last connected network first without scan verification
+    if (!scan_before_connect && requires_time_optimized && g_communication_service.known_network_count > 0) {
         uint32_t last_connected_idx = sorted_indices[0];
         network_scan_result_t *last_connected = &g_communication_service.known_networks[last_connected_idx];
         
@@ -359,10 +438,15 @@ static aicam_result_t try_connect_known_networks(void)
         }
     }
     
-    // Try to connect to each known network in order (in low power mode: directly try to connect, without scanning first)
+    // Try to connect to each known network in order
     for (uint32_t i = 0; i < g_communication_service.known_network_count; i++) {
         uint32_t idx = sorted_indices[i];
         network_scan_result_t *known = &g_communication_service.known_networks[idx];
+
+        if (scan_before_connect && !wifi_scan_contains_ssid(known->ssid)) {
+            LOG_SVC_INFO("WiFi SSID \"%s\" not in scan, skip", known->ssid);
+            continue;
+        }
         
         LOG_SVC_INFO("Trying to connect to: %s (%s), RSSI: %d dBm, Last connected: %u", 
                     known->ssid, known->bssid, known->rssi, known->last_connected_time);
@@ -889,6 +973,26 @@ aicam_result_t communication_service_init(void *config)
     if (result != AICAM_OK) {
         LOG_SVC_WARN("Failed to register WiFi STA init config: %d", result);
     }
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    g_communication_service.halow_available = AICAM_TRUE;
+
+    netif_init_config_t halow_config = {
+        .if_name = NETIF_NAME_WIFI_HALOW,
+        .state = NETIF_INIT_STATE_IDLE,
+        .priority = NETIF_INIT_PRIORITY_NORMAL,
+        .auto_up = AICAM_FALSE,
+        .async = AICAM_TRUE,
+        .callback = on_halow_ready
+    };
+    result = netif_init_manager_register(&halow_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_WARN("Failed to register HaLow init config: %d", result);
+        g_communication_service.halow_available = AICAM_FALSE;
+    } else {
+        LOG_SVC_INFO("HaLow module registered");
+    }
+#endif
     
 #if NETIF_4G_CAT1_IS_ENABLE
     // Register Cellular/4G initialization configuration
@@ -970,7 +1074,14 @@ aicam_result_t communication_service_start(void)
     
     // Reset startup state
     g_communication_service.wifi_sta_ready = AICAM_FALSE;
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    g_communication_service.halow_ready = AICAM_FALSE;
+    g_communication_service.halow_init_started = AICAM_FALSE;
+#endif
     g_communication_service.cellular_ready = AICAM_FALSE;
+#if NETIF_4G_CAT1_IS_ENABLE
+    g_communication_service.cellular_init_started = AICAM_FALSE;
+#endif
     g_communication_service.poe_ready = AICAM_FALSE;
     g_communication_service.startup_decision_made = AICAM_FALSE;
     g_communication_service.startup_begin_time = rtc_get_uptime_ms();
@@ -1015,13 +1126,32 @@ aicam_result_t communication_service_start(void)
         }
         // Note: try_connect_known_networks() will be called in on_wifi_sta_ready() callback
     }
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (g_communication_service.config.auto_start_halow && g_communication_service.halow_available) {
+        LOG_SVC_INFO("Starting async HaLow initialization...");
+        g_communication_service.halow_init_started = AICAM_TRUE;
+        aicam_result_t halow_result = netif_init_manager_init_async(NETIF_NAME_WIFI_HALOW);
+        if (halow_result != AICAM_OK) {
+            LOG_SVC_WARN("Failed to start HaLow initialization: %d", halow_result);
+            g_communication_service.halow_init_started = AICAM_FALSE;
+            g_communication_service.halow_ready = AICAM_TRUE;
+            g_communication_service.halow_initialized = AICAM_FALSE;
+            g_communication_service.halow_available = AICAM_FALSE;
+        }
+    }
+#endif
     
 #if NETIF_4G_CAT1_IS_ENABLE
-    if (g_communication_service.config.auto_start_cellular ) {
+    if (g_communication_service.config.auto_start_cellular &&
+        !g_communication_service.halow_init_started) {
         LOG_SVC_INFO("Starting async Cellular/4G initialization...");
+        g_communication_service.cellular_init_started = AICAM_TRUE;
         aicam_result_t cellular_result = netif_init_manager_init_async(NETIF_NAME_4G_CAT1);
         if (cellular_result != AICAM_OK) {
             LOG_SVC_WARN("Failed to start Cellular initialization: %d", cellular_result);
+            g_communication_service.cellular_init_started = AICAM_FALSE;
+            g_communication_service.cellular_ready = AICAM_TRUE;
         }
     }
 #endif
@@ -1652,8 +1782,13 @@ static void startup_timeout_callback(void *argument)
     }
     
     LOG_SVC_WARN("Startup timeout (%u ms) reached, forcing connection decision", STARTUP_TIMEOUT_MS);
-    LOG_SVC_INFO("Ready status at timeout: WiFi=%s, Cellular=%s, PoE=%s",
+    LOG_SVC_INFO("Ready status at timeout: WiFi=%s, HaLow=%s, Cellular=%s, PoE=%s",
                  g_communication_service.wifi_sta_ready ? "ready" : "waiting",
+#if NETIF_WIFI_HALOW_IS_ENABLE
+                 g_communication_service.halow_ready ? "ready" : "waiting",
+#else
+                 "n/a",
+#endif
                  g_communication_service.cellular_ready ? "ready" : "waiting",
                  g_communication_service.poe_ready ? "ready" : "waiting");
     
@@ -1667,10 +1802,16 @@ static void startup_timeout_callback(void *argument)
  */
 static communication_type_t get_highest_priority_available_type(void)
 {
-    // Priority: PoE (3) > Cellular (2) > WiFi (1)
+    // Priority: PoE > HaLow > Cellular > WiFi
 #if NETIF_ETH_WAN_IS_ENABLE
     if (g_communication_service.poe_available) {
         return COMM_TYPE_POE;
+    }
+#endif
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (g_communication_service.halow_available) {
+        return COMM_TYPE_HALOW;
     }
 #endif
 
@@ -1690,7 +1831,7 @@ static communication_type_t get_highest_priority_available_type(void)
  * 
  * Logic:
  * 1. If preferred_type is set: only try to connect that type
- * 2. If preferred_type is not set: select by priority (PoE > Cellular > WiFi)
+ * 2. If preferred_type is not set: select by priority (PoE > HaLow > Cellular > WiFi)
  * 3. Connection failure does NOT trigger fallback to other types
  */
 static void make_startup_connection_decision(void)
@@ -1706,12 +1847,19 @@ static void make_startup_connection_decision(void)
     if (g_communication_service.startup_timeout_timer != NULL) {
         osTimerStop(g_communication_service.startup_timeout_timer);
     }
+
+    aicam_bool_t scan_before_connect = comm_should_scan_before_connect();
     
     uint32_t startup_duration = rtc_get_uptime_ms() - g_communication_service.startup_begin_time;
     LOG_SVC_INFO("=== Making startup connection decision (after %u ms) ===", startup_duration);
     LOG_SVC_INFO("Preferred type: %s", communication_type_to_string(g_communication_service.preferred_type));
-    LOG_SVC_INFO("Available: WiFi=%s, Cellular=%s, PoE=%s",
+    LOG_SVC_INFO("Available: WiFi=%s, HaLow=%s, Cellular=%s, PoE=%s",
                  "YES",  // WiFi always available
+#if NETIF_WIFI_HALOW_IS_ENABLE
+                 g_communication_service.halow_available ? "YES" : "NO",
+#else
+                 "NO",
+#endif
                  g_communication_service.cellular_available ? "YES" : "NO",
                  g_communication_service.poe_available ? "YES" : "NO");
     
@@ -1727,6 +1875,11 @@ static void make_startup_connection_decision(void)
         switch (target_type) {
             case COMM_TYPE_WIFI:
                 hw_available = AICAM_TRUE;  // Always available
+                break;
+            case COMM_TYPE_HALOW:
+#if NETIF_WIFI_HALOW_IS_ENABLE
+                hw_available = g_communication_service.halow_available;
+#endif
                 break;
             case COMM_TYPE_CELLULAR:
                 hw_available = g_communication_service.cellular_available;
@@ -1766,10 +1919,26 @@ static void make_startup_connection_decision(void)
         switch (target_type) {
             case COMM_TYPE_WIFI:
                 // WiFi needs known networks
-                connect_result = try_connect_known_networks();
+                connect_result = try_connect_known_networks(scan_before_connect);
                 if (connect_result != AICAM_OK) {
                     LOG_SVC_INFO("WiFi: No known networks or connection failed, waiting for user config");
                 }
+                break;
+
+            case COMM_TYPE_HALOW:
+#if NETIF_WIFI_HALOW_IS_ENABLE
+                if (g_communication_service.halow_initialized) {
+                    communication_switch_result_t halow_sw_result;
+                    connect_result = communication_switch_type_sync(COMM_TYPE_HALOW, &halow_sw_result,
+                            g_communication_service.config.connection_timeout_ms,
+                            scan_before_connect);
+                    if (connect_result != AICAM_OK) {
+                        LOG_SVC_INFO("HaLow: Connection failed, waiting for user config");
+                    }
+                } else {
+                    LOG_SVC_WARN("HaLow not initialized yet");
+                }
+#endif
                 break;
                 
             case COMM_TYPE_CELLULAR:
@@ -1818,7 +1987,6 @@ static void make_startup_connection_decision(void)
 
     }
     
-    // Updatservice_set_sta_readye type info cache
     update_type_info_cache();
     
     LOG_SVC_INFO("=== Startup decision complete ===");
@@ -1837,9 +2005,18 @@ static void check_all_ready_and_decide(void)
     // Check which interfaces we're waiting for
     aicam_bool_t waiting_for_wifi = g_communication_service.config.auto_start_wifi_sta && 
                                     !g_communication_service.wifi_sta_ready;
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    aicam_bool_t waiting_for_halow = g_communication_service.config.auto_start_halow &&
+                                     g_communication_service.halow_init_started &&
+                                     !g_communication_service.halow_ready;
+#else
+    aicam_bool_t waiting_for_halow = AICAM_FALSE;
+#endif
     
 #if NETIF_4G_CAT1_IS_ENABLE
-    aicam_bool_t waiting_for_cellular = g_communication_service.config.auto_start_cellular && 
+    aicam_bool_t waiting_for_cellular = g_communication_service.config.auto_start_cellular &&
+                                        g_communication_service.cellular_init_started &&
                                         !g_communication_service.cellular_ready;
 #else
     aicam_bool_t waiting_for_cellular = AICAM_FALSE;
@@ -1852,16 +2029,22 @@ static void check_all_ready_and_decide(void)
     aicam_bool_t waiting_for_poe = AICAM_FALSE;
 #endif
 
-    LOG_SVC_DEBUG("Ready check: WiFi=%s(%s), Cellular=%s(%s), PoE=%s(%s)",
+    LOG_SVC_DEBUG("Ready check: WiFi=%s(%s), HaLow=%s(%s), Cellular=%s(%s), PoE=%s(%s)",
                  g_communication_service.wifi_sta_ready ? "ready" : "waiting",
                  waiting_for_wifi ? "needed" : "skip",
+#if NETIF_WIFI_HALOW_IS_ENABLE
+                 g_communication_service.halow_ready ? "ready" : "waiting",
+                 waiting_for_halow ? "needed" : "skip",
+#else
+                 "n/a", "skip",
+#endif
                  g_communication_service.cellular_ready ? "ready" : "waiting",
                  waiting_for_cellular ? "needed" : "skip",
                  g_communication_service.poe_ready ? "ready" : "waiting",
                  waiting_for_poe ? "needed" : "skip");
     
     // If still waiting for any interface, don't decide yet
-    if (waiting_for_wifi || waiting_for_cellular || waiting_for_poe) {
+    if (waiting_for_wifi || waiting_for_halow || waiting_for_cellular || waiting_for_poe) {
         LOG_SVC_DEBUG("Still waiting for interfaces, decision pending");
         communication_service_unlock();
         return;
@@ -1884,6 +2067,8 @@ static const char* get_interface_name_for_type(communication_type_t type)
     switch (type) {
         case COMM_TYPE_WIFI:
             return NETIF_NAME_WIFI_STA;
+        case COMM_TYPE_HALOW:
+            return NETIF_NAME_WIFI_HALOW;
         case COMM_TYPE_CELLULAR:
             return NETIF_NAME_4G_CAT1;
         case COMM_TYPE_POE:
@@ -1927,6 +2112,40 @@ static void update_type_info_cache(void)
     } else {
         g_communication_service.type_info[COMM_TYPE_WIFI].status = COMM_STATUS_UNAVAILABLE;
     }
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    // HaLow type — mark unavailable when init failed / module absent
+    g_communication_service.type_info[COMM_TYPE_HALOW].type = COMM_TYPE_HALOW;
+    g_communication_service.type_info[COMM_TYPE_HALOW].priority = 3;
+    g_communication_service.type_info[COMM_TYPE_HALOW].available = g_communication_service.halow_available;
+    strncpy(g_communication_service.type_info[COMM_TYPE_HALOW].interface_name,
+            NETIF_NAME_WIFI_HALOW, sizeof(g_communication_service.type_info[COMM_TYPE_HALOW].interface_name) - 1);
+
+    if (g_communication_service.halow_available) {
+        netif_state_t hw_state = nm_get_netif_state(NETIF_NAME_WIFI_HALOW);
+        if (hw_state == NETIF_STATE_UP) {
+            g_communication_service.type_info[COMM_TYPE_HALOW].status = COMM_STATUS_CONNECTED;
+            netif_info_t hw_info;
+            if (nm_get_netif_info(NETIF_NAME_WIFI_HALOW, &hw_info) == AICAM_OK) {
+                snprintf(g_communication_service.type_info[COMM_TYPE_HALOW].ip_addr,
+                         sizeof(g_communication_service.type_info[COMM_TYPE_HALOW].ip_addr),
+                         "%d.%d.%d.%d", hw_info.ip_addr[0], hw_info.ip_addr[1],
+                         hw_info.ip_addr[2], hw_info.ip_addr[3]);
+                g_communication_service.type_info[COMM_TYPE_HALOW].signal_strength = hw_info.rssi;
+            }
+        } else if (hw_state == NETIF_STATE_DOWN) {
+            g_communication_service.type_info[COMM_TYPE_HALOW].status = COMM_STATUS_DISCONNECTED;
+        } else {
+            g_communication_service.type_info[COMM_TYPE_HALOW].status = COMM_STATUS_UNAVAILABLE;
+        }
+    } else {
+        g_communication_service.type_info[COMM_TYPE_HALOW].status = COMM_STATUS_UNAVAILABLE;
+    }
+#else
+    g_communication_service.type_info[COMM_TYPE_HALOW].type = COMM_TYPE_HALOW;
+    g_communication_service.type_info[COMM_TYPE_HALOW].available = AICAM_FALSE;
+    g_communication_service.type_info[COMM_TYPE_HALOW].status = COMM_STATUS_UNAVAILABLE;
+#endif
     
 #if NETIF_4G_CAT1_IS_ENABLE
     // Cellular type — dynamically recheck hardware availability
@@ -1983,7 +2202,7 @@ static void update_type_info_cache(void)
     }
 
     g_communication_service.type_info[COMM_TYPE_POE].type = COMM_TYPE_POE;
-    g_communication_service.type_info[COMM_TYPE_POE].priority = 3;  // Highest priority
+    g_communication_service.type_info[COMM_TYPE_POE].priority = 4;  // Highest priority
     g_communication_service.type_info[COMM_TYPE_POE].available = g_communication_service.poe_available;
     strncpy(g_communication_service.type_info[COMM_TYPE_POE].interface_name,
             NETIF_NAME_ETH_WAN, sizeof(g_communication_service.type_info[COMM_TYPE_POE].interface_name) - 1);
@@ -2076,7 +2295,7 @@ static void check_and_handle_hardware_change(void)
             if (g_communication_service.wifi_sta_ready &&
                 g_communication_service.type_info[COMM_TYPE_WIFI].status != COMM_STATUS_CONNECTED) {
                 LOG_SVC_INFO("Attempting WiFi auto-connect after hardware removal");
-                try_connect_known_networks();
+                try_connect_known_networks(AICAM_FALSE);
             }
         }
         return;
@@ -2099,7 +2318,7 @@ static void check_and_handle_hardware_change(void)
                 if (fallback == COMM_TYPE_WIFI && g_communication_service.wifi_sta_ready &&
                     g_communication_service.type_info[COMM_TYPE_WIFI].status != COMM_STATUS_CONNECTED) {
                     LOG_SVC_INFO("Attempting WiFi auto-connect after connection loss");
-                    try_connect_known_networks();
+                    try_connect_known_networks(AICAM_FALSE);
                 }
             }
         }
@@ -2111,10 +2330,16 @@ static void check_and_handle_hardware_change(void)
  */
 static communication_type_t get_highest_priority_connected_type(void)
 {
-    // Check in priority order: PoE > Cellular > WiFi
+    // Check in priority order: PoE > HaLow > Cellular > WiFi
 #if NETIF_ETH_WAN_IS_ENABLE
     if (g_communication_service.type_info[COMM_TYPE_POE].status == COMM_STATUS_CONNECTED) {
         return COMM_TYPE_POE;
+    }
+#endif
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (g_communication_service.type_info[COMM_TYPE_HALOW].status == COMM_STATUS_CONNECTED) {
+        return COMM_TYPE_HALOW;
     }
 #endif
 
@@ -2130,6 +2355,193 @@ static communication_type_t get_highest_priority_connected_type(void)
     
     return COMM_TYPE_NONE;
 }
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+static aicam_bool_t halow_parse_bssid_str(const char *bssid_str, uint8_t out[6])
+{
+    unsigned int bssid_bytes[6];
+
+    if (bssid_str == NULL || bssid_str[0] == '\0' || out == NULL) {
+        return AICAM_FALSE;
+    }
+    if (sscanf(bssid_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+               &bssid_bytes[0], &bssid_bytes[1], &bssid_bytes[2],
+               &bssid_bytes[3], &bssid_bytes[4], &bssid_bytes[5]) != 6) {
+        return AICAM_FALSE;
+    }
+    for (int i = 0; i < 6; i++) {
+        out[i] = (uint8_t)(bssid_bytes[i] & 0xFF);
+    }
+    return AICAM_TRUE;
+}
+
+static void halow_bssid_to_str(const uint8_t bssid[6], char *out, size_t out_len)
+{
+    if (out == NULL || out_len < 18U || bssid == NULL) {
+        return;
+    }
+    snprintf(out, out_len, "%02X:%02X:%02X:%02X:%02X:%02X",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+}
+
+static aicam_result_t apply_halow_config_from_json(void)
+{
+    network_service_config_t net_cfg;
+    if (json_config_get_network_service_config(&net_cfg) != AICAM_OK) {
+        return AICAM_ERROR;
+    }
+
+    netif_config_t if_cfg;
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg) != 0) {
+        LOG_SVC_ERROR("Failed to get HaLow netif config");
+        return AICAM_ERROR;
+    }
+
+    if (net_cfg.halow_ssid[0] != '\0') {
+        strncpy(if_cfg.wireless_cfg.ssid, net_cfg.halow_ssid,
+                sizeof(if_cfg.wireless_cfg.ssid) - 1);
+        if_cfg.wireless_cfg.ssid[sizeof(if_cfg.wireless_cfg.ssid) - 1] = '\0';
+    }
+    if (net_cfg.halow_password[0] != '\0') {
+        strncpy(if_cfg.wireless_cfg.pw, net_cfg.halow_password,
+                sizeof(if_cfg.wireless_cfg.pw) - 1);
+        if_cfg.wireless_cfg.pw[sizeof(if_cfg.wireless_cfg.pw) - 1] = '\0';
+    }
+    if (net_cfg.halow_security < WIRELESS_SECURITY_MAX) {
+        if_cfg.wireless_cfg.security = (wireless_security_t)net_cfg.halow_security;
+    }
+    if (net_cfg.halow_country_code[0] != '\0') {
+        strncpy(if_cfg.halow_cfg.country_code, net_cfg.halow_country_code,
+                sizeof(if_cfg.halow_cfg.country_code) - 1);
+        if_cfg.halow_cfg.country_code[sizeof(if_cfg.halow_cfg.country_code) - 1] = '\0';
+    }
+    if (net_cfg.halow_bssid[0] != '\0') {
+        uint8_t bssid_bytes[6];
+        if (halow_parse_bssid_str(net_cfg.halow_bssid, bssid_bytes)) {
+            memcpy(if_cfg.wireless_cfg.bssid, bssid_bytes, sizeof(if_cfg.wireless_cfg.bssid));
+        }
+    }
+
+    int cfg_ret = nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg);
+    if (cfg_ret != 0) {
+        LOG_SVC_ERROR("Failed to set HaLow netif config: %d", cfg_ret);
+        return AICAM_ERROR;
+    }
+    return AICAM_OK;
+}
+
+static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_timeout_ms)
+{
+    if (ssid == NULL || ssid[0] == '\0') {
+        return AICAM_TRUE;
+    }
+
+    if (nm_wireless_update_scan_result_ex(NETIF_NAME_WIFI_HALOW, scan_timeout_ms) != 0) {
+        LOG_SVC_WARN("HaLow scan failed or timed out");
+        return AICAM_FALSE;
+    }
+
+    wireless_scan_result_t *scan = nm_wireless_get_scan_result_ex(NETIF_NAME_WIFI_HALOW);
+    if (scan == NULL || scan->scan_info == NULL || scan->scan_count == 0) {
+        LOG_SVC_INFO("HaLow scan finished with no APs visible");
+        return AICAM_FALSE;
+    }
+
+    netif_config_t if_cfg;
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg) != 0) {
+        return AICAM_FALSE;
+    }
+    aicam_bool_t have_bssid = NETIF_MAC_IS_UNICAST(if_cfg.wireless_cfg.bssid) ? AICAM_TRUE : AICAM_FALSE;
+
+    for (uint8_t i = 0; i < scan->scan_count; i++) {
+        if (strcmp(scan->scan_info[i].ssid, ssid) != 0) {
+            continue;
+        }
+        if (have_bssid &&
+            memcmp(if_cfg.wireless_cfg.bssid, scan->scan_info[i].bssid, 6) != 0) {
+            continue;
+        }
+
+        memcpy(if_cfg.wireless_cfg.bssid, scan->scan_info[i].bssid,
+               sizeof(if_cfg.wireless_cfg.bssid));
+        if (nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg) != 0) {
+            LOG_SVC_WARN("Failed to update HaLow BSSID from scan");
+            return AICAM_FALSE;
+        }
+
+        network_service_config_t net_cfg;
+        if (json_config_get_network_service_config(&net_cfg) == AICAM_OK) {
+            halow_bssid_to_str(scan->scan_info[i].bssid, net_cfg.halow_bssid,
+                               sizeof(net_cfg.halow_bssid));
+            (void)json_config_set_network_service_config(&net_cfg);
+        }
+
+        LOG_SVC_INFO("HaLow scan matched SSID \"%s\" BSSID %02X:%02X:%02X:%02X:%02X:%02X",
+                     ssid,
+                     scan->scan_info[i].bssid[0], scan->scan_info[i].bssid[1],
+                     scan->scan_info[i].bssid[2], scan->scan_info[i].bssid[3],
+                     scan->scan_info[i].bssid[4], scan->scan_info[i].bssid[5]);
+        return AICAM_TRUE;
+    }
+    LOG_SVC_INFO("HaLow SSID \"%s\" not found in scan (%u APs)", ssid, scan->scan_count);
+    return AICAM_FALSE;
+}
+
+/**
+ * @brief HaLow ready callback
+ * @note Applies saved config only; scan-before-connect happens at switch/startup connect
+ */
+static void on_halow_ready(const char *if_name, aicam_result_t result)
+{
+    (void)if_name;
+
+    g_communication_service.halow_ready = AICAM_TRUE;
+
+    if (result == AICAM_OK) {
+        LOG_SVC_INFO("HaLow initialized and ready");
+        g_communication_service.halow_initialized = AICAM_TRUE;
+        g_communication_service.halow_available = AICAM_TRUE;
+
+        if (apply_halow_config_from_json() != AICAM_OK) {
+            LOG_SVC_WARN("Failed to apply HaLow config from json");
+        }
+
+#if NETIF_4G_CAT1_IS_ENABLE
+        /* HaLow succeeded — skip cellular init */
+        g_communication_service.cellular_ready = AICAM_TRUE;
+#endif
+
+        update_type_info_cache();
+
+        uint32_t init_time = netif_init_manager_get_init_time(NETIF_NAME_WIFI_HALOW);
+        LOG_SVC_INFO("HaLow initialization completed in %u ms", init_time);
+    } else {
+        LOG_SVC_INFO("HaLow initialization failed: %d", result);
+        g_communication_service.halow_initialized = AICAM_FALSE;
+        g_communication_service.halow_available = AICAM_FALSE;
+        g_communication_service.stats.failed_connections++;
+        g_communication_service.stats.last_error_code = result;
+
+#if NETIF_4G_CAT1_IS_ENABLE
+        if (g_communication_service.config.auto_start_cellular &&
+            !g_communication_service.cellular_init_started) {
+            g_communication_service.cellular_init_started = AICAM_TRUE;
+            LOG_SVC_INFO("HaLow failed, starting deferred Cellular/4G initialization...");
+            aicam_result_t cell_result = netif_init_manager_init_async(NETIF_NAME_4G_CAT1);
+            if (cell_result != AICAM_OK) {
+                LOG_SVC_WARN("Failed to start deferred Cellular initialization: %d", cell_result);
+                g_communication_service.cellular_init_started = AICAM_FALSE;
+                g_communication_service.cellular_ready = AICAM_TRUE;
+            }
+        } else if (!g_communication_service.config.auto_start_cellular) {
+            g_communication_service.cellular_ready = AICAM_TRUE;
+        }
+#endif
+    }
+
+    check_all_ready_and_decide();
+}
+#endif /* NETIF_WIFI_HALOW_IS_ENABLE */
 
 #if NETIF_4G_CAT1_IS_ENABLE
 /**
@@ -2328,6 +2740,7 @@ const char* communication_type_to_string(communication_type_t type)
     switch (type) {
         case COMM_TYPE_NONE:     return "none";
         case COMM_TYPE_WIFI:     return "wifi";
+        case COMM_TYPE_HALOW:    return "halow";
         case COMM_TYPE_CELLULAR: return "cellular";
         case COMM_TYPE_POE:      return "poe";
         default:                 return "unknown";
@@ -2352,6 +2765,8 @@ communication_type_t communication_type_from_string(const char *str)
     
     if (strcasecmp(str, "wifi") == 0 || strcasecmp(str, "wlan") == 0) {
         return COMM_TYPE_WIFI;
+    } else if (strcasecmp(str, "halow") == 0 || strcasecmp(str, "hw") == 0) {
+        return COMM_TYPE_HALOW;
     } else if (strcasecmp(str, "cellular") == 0 || strcasecmp(str, "4g") == 0 || 
                strcasecmp(str, "lte") == 0) {
         return COMM_TYPE_CELLULAR;
@@ -2496,8 +2911,8 @@ communication_type_t communication_get_default_type(void)
     
     update_type_info_cache();
     
-    // Return highest priority available type
-    for (int priority = 3; priority >= 1; priority--) {
+    // Return highest priority available type (PoE=4 > HaLow=3 > Cellular=2 > WiFi=1)
+    for (int priority = 4; priority >= 1; priority--) {
         for (int i = 1; i < COMM_TYPE_MAX; i++) {
             if (g_communication_service.type_info[i].priority == priority &&
                 g_communication_service.type_info[i].available) {
@@ -2562,7 +2977,8 @@ aicam_result_t communication_switch_type(communication_type_t type,
     // Perform the switch
     aicam_result_t result = communication_switch_type_sync(type, 
                                                           &g_communication_service.switch_result,
-                                                          g_communication_service.config.connection_timeout_ms);
+                                                          g_communication_service.config.connection_timeout_ms,
+                                                          AICAM_FALSE);
     
     g_communication_service.switch_result.switch_time_ms = rtc_get_uptime_ms() - start_time;
     g_communication_service.switch_in_progress = AICAM_FALSE;
@@ -2577,7 +2993,8 @@ aicam_result_t communication_switch_type(communication_type_t type,
 
 aicam_result_t communication_switch_type_sync(communication_type_t type,
                                               communication_switch_result_t *result,
-                                              uint32_t timeout_ms)
+                                              uint32_t timeout_ms,
+                                              aicam_bool_t scan_before_connect)
 {
     if (type >= COMM_TYPE_MAX || !result) {
         return AICAM_ERROR_INVALID_PARAM;
@@ -2632,11 +3049,82 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
     
     switch (type) {
         case COMM_TYPE_WIFI:
-            // WiFi connection is handled by try_connect_known_networks
-            connect_result = try_connect_known_networks();
+            connect_result = try_connect_known_networks(scan_before_connect);
             break;
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+        case COMM_TYPE_HALOW:
+        {
+#if NETIF_4G_CAT1_IS_ENABLE
+            netif_state_t cell_state = nm_get_netif_state(NETIF_NAME_4G_CAT1);
+            if (cell_state != NETIF_STATE_DEINIT) {
+                LOG_SVC_INFO("HaLow switch: stopping/deinit cellular to enforce mutual exclusion");
+                (void)nm_ctrl_netif_down(NETIF_NAME_4G_CAT1);
+                (void)nm_ctrl_netif_deinit(NETIF_NAME_4G_CAT1);
+                g_communication_service.cellular_initialized = AICAM_FALSE;
+            }
+#endif
+            if (!netif_init_manager_is_ready(NETIF_NAME_WIFI_HALOW)) {
+                if (!g_communication_service.halow_init_started) {
+                    g_communication_service.halow_init_started = AICAM_TRUE;
+                    (void)netif_init_manager_init_async(NETIF_NAME_WIFI_HALOW);
+                }
+                connect_result = netif_init_manager_wait_ready(NETIF_NAME_WIFI_HALOW, timeout_ms);
+                if (connect_result == AICAM_OK) {
+                    g_communication_service.halow_initialized = AICAM_TRUE;
+                    g_communication_service.halow_available = AICAM_TRUE;
+                    g_communication_service.halow_ready = AICAM_TRUE;
+                }
+            } else {
+                connect_result = AICAM_OK;
+                g_communication_service.halow_initialized = AICAM_TRUE;
+                g_communication_service.halow_available = AICAM_TRUE;
+                g_communication_service.halow_ready = AICAM_TRUE;
+            }
+
+            if (connect_result == AICAM_OK && g_communication_service.halow_initialized) {
+                connect_result = apply_halow_config_from_json();
+
+                if (connect_result == AICAM_OK) {
+                    network_service_config_t net_cfg;
+                    if (scan_before_connect &&
+                        json_config_get_network_service_config(&net_cfg) == AICAM_OK &&
+                        net_cfg.halow_ssid[0] != '\0') {
+                        if (!halow_scan_contains_ssid(net_cfg.halow_ssid, 3000U)) {
+                            snprintf(result->error_message, sizeof(result->error_message),
+                                     "HaLow SSID \"%s\" not found in scan", net_cfg.halow_ssid);
+                            connect_result = AICAM_ERROR;
+                        }
+                    }
+                }
+
+                if (connect_result == AICAM_OK) {
+                    connect_result = (aicam_result_t)nm_ctrl_netif_up(NETIF_NAME_WIFI_HALOW);
+                }
+            } else if (connect_result == AICAM_OK) {
+                connect_result = AICAM_ERROR_UNAVAILABLE;
+            }
+            break;
+        }
+#else
+        case COMM_TYPE_HALOW:
+            snprintf(result->error_message, sizeof(result->error_message),
+                     "HaLow is not enabled");
+            return AICAM_ERROR_UNAVAILABLE;
+#endif
             
         case COMM_TYPE_CELLULAR:
+#if NETIF_WIFI_HALOW_IS_ENABLE
+            {
+                netif_state_t hw_state = nm_get_netif_state(NETIF_NAME_WIFI_HALOW);
+                if (hw_state != NETIF_STATE_DEINIT) {
+                    LOG_SVC_INFO("Cellular switch: stopping/deinit HaLow to enforce mutual exclusion");
+                    (void)nm_ctrl_netif_down(NETIF_NAME_WIFI_HALOW);
+                    (void)nm_ctrl_netif_deinit(NETIF_NAME_WIFI_HALOW);
+                    g_communication_service.halow_initialized = AICAM_FALSE;
+                }
+            }
+#endif
             connect_result = communication_cellular_connect();
             break;
             
@@ -2649,9 +3137,17 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
                      "Invalid communication type");
             return AICAM_ERROR_INVALID_PARAM;
     }
-    
-    // Suppress unused variable warning (async connection)
-    (void)connect_result;
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (type == COMM_TYPE_HALOW && connect_result != AICAM_OK) {
+        if (result->error_message[0] == '\0') {
+            snprintf(result->error_message, sizeof(result->error_message),
+                     "HaLow connection failed: %d", connect_result);
+        }
+        result->switch_time_ms = rtc_get_uptime_ms() - start_time;
+        return connect_result;
+    }
+#endif
     
     // Wait for connection with timeout
     uint32_t elapsed = 0;
@@ -2665,6 +3161,12 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
             g_communication_service.active_type = type;
             result->success = AICAM_TRUE;
             result->switch_time_ms = rtc_get_uptime_ms() - start_time;
+
+            /* Network ready for MQTT / remote wakeup (Service 8 = SERVICE_READY_STA). */
+            if (type == COMM_TYPE_WIFI || type == COMM_TYPE_HALOW ||
+                type == COMM_TYPE_CELLULAR || type == COMM_TYPE_POE) {
+                (void)service_set_sta_ready(AICAM_TRUE);
+            }
             
             // Update device communication type
             device_service_update_communication_type();
@@ -2681,6 +3183,16 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
         elapsed = rtc_get_uptime_ms() - start_time;
     }
     
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (type == COMM_TYPE_HALOW) {
+        snprintf(result->error_message, sizeof(result->error_message),
+                 "Connection timeout for %s", communication_type_to_string(type));
+        result->switch_time_ms = rtc_get_uptime_ms() - start_time;
+        LOG_SVC_WARN("HaLow connection timeout");
+        return AICAM_ERROR_TIMEOUT;
+    }
+#endif
+
     // Timeout - but selected_type is already updated for UI
     // User can still configure this type in the UI
     snprintf(result->error_message, sizeof(result->error_message),
@@ -2749,7 +3261,8 @@ aicam_result_t communication_apply_priority(void)
     LOG_SVC_INFO("Applying priority: switching to %s", communication_type_to_string(target));
     
     communication_switch_result_t result;
-    return communication_switch_type_sync(target, &result, g_communication_service.config.connection_timeout_ms);
+    return communication_switch_type_sync(target, &result,
+            g_communication_service.config.connection_timeout_ms, AICAM_FALSE);
 }
 
 aicam_result_t communication_set_auto_priority(aicam_bool_t enable)
@@ -4556,7 +5069,7 @@ static int comm_switch_cmd(int argc, char* argv[])
     printf("Switching to %s...\r\n", communication_type_to_string(target));
     
     communication_switch_result_t result;
-    aicam_result_t ret = communication_switch_type_sync(target, &result, 30000);
+    aicam_result_t ret = communication_switch_type_sync(target, &result, 30000, AICAM_FALSE);
     
     if (ret == AICAM_OK && result.success) {
         printf("Successfully switched to %s in %lu ms\r\n", 
@@ -5266,8 +5779,8 @@ static void on_wifi_ap_ready(const char *if_name, aicam_result_t result)
 
 /**
  * @brief WiFi STA ready callback
- * @note Only loads scan results, does NOT auto-connect
- *       Connection decision is made by check_all_ready_and_decide()
+ * @note Scan-before-connect runs at startup decision / switch (normal boot only).
+ *       Connection decision is made by check_all_ready_and_decide().
  */
 static void on_wifi_sta_ready(const char *if_name, aicam_result_t result)
 {
@@ -5277,37 +5790,8 @@ static void on_wifi_sta_ready(const char *if_name, aicam_result_t result)
     if (result == AICAM_OK) {
         LOG_SVC_INFO("WiFi STA initialized and ready");
 
-        // Check if wakeup source requires time-optimized mode (skip time-consuming operations)
-        wakeup_source_type_t wakeup_source = system_service_get_wakeup_source_type();
-        aicam_bool_t requires_time_optimized = system_service_requires_time_optimized_mode(wakeup_source);
-
-        // In time-optimized mode, skip scan result loading to save time
-        // We'll use cached known network info directly
-        if (!requires_time_optimized) {
-            // Get scan results from storage (full speed mode only)
-            aicam_result_t scan_result_result = communication_start_network_scan(NULL);
-            if (scan_result_result != AICAM_OK) {
-                LOG_SVC_ERROR("Failed to update network scan result: %d", scan_result_result);
-            }
-            wireless_scan_result_t *scan_result = nm_wireless_get_scan_result();
-            if(scan_result) {
-                g_communication_service.scan_result_count = scan_result->scan_count;
-                for(uint32_t i = 0; i < g_communication_service.scan_result_count; i++) {
-                    strncpy(g_communication_service.scan_results[i].ssid, scan_result->scan_info[i].ssid, sizeof(g_communication_service.scan_results[i].ssid) - 1);
-                    snprintf(g_communication_service.scan_results[i].bssid, sizeof(g_communication_service.scan_results[i].bssid), "%02X:%02X:%02X:%02X:%02X:%02X",
-                            scan_result->scan_info[i].bssid[0], scan_result->scan_info[i].bssid[1],
-                            scan_result->scan_info[i].bssid[2], scan_result->scan_info[i].bssid[3],
-                            scan_result->scan_info[i].bssid[4], scan_result->scan_info[i].bssid[5]);
-                    g_communication_service.scan_results[i].rssi = scan_result->scan_info[i].rssi;
-                    g_communication_service.scan_results[i].channel = scan_result->scan_info[i].channel;
-                    g_communication_service.scan_results[i].security = (wireless_security_t)scan_result->scan_info[i].security;
-                    g_communication_service.scan_results[i].connected = AICAM_FALSE;
-                    g_communication_service.scan_results[i].is_known = AICAM_FALSE;
-                    g_communication_service.scan_results[i].last_connected_time = 0;
-                }
-            }
-        } else {
-            // RTC wakeup mode: clear scan results to use cached known networks
+        if (system_service_requires_time_optimized_mode(system_service_get_wakeup_source_type())) {
+            /* Low-power wakeup: skip cached scan; try_connect uses saved credentials directly */
             g_communication_service.scan_result_count = 0;
         }
 

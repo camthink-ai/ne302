@@ -232,6 +232,13 @@ typedef struct {
     
     // PoE/Ethernet settings
     poe_config_persist_t poe;               // PoE configuration
+
+    // Wi-Fi HaLow last-connected info (no "known networks" list)
+    char halow_ssid[32];
+    char halow_password[64];
+    uint32_t halow_security;
+    char halow_country_code[8];
+    char halow_bssid[18];
 } network_service_config_t;
  
  // Power mode configuration structure

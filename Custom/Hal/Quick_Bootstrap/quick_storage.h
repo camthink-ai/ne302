@@ -107,6 +107,7 @@ typedef enum {
     COMM_PREF_TYPE_WIFI = 1,
     COMM_PREF_TYPE_CELLULAR = 2,
     COMM_PREF_TYPE_POE = 3,
+    COMM_PREF_TYPE_HALOW = 4,
     COMM_PREF_TYPE_DISABLE = 0XFF,
 } qs_comm_pref_type_t;
 

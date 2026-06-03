@@ -725,6 +725,27 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save network password to NVS");
 
+    /* Save HaLow last-connected info */
+    result = json_config_nvs_write_string(NVS_KEY_HALOW_SSID, config->halow_ssid);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow SSID to NVS");
+
+    result = json_config_nvs_write_string(NVS_KEY_HALOW_PASSWORD, config->halow_password);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow password to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_SECURITY, config->halow_security);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow security to NVS");
+
+    result = json_config_nvs_write_string(NVS_KEY_HALOW_COUNTRY_CODE, config->halow_country_code);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow country code to NVS");
+
+    result = json_config_nvs_write_string(NVS_KEY_HALOW_BSSID, config->halow_bssid);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow BSSID to NVS");
+
     // Save known_network_count
     result = json_config_nvs_write_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, config->known_network_count);
     if (result != AICAM_OK)
@@ -1879,6 +1900,29 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
     result = json_config_nvs_read_string(NVS_KEY_NETWORK_PASSWORD, config->network_service.password, sizeof(config->network_service.password));
     if (result != AICAM_OK)
         json_config_nvs_write_string(NVS_KEY_NETWORK_PASSWORD, config->network_service.password);
+
+    /* Load HaLow last-connected info */
+    result = json_config_nvs_read_string(NVS_KEY_HALOW_SSID, config->network_service.halow_ssid, sizeof(config->network_service.halow_ssid));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_HALOW_SSID, config->network_service.halow_ssid);
+
+    result = json_config_nvs_read_string(NVS_KEY_HALOW_PASSWORD, config->network_service.halow_password, sizeof(config->network_service.halow_password));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_HALOW_PASSWORD, config->network_service.halow_password);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_SECURITY, &temp_uint32);
+    if (result == AICAM_OK)
+        config->network_service.halow_security = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_SECURITY, config->network_service.halow_security);
+
+    result = json_config_nvs_read_string(NVS_KEY_HALOW_COUNTRY_CODE, config->network_service.halow_country_code, sizeof(config->network_service.halow_country_code));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_HALOW_COUNTRY_CODE, config->network_service.halow_country_code);
+
+    result = json_config_nvs_read_string(NVS_KEY_HALOW_BSSID, config->network_service.halow_bssid, sizeof(config->network_service.halow_bssid));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_HALOW_BSSID, config->network_service.halow_bssid);
 
     // Load known_network_count
     result = json_config_nvs_read_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, &temp_uint32);

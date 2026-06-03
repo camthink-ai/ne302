@@ -106,6 +106,15 @@ const systemSettings = {
     savePoeConfigReq: () => request.post('/api/v1/system/network/poe/save'),
     connectPoeReq: () => request.post('/api/v1/system/network/poe/connect'),
     disconnectPoeReq: () => request.post('/api/v1/system/network/poe/disconnect'),
+
+    // halow
+    getHalowStaReq: () => request.get('/api/v1/system/network/halow/sta'),
+    getHalowRegionReq: () => request.get('/api/v1/system/network/halow/region'),
+    setHalowRegionReq: (data: { region: string }) => request.put('/api/v1/system/network/halow/region', data),
+    scanHalow: () => request.post('/api/v1/system/network/halow/scan', {}),
+    setHalow: (data: { interface: string; ssid: string; bssid: string; password: string; region?: string }) => request.post('/api/v1/system/network/halow', data),
+    disconnectHalow: (data: { interface?: string }) => request.post('/api/v1/system/network/halow/disconnect', data),
+    deleteHalow: (data: { ssid?: string; bssid?: string }) => request.post('/api/v1/system/network/halow/delete', data),
 }
 
 export default systemSettings;

@@ -178,6 +178,13 @@
 // Note: Individual known network entries use format "net_<idx>_<field>"
 // where <idx> is 0-15 and <field> is ssid/bssid/pwd/rssi/ch/sec/conn/known/time
 
+// Wi-Fi HaLow last-connected info
+#define NVS_KEY_HALOW_SSID              "hw_ssid"
+#define NVS_KEY_HALOW_PASSWORD          "hw_pwd"
+#define NVS_KEY_HALOW_SECURITY          "hw_sec"
+#define NVS_KEY_HALOW_COUNTRY_CODE      "hw_cc"
+#define NVS_KEY_HALOW_BSSID              "hw_bssid"
+
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"
 #define NVS_KEY_COMM_AUTO_PRIORITY      "comm_auto_pri"

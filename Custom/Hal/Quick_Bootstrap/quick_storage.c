@@ -755,6 +755,7 @@ int quick_storage_read_comm_pref_type(qs_comm_pref_type_t *comm_pref_type)
         case COMM_PREF_TYPE_WIFI:
         case COMM_PREF_TYPE_CELLULAR:
         case COMM_PREF_TYPE_POE:
+        case COMM_PREF_TYPE_HALOW:
             *comm_pref_type = (qs_comm_pref_type_t)temp_u32;
             break;
         default:
@@ -852,6 +853,38 @@ int quick_storage_read_netif_config(qs_comm_pref_type_t comm_pref_type, netif_co
         (void)qs_nvs_read_string(NVS_KEY_POE_HOSTNAME, s_host_name_buf, sizeof(s_host_name_buf));
         return AICAM_OK;
     }
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (comm_pref_type == COMM_PREF_TYPE_HALOW) {
+        (void)qs_nvs_read_string(NVS_KEY_HALOW_SSID, netif_config->wireless_cfg.ssid,
+                                 sizeof(netif_config->wireless_cfg.ssid));
+        (void)qs_nvs_read_string(NVS_KEY_HALOW_PASSWORD, netif_config->wireless_cfg.pw,
+                                 sizeof(netif_config->wireless_cfg.pw));
+        if (qs_nvs_read_uint32(NVS_KEY_HALOW_SECURITY, &temp_u32) == AICAM_OK) {
+            netif_config->wireless_cfg.security = (wireless_security_t)temp_u32;
+        } else {
+            netif_config->wireless_cfg.security = WIRELESS_SAE;
+        }
+        (void)qs_nvs_read_string(NVS_KEY_HALOW_COUNTRY_CODE, netif_config->halow_cfg.country_code,
+                                sizeof(netif_config->halow_cfg.country_code));
+        {
+            char bssid_str[18];
+            if (qs_nvs_read_string(NVS_KEY_HALOW_BSSID, bssid_str, sizeof(bssid_str)) == AICAM_OK &&
+                bssid_str[0] != '\0') {
+                unsigned int bssid_bytes[6];
+                if (sscanf(bssid_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+                           &bssid_bytes[0], &bssid_bytes[1], &bssid_bytes[2],
+                           &bssid_bytes[3], &bssid_bytes[4], &bssid_bytes[5]) == 6) {
+                    for (int i = 0; i < 6; i++) {
+                        netif_config->wireless_cfg.bssid[i] = (uint8_t)(bssid_bytes[i] & 0xFF);
+                    }
+                }
+            }
+        }
+        netif_config->ip_mode = NETIF_IP_MODE_DHCP;
+        return AICAM_OK;
+    }
+#endif
 
     /* AUTO/DISABLE: caller decides; we return empty config */
     netif_config->ip_mode = NETIF_IP_MODE_DHCP;

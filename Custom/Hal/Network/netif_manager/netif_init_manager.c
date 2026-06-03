@@ -13,8 +13,8 @@
 
 /* ==================== Configuration ==================== */
 
-#define MAX_NETIF_COUNT 4
-#define NETIF_INIT_STACK_SIZE 4096 * 3
+#define MAX_NETIF_COUNT 6
+#define NETIF_INIT_STACK_SIZE 4096 * 4
 
 /* ==================== Internal Types ==================== */
 

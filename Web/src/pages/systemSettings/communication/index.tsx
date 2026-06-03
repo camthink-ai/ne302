@@ -55,22 +55,9 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
     const handleChangeCommunicationMode = async () => {
         setIsCommunicationModeDialogOpen(false);
         setCommunicationMode(communicationModeDialogValue.current);
-        if (communicationModeDialogValue.current === 'halow') {
-            return;
-        }
         try {
             setIsLoading(true);
             await switchNetworkTypeReq({ type: communicationModeDialogValue.current, timeout_ms: 3000 });
-            // if (communicationModeDialogValue.current === 'wifi') {
-            //     try {
-            //         await retryFetch(getNetworkStatus, 3000, 3);
-            //     } catch (error) {
-            //         setShowWifiReloadMask(true);
-            //         console.error(error);
-            //     }
-            // } else {
-            //     await getNetworkStatus();
-            // }
             await getNetworkStatus();
         } catch (error) {
             // eslint-disable-next-line no-console
@@ -126,7 +113,7 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
                     </SelectTrigger>
                     <SelectContent>
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'wifi') && <SelectItem value="wifi">{i18n._('sys.system_management.wifi')}</SelectItem>}
-                        <SelectItem value="halow">{i18n._('sys.system_management.halow')}</SelectItem>
+                        {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'halow') && <SelectItem value="halow">{i18n._('sys.system_management.halow')}</SelectItem>}
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'cellular') && <SelectItem value="cellular">{i18n._('sys.system_management.cellular_network')}</SelectItem>}
                         {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'poe') && <SelectItem value="poe">{i18n._('sys.system_management.poe_network')}</SelectItem>}
                     </SelectContent>

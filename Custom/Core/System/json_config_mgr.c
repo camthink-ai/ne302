@@ -157,6 +157,13 @@
          .known_network_count = 0,
          .preferred_comm_type = 0,  // No preferred type
          .enable_auto_priority = AICAM_TRUE,  // Enable auto priority
+
+        // Wi-Fi HaLow last-connected info defaults
+        .halow_ssid = "",
+        .halow_password = "",
+        .halow_security = 0,
+        .halow_country_code = "",
+        .halow_bssid = "",
          
          // PoE/Ethernet default configuration
          .poe = {

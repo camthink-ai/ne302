@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useLingui } from '@lingui/react';
 import SvgIcon from '@/components/svg-icon';
 import { Label } from '@/components/ui/label';
@@ -15,7 +15,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Input } from '@/components/ui/input';
 import WifiReloadMask from '@/components/wifi-reload-mask';
-import { sleep } from '@/utils';
+import { sleep, retryFetch } from '@/utils';
+import systemSettings from '@/services/api/systemSettings';
 
 type HalowData = {
     ssid: string;
@@ -28,100 +29,29 @@ type HalowData = {
     last_connected_time: number;
 };
 
-type HalowRegion = {
-    value: string;
-    labelKey: string;
-};
-
-const HALOW_REGIONS: HalowRegion[] = [
-    { value: 'us', labelKey: 'sys.system_management.halow_region_us' },
-    { value: 'eu', labelKey: 'sys.system_management.halow_region_eu' },
-    { value: 'cn', labelKey: 'sys.system_management.halow_region_cn' },
-    { value: 'jp', labelKey: 'sys.system_management.halow_region_jp' },
-    { value: 'au', labelKey: 'sys.system_management.halow_region_au' },
-];
-
-const createMockHalowData = (region: string): {
-    current: HalowData;
-    known: HalowData[];
-    unknown: HalowData[];
-} => {
-    const regionUpper = region.toUpperCase();
-    return {
-        current: {
-            ssid: `HaLow-Gateway-${regionUpper}`,
-            bssid: `00:11:22:33:44:${region === 'us' ? '01' : region === 'eu' ? '02' : '03'}`,
-            rssi: region === 'cn' ? -48 : -62,
-            channel: region === 'us' ? 12 : 8,
-            security: 'wpa2',
-            connected: true,
-            is_known: true,
-            last_connected_time: Date.now(),
-        },
-        known: [
-            {
-                ssid: `HaLow-Office-${regionUpper}`,
-                bssid: '00:11:22:33:44:10',
-                rssi: -58,
-                channel: 6,
-                security: 'wpa2',
-                connected: false,
-                is_known: true,
-                last_connected_time: Date.now() - 86400000,
-            },
-            {
-                ssid: `HaLow-Warehouse-${regionUpper}`,
-                bssid: '00:11:22:33:44:11',
-                rssi: -71,
-                channel: 4,
-                security: 'wpa2',
-                connected: false,
-                is_known: true,
-                last_connected_time: Date.now() - 172800000,
-            },
-        ],
-        unknown: [
-            {
-                ssid: `HaLow-Sensor-A-${regionUpper}`,
-                bssid: '00:11:22:33:44:20',
-                rssi: -65,
-                channel: 10,
-                security: 'wpa2',
-                connected: false,
-                is_known: false,
-                last_connected_time: 0,
-            },
-            {
-                ssid: `HaLow-Sensor-B-${regionUpper}`,
-                bssid: '00:11:22:33:44:21',
-                rssi: -78,
-                channel: 2,
-                security: 'open',
-                connected: false,
-                is_known: false,
-                last_connected_time: 0,
-            },
-            {
-                ssid: `HaLow-Field-${regionUpper}`,
-                bssid: '00:11:22:33:44:22',
-                rssi: -82,
-                channel: 14,
-                security: 'wpa2',
-                connected: false,
-                is_known: false,
-                last_connected_time: 0,
-            },
-        ],
-    };
+const filterOtherNetworks = (list: HalowData[], connected: HalowData | null) => {
+    if (!connected?.connected) return list;
+    return list.filter(
+        (item) => !(item.ssid === connected.ssid && (!connected.bssid || item.bssid === connected.bssid))
+    );
 };
 
 export default function HalowNetworkPage() {
     const { i18n } = useLingui();
     const isMobile = useIsMobile();
+    const {
+        getHalowStaReq,
+        setHalowRegionReq,
+        scanHalow,
+        setHalow,
+        disconnectHalow,
+        deleteHalow,
+    } = systemSettings;
+
     const [isLoading, setIsLoading] = useState(true);
-    const [region, setRegion] = useState('cn');
+    const [region, setRegion] = useState('us');
+    const [supportedRegions, setSupportedRegions] = useState<string[]>(['us', 'eu', 'cn', 'jp', 'au']);
     const [currentHalowData, setCurrentHalowData] = useState<HalowData | null>(null);
-    const [knownHalowDataList, setKnownHalowDataList] = useState<HalowData[]>([]);
     const [otherHalowDataList, setOtherHalowDataList] = useState<HalowData[]>([]);
     const [isConnectDialogOpen, setIsConnectDialogOpen] = useState(false);
     const [isPasswordVisible, setIsPasswordVisible] = useState(false);
@@ -132,22 +62,74 @@ export default function HalowNetworkPage() {
     const [isReloading, setIsReloading] = useState(false);
     const [isErrorPassword, setIsErrorPassword] = useState(false);
 
-    const fetchMockHalowData = async (selectedRegion: string, showSkeleton = true) => {
+    const getRegionLabel = useCallback((code: string) => {
+        const key = `sys.system_management.halow_region_${code.toLowerCase()}`;
+        const label = i18n._(key);
+        if (label && label !== key) return label;
+        return code.toUpperCase();
+    }, [i18n]);
+
+    const applyStaResponse = useCallback((data: any) => {
+        if (data.region) {
+            setRegion(String(data.region).toLowerCase());
+        }
+        if (Array.isArray(data.supported_regions) && data.supported_regions.length > 0) {
+            setSupportedRegions(data.supported_regions.map((r: string) => String(r).toLowerCase()));
+        }
+
+        const connected: HalowData | null = data.connected
+            ? {
+                ssid: data.ssid ?? '',
+                bssid: data.bssid ?? '',
+                rssi: data.rssi ?? 0,
+                channel: data.channel ?? 0,
+                security: data.security ?? 'open',
+                connected: true,
+                is_known: true,
+                last_connected_time: data.last_connected_time ?? 0,
+            }
+            : null;
+
+        setCurrentHalowData(connected);
+
+        const unknown: HalowData[] = data.scan_results?.unknown_networks ?? [];
+        setOtherHalowDataList(filterOtherNetworks(unknown, connected));
+    }, []);
+
+    const getHalowSta = useCallback(async (showSkeleton = true) => {
         try {
             if (showSkeleton) setIsLoading(true);
-            await sleep(500);
-            const mock = createMockHalowData(selectedRegion);
-            setCurrentHalowData(mock.current);
-            setKnownHalowDataList(mock.known);
-            setOtherHalowDataList(mock.unknown);
+            const res = await getHalowStaReq();
+            applyStaResponse(res.data);
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
         } finally {
             if (showSkeleton) setIsLoading(false);
         }
-    };
+    }, [applyStaResponse, getHalowStaReq]);
 
     useEffect(() => {
-        fetchMockHalowData(region);
-    }, [region]);
+        getHalowSta();
+    }, [getHalowSta]);
+
+    const reloadMask = async (
+        fetchFn: () => Promise<any>,
+        loadingTime: number,
+        loadCount: number,
+        maskText: string
+    ) => {
+        setLoadingText(maskText);
+        setIsReloading(true);
+        setShowReloadMask(true);
+        try {
+            await fetchFn();
+            await retryFetch(() => getHalowSta(false), loadingTime, loadCount);
+        } finally {
+            setShowReloadMask(false);
+            setIsReloading(false);
+        }
+    };
 
     const isValidatePassword = (password: string, minLength: number, maxLength: number) => {
         const allowedPattern = /^[a-zA-Z0-9!@#$%^&*()_+\-=[\]{}|;':",./<>?`~]+$/;
@@ -168,61 +150,81 @@ export default function HalowNetworkPage() {
         setIsPasswordVisible(!isPasswordVisible);
     };
 
-    const openConnectDialog = (data: HalowData, type: 'known' | 'unknown') => {
+    const openConnectDialog = (data: HalowData) => {
         setHalowInfo(data);
-        if (data.security !== 'open' && type === 'unknown') {
+        if (data.security !== 'open') {
             setIsConnectDialogOpen(true);
             return;
         }
-        handleConnect(data, type);
+        handleConnect(data);
     };
 
-    const handleConnect = async (data: HalowData, type: 'known' | 'unknown') => {
+    const handleConnect = async (data: HalowData) => {
         if (!data) return;
-        if (!isValidatePassword(halowPassword, 8, 64) && data.security !== 'open' && type === 'unknown') {
+        if (!isValidatePassword(halowPassword, 8, 64) && data.security !== 'open') {
             setIsErrorPassword(true);
             return;
         }
+        const connectFn = () => setHalow({
+            interface: 'halow',
+            ssid: data.ssid,
+            bssid: data.bssid,
+            password: halowPassword,
+            region,
+        });
         try {
-            setLoadingText(i18n._('sys.system_management.connecting_network'));
-            setIsReloading(true);
-            setShowReloadMask(true);
-            await sleep(1500);
-            setCurrentHalowData({ ...data, connected: true });
-            setKnownHalowDataList((prev) => prev.filter((item) => item.bssid !== data.bssid));
-            setOtherHalowDataList((prev) => prev.filter((item) => item.bssid !== data.bssid));
+            await reloadMask(connectFn, 3000, 3, i18n._('sys.system_management.connecting_network'));
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
         } finally {
             setIsConnectDialogOpen(false);
             setHalowPassword('');
-            setShowReloadMask(false);
-            setIsReloading(false);
+            setHalowInfo(null);
         }
     };
 
     const handleDisconnect = async () => {
-        setCurrentHalowData(null);
-        await fetchMockHalowData(region, false);
+        try {
+            await disconnectHalow({ interface: 'halow' });
+            await handleScan();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        }
     };
 
-    const handleForget = (data: HalowData) => {
-        setKnownHalowDataList((prev) => prev.filter((item) => item.bssid !== data.bssid));
-        if (currentHalowData?.bssid === data.bssid) {
-            setCurrentHalowData(null);
+    const handleForget = async (data: HalowData) => {
+        try {
+            if (data.connected) {
+                await disconnectHalow({ interface: 'halow' });
+            }
+            await deleteHalow({ ssid: data.ssid, bssid: data.bssid });
+            await handleScan();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
         }
     };
 
     const handleScan = async () => {
-        setLoadingText(i18n._('sys.system_management.scanning_network'));
-        setIsReloading(true);
-        setShowReloadMask(true);
-        await sleep(1500);
-        await fetchMockHalowData(region, false);
-        setShowReloadMask(false);
-        setIsReloading(false);
+        const waitScan = async () => {
+            await scanHalow();
+            await sleep(3000);
+        };
+        await reloadMask(waitScan, 3000, 3, i18n._('sys.system_management.scanning_network'));
     };
 
-    const handleRegionChange = (value: string) => {
-        setRegion(value);
+    const handleRegionChange = async (value: string) => {
+        if (currentHalowData?.connected) return;
+        try {
+            setRegion(value);
+            await setHalowRegionReq({ region: value });
+            await handleScan();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        }
     };
 
     useEffect(() => {
@@ -241,7 +243,6 @@ export default function HalowNetworkPage() {
                 if (!open) setHalowInfo(null);
             }}
         >
-
             <DialogContent className="mx-8" showCloseButton={false}>
                 <DialogClose asChild onClick={() => handleCancelConnect()}>
                     <Button
@@ -284,7 +285,7 @@ export default function HalowNetworkPage() {
                 </div>
                 <DialogFooter>
                     <Button size="sm" className="w-1/2 md:w-auto" variant="outline" onClick={() => handleCancelConnect()}>{i18n._('common.cancel')}</Button>
-                    <Button size="sm" className="w-1/2 md:w-auto" variant="primary" onClick={() => handleConnect(halowInfo as HalowData, 'unknown')}>{i18n._('common.confirm')}</Button>
+                    <Button size="sm" className="w-1/2 md:w-auto" variant="primary" onClick={() => handleConnect(halowInfo as HalowData)}>{i18n._('common.confirm')}</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -294,14 +295,18 @@ export default function HalowNetworkPage() {
         <div className="mt-2">
             <div className="flex gap-2 justify-between items-center mb-4">
                 <Label className="text-sm font-bold text-text-primary">{i18n._('sys.system_management.halow_region')}</Label>
-                <Select value={region} onValueChange={handleRegionChange}>
+                <Select
+                  value={region}
+                  onValueChange={handleRegionChange}
+                  disabled={!!currentHalowData?.connected}
+                >
                     <SelectTrigger className="w-[180px]">
                         <SelectValue placeholder={i18n._('sys.system_management.halow_region')} />
                     </SelectTrigger>
                     <SelectContent>
-                        {HALOW_REGIONS.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                                {i18n._(item.labelKey)}
+                        {supportedRegions.map((code) => (
+                            <SelectItem key={code} value={code}>
+                                {getRegionLabel(code)}
                             </SelectItem>
                         ))}
                     </SelectContent>
@@ -320,7 +325,7 @@ export default function HalowNetworkPage() {
                         <SvgIcon icon="reload2" className="w-6 h-6" />
                     </Button>
 
-                    {!currentHalowData?.connected && knownHalowDataList.length === 0 && otherHalowDataList.length === 0 && (
+                    {!currentHalowData?.connected && otherHalowDataList.length === 0 && (
                         <div className="h-[400px] flex flex-col items-center justify-center">
                             <SvgIcon icon="empty" className="w-40 h-40" />
                             <p className="text-sm text-text-secondary">{i18n._('sys.system_management.no_network')}</p>
@@ -366,46 +371,16 @@ export default function HalowNetworkPage() {
                         </>
                     )}
 
-                    {knownHalowDataList.length > 0 && (
-                        <div className="mt-4">
-                            <p className="text-sm font-bold mb-2">{i18n._('sys.system_management.known_network')}</p>
-                            <div className="flex flex-col bg-gray-100 px-4 rounded-lg">
-                                {knownHalowDataList.map((item, index) => (
-                                    <div onClick={() => { if (isMobile) openConnectDialog(item, 'known'); }} key={`${item.ssid}-${item.bssid}-${index}`} className="group">
-                                        <div className="flex justify-between py-2">
-                                            <Label>{item.ssid}</Label>
-                                            <div className="flex items-center gap-1">
-                                                <Button size="sm" variant="outline" onClick={() => openConnectDialog(item, 'known')} className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">{i18n._('common.connect')}</Button>
-                                                <SvgIcon icon={item.rssi >= -55 ? 'wifi' : item.rssi >= -75 ? 'wifi_middle' : 'wifi_low'} className="w-4 h-4 text-[#272E3B]" />
-                                                <Popover>
-                                                    <PopoverTrigger onClick={(e: any) => e.stopPropagation()}>
-                                                        <SvgIcon icon="more" className="w-4 h-4 text-white cursor-pointer" />
-                                                    </PopoverTrigger>
-                                                    <PopoverContent className="w-auto p-0">
-                                                        <div className="flex flex-col m-1">
-                                                            <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleForget(item)}>{i18n._('sys.system_management.forget')}</div>
-                                                        </div>
-                                                    </PopoverContent>
-                                                </Popover>
-                                            </div>
-                                        </div>
-                                        {index !== knownHalowDataList.length - 1 && <Separator />}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
                     {otherHalowDataList.length > 0 && (
                         <div className="mt-4">
                             <p className="text-sm font-bold mb-2">{i18n._('sys.system_management.other_network')}</p>
                             <div className="flex flex-col bg-gray-100 px-4 rounded-lg">
                                 {otherHalowDataList.map((item, index) => (
-                                    <div onClick={() => { if (isMobile) openConnectDialog(item, 'unknown'); }} key={`${item.ssid}-${item.bssid}-${index}`} className="group">
+                                    <div onClick={() => { if (isMobile) openConnectDialog(item); }} key={`${item.ssid}-${item.bssid}-${index}`} className="group">
                                         <div className="flex justify-between py-2">
                                             <Label className="text-sm">{item.ssid}</Label>
                                             <div className="flex items-center gap-1">
-                                                <Button size="sm" variant="outline" onClick={() => openConnectDialog(item, 'unknown')} className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">{i18n._('common.connect')}</Button>
+                                                <Button size="sm" variant="outline" onClick={() => openConnectDialog(item)} className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">{i18n._('common.connect')}</Button>
                                                 {item.security !== 'open' && <SvgIcon icon="lock" className="w-4 h-4 mr-1" />}
                                                 <SvgIcon icon={item.rssi >= -55 ? 'wifi' : item.rssi >= -75 ? 'wifi_middle' : 'wifi_low'} className="w-4 h-4 text-[#272E3B]" />
                                             </div>

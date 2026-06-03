@@ -26,11 +26,12 @@ extern "C" {
 
 /**
  * @brief Communication type enumeration
- * @note Priority: PoE > Cellular > WiFi (higher value = higher priority)
+ * @note Priority: PoE > HaLow > Cellular > WiFi (higher value = higher priority)
  */
 typedef enum {
     COMM_TYPE_NONE = 0,                     // No communication type
     COMM_TYPE_WIFI,                         // WiFi communication (lowest priority)
+    COMM_TYPE_HALOW,                        // Wi-Fi HaLow communication
     COMM_TYPE_CELLULAR,                     // Cellular/4G communication (medium priority)
     COMM_TYPE_POE,                          // PoE/Ethernet communication (highest priority)
     COMM_TYPE_MAX
@@ -155,6 +156,7 @@ typedef void (*communication_switch_callback_t)(const communication_switch_resul
 typedef struct {
     aicam_bool_t auto_start_wifi_ap;        // Auto start WiFi AP mode
     aicam_bool_t auto_start_wifi_sta;       // Auto start WiFi STA mode
+    aicam_bool_t auto_start_halow;          // Auto start Wi-Fi HaLow
     aicam_bool_t auto_start_cellular;       // Auto start cellular/4G
     aicam_bool_t auto_start_poe;            // Auto start PoE/Ethernet
     aicam_bool_t enable_network_scan;       // Enable network scanning
@@ -477,11 +479,13 @@ aicam_result_t communication_switch_type(communication_type_t type,
  * @param type Target communication type
  * @param result Switch result structure to fill
  * @param timeout_ms Timeout in milliseconds
+ * @param scan_before_connect AICAM_TRUE on normal boot (scan then connect); AICAM_FALSE for web/low-power
  * @return aicam_result_t Operation result
  */
 aicam_result_t communication_switch_type_sync(communication_type_t type,
                                               communication_switch_result_t *result,
-                                              uint32_t timeout_ms);
+                                              uint32_t timeout_ms,
+                                              aicam_bool_t scan_before_connect);
 
 /**
  * @brief Set preferred communication type

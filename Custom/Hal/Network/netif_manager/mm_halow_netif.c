@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #include "mm_halow_netif.h"
 #include "chip_id_mac.h"
@@ -37,6 +38,11 @@ struct netif *mmipal_get_lwip_netif(void);
 enum mmwlan_status mmwlan_sta_set_mac_addr(const uint8_t *mac_addr);
 
 #define HALOW_SCAN_RESULT_MAX           (64)
+/** Cat1/HaLow rail settle after sleep power-on (PWR_HALOW shares PWR_CAT1). */
+#define HALOW_PWR_SETTLE_MS             50U
+#define HALOW_INIT_RETRY_DELAY_MS       100U
+#define HALOW_INIT_POWER_CYCLE_MS       30U
+#define HALOW_STACK_INIT_MAX_ATTEMPTS   3U
 #define HALOW_LINK_WAIT_MS              (30000U)
 #define HALOW_DPP_DEFAULT_TIMEOUT_MS    (120000U)
 
@@ -82,6 +88,7 @@ static wireless_scan_callback_t halow_scan_user_cb = NULL;
 static uint8_t halow_scan_in_progress = 0;
 static wireless_scan_info_t *halow_async_scan_buf = NULL;
 static wireless_scan_result_t halow_async_scan_result = {0};
+static enum mmwlan_scan_state halow_last_scan_state = MMWLAN_SCAN_SUCCESSFUL;
 static PowerHandle halow_pwr_handle = 0;
 
 static uint8_t halow_pwr_acquired = 0;
@@ -108,6 +115,34 @@ static int halow_apply_regdomain_locked(const char *country_code);
 static int halow_regdomain_supported(const char *country_code);
 static int halow_pick_fallback_regdomain(char *out, size_t out_len);
 static int halow_mmwlan_boot_locked(void);
+/** Last regdomain successfully applied to mmwlan (empty after teardown/deinit). */
+static char halow_active_country_code[MM_HALOW_REGDOMAIN_CC_LEN] = "";
+
+static int halow_country_code_same(const char *a, const char *b)
+{
+    char ca[3];
+    char cb[3];
+    size_t i;
+
+    if (a == NULL || b == NULL || a[0] == '\0' || b[0] == '\0') {
+        return 0;
+    }
+
+    for (i = 0; i < 2U; i++) {
+        ca[i] = (char)toupper((unsigned char)a[i]);
+        cb[i] = (char)toupper((unsigned char)b[i]);
+        if (ca[i] != cb[i]) {
+            return 0;
+        }
+    }
+    ca[2] = cb[2] = '\0';
+    return 1;
+}
+
+static void halow_clear_active_country(void)
+{
+    halow_active_country_code[0] = '\0';
+}
 /* Select which embedded BCF the driver will use at next boot (mmhal_wlan_binaries.c). */
 extern void mmhal_wlan_select_bcf_for_country(const char *country_code);
 #if !defined(MMWLAN_DPP_DISABLED) || !MMWLAN_DPP_DISABLED
@@ -172,7 +207,7 @@ static int halow_power_acquire(void)
     }
 
     halow_pwr_acquired = 1;
-    osDelay(10);
+    osDelay(HALOW_PWR_SETTLE_MS);
     return 0;
 }
 
@@ -349,47 +384,78 @@ static void halow_mmwlan_unboot_locked(void)
     halow_mmwlan_booted = 0;
 }
 
+/** Tear down mmHAL/mmwlan after a failed boot attempt (keeps GPIO/SPI/power). */
+static void halow_stack_teardown_attempt_locked(void)
+{
+    if (halow_mmwlan_inited) {
+        mmwlan_deinit();
+        halow_mmwlan_inited = 0;
+    }
+    mmhal_wlan_deinit();
+    halow_mmwlan_booted = 0;
+}
+
 /**
  * Morse/mmHAL bring-up — must match halow_stack_deinit_locked() in reverse order.
  * Caller holds halow_mutex; power and link_sem must already be ready.
  */
 static int halow_stack_init_locked(void)
 {
+    unsigned attempt;
+
     mm_halow_gpios_init();
 
 #if !defined(MMHAL_WLAN_USE_SOFT_SPI)
     MX_SPI6_Init();
 #endif
 
-    mmhal_init();
-    mmhal_wlan_init();
-    mmhal_wlan_hard_reset();
-
-    mmwlan_init();
-    halow_mmwlan_inited = 1;
-
-    if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
-        char fallback[MM_HALOW_REGDOMAIN_CC_LEN];
-
-        if (halow_pick_fallback_regdomain(fallback, sizeof(fallback)) != 0) {
-            LOG_DRV_ERROR("HaLow: no regdomain in firmware BCF");
-            return -1;
+    for (attempt = 0; attempt < HALOW_STACK_INIT_MAX_ATTEMPTS; attempt++) {
+        if (attempt > 0U) {
+            LOG_DRV_WARN("HaLow stack init retry %u/%u", attempt + 1U, HALOW_STACK_INIT_MAX_ATTEMPTS);
+            halow_stack_teardown_attempt_locked();
+            halow_power_release();
+            osDelay(HALOW_INIT_POWER_CYCLE_MS);
+            if (halow_power_acquire() != 0) {
+                return -1;
+            }
+            osDelay(HALOW_INIT_RETRY_DELAY_MS);
         }
-        LOG_DRV_WARN("HaLow regdomain '%s' not in firmware BCF, using %s",
-                     halow_netif_cfg.halow_cfg.country_code, fallback);
-        if (halow_apply_regdomain_locked(fallback) != 0) {
-            return -1;
+
+        mmhal_init();
+        mmhal_wlan_init();
+        mmhal_wlan_hard_reset();
+
+        mmwlan_init();
+        halow_mmwlan_inited = 1;
+
+        if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
+            char fallback[MM_HALOW_REGDOMAIN_CC_LEN];
+
+            if (halow_pick_fallback_regdomain(fallback, sizeof(fallback)) != 0) {
+                LOG_DRV_ERROR("HaLow: no regdomain in firmware BCF");
+                halow_stack_teardown_attempt_locked();
+                return -1;
+            }
+            LOG_DRV_WARN("HaLow regdomain '%s' not in firmware BCF, using %s",
+                         halow_netif_cfg.halow_cfg.country_code, fallback);
+            if (halow_apply_regdomain_locked(fallback) != 0) {
+                halow_stack_teardown_attempt_locked();
+                return -1;
+            }
         }
+
+        (void)halow_apply_halow_hw_config_locked();
+
+        if (halow_mmwlan_boot_locked() == 0) {
+            halow_stack_ready = 0;
+            return 0;
+        }
+
+        halow_stack_teardown_attempt_locked();
     }
 
-    (void)halow_apply_halow_hw_config_locked();
-
-    if (halow_mmwlan_boot_locked() != 0) {
-        return -1;
-    }
-
-    halow_stack_ready = 0;
-    return 0;
+    LOG_DRV_ERROR("HaLow stack init failed after %u attempts", HALOW_STACK_INIT_MAX_ATTEMPTS);
+    return -1;
 }
 
 /**
@@ -424,6 +490,8 @@ static void halow_netif_resources_deinit_locked(void)
     }
     halow_storage_scan_result.scan_count = 0;
 
+    halow_clear_active_country();
+
     if (halow_link_sem != NULL) {
         mmosal_semb_delete(halow_link_sem);
         halow_link_sem = NULL;
@@ -446,6 +514,11 @@ static int halow_mmwlan_teardown_locked(void)
     if (halow_scan_in_progress) {
         (void)mmwlan_scan_abort();
         halow_scan_in_progress = 0;
+        halow_last_scan_state = MMWLAN_SCAN_TERMINATED;
+        if (halow_scan_sem != NULL) {
+            (void)osSemaphoreAcquire(halow_scan_sem, 0);
+            (void)osSemaphoreRelease(halow_scan_sem);
+        }
     }
 
     if (halow_state == NETIF_STATE_UP) {
@@ -459,6 +532,7 @@ static int halow_mmwlan_teardown_locked(void)
 
     status = mmwlan_shutdown();
     halow_mmwlan_booted = 0;
+    halow_clear_active_country();
     if (status != MMWLAN_SUCCESS) {
         LOG_DRV_ERROR("HaLow mmwlan_shutdown failed");
         return -1;
@@ -735,6 +809,15 @@ static int halow_apply_regdomain_locked(const char *country_code)
         return -1;
     }
 
+    if (halow_mmwlan_booted &&
+        halow_active_country_code[0] != '\0' &&
+        halow_country_code_same(country_code, halow_active_country_code)) {
+        strncpy(halow_netif_cfg.halow_cfg.country_code, country_code,
+                sizeof(halow_netif_cfg.halow_cfg.country_code) - 1);
+        halow_netif_cfg.halow_cfg.country_code[sizeof(halow_netif_cfg.halow_cfg.country_code) - 1] = '\0';
+        return 0;
+    }
+
     list = mmwlan_lookup_regulatory_domain(db, country_code);
     if (list == NULL) {
         LOG_DRV_ERROR("HaLow regdomain not found: %s", country_code);
@@ -765,6 +848,11 @@ static int halow_apply_regdomain_locked(const char *country_code)
             return -1;
         }
     }
+
+    halow_storage_scan_result.scan_count = 0;
+
+    strncpy(halow_active_country_code, country_code, sizeof(halow_active_country_code) - 1);
+    halow_active_country_code[sizeof(halow_active_country_code) - 1] = '\0';
 
     return 0;
 }
@@ -1008,6 +1096,39 @@ rsn_done:
     }
 }
 
+static int halow_scan_is_duplicate_entry(const wireless_scan_info_t *cur,
+                                         const wireless_scan_info_t *tmp)
+{
+    if (memcmp(cur->bssid, tmp->bssid, 6) != 0) {
+        return 0;
+    }
+    if (strncmp(cur->ssid, tmp->ssid, NETIF_SSID_VALUE_SIZE) != 0) {
+        return 0;
+    }
+#if NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW
+    if (cur->channel_freq_hz != tmp->channel_freq_hz ||
+        cur->bw_mhz != tmp->bw_mhz) {
+        return 0;
+    }
+#endif
+    return 1;
+}
+
+static void halow_scan_merge_duplicate_entry(wireless_scan_info_t *cur,
+                                             const wireless_scan_info_t *tmp)
+{
+    if (tmp->rssi > cur->rssi) {
+        cur->rssi = tmp->rssi;
+#if !NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW
+        cur->channel_freq_hz = tmp->channel_freq_hz;
+        cur->bw_mhz = tmp->bw_mhz;
+#endif
+    }
+    if (cur->security >= WIRELESS_SECURITY_MAX && tmp->security < WIRELESS_SECURITY_MAX) {
+        cur->security = tmp->security;
+    }
+}
+
 static void halow_scan_rx_handler(const struct mmwlan_scan_result *result, void *arg)
 {
     wireless_scan_result_t *target = (wireless_scan_result_t *)arg;
@@ -1018,23 +1139,14 @@ static void halow_scan_rx_handler(const struct mmwlan_scan_result *result, void 
         return;
     }
 
-    /* Convert once, then de-duplicate by (BSSID + freq + bw + SSID). */
+    /* Convert once, then de-duplicate (see NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW). */
     halow_scan_result_to_info(result, &tmp);
 
     if (target->scan_info != NULL) {
         for (uint8_t i = 0; i < target->scan_count; i++) {
             wireless_scan_info_t *cur = &target->scan_info[i];
-            if (memcmp(cur->bssid, tmp.bssid, 6) == 0 &&
-                cur->channel_freq_hz == tmp.channel_freq_hz &&
-                cur->bw_mhz == tmp.bw_mhz &&
-                strncmp(cur->ssid, tmp.ssid, NETIF_SSID_VALUE_SIZE) == 0) {
-                /* Keep the stronger RSSI and a more specific security if we learned it. */
-                if (tmp.rssi > cur->rssi) {
-                    cur->rssi = tmp.rssi;
-                }
-                if (cur->security >= WIRELESS_SECURITY_MAX && tmp.security < WIRELESS_SECURITY_MAX) {
-                    cur->security = tmp.security;
-                }
+            if (halow_scan_is_duplicate_entry(cur, &tmp)) {
+                halow_scan_merge_duplicate_entry(cur, &tmp);
                 return;
             }
         }
@@ -1062,6 +1174,7 @@ static void halow_scan_complete_handler(enum mmwlan_scan_state scan_state, void 
 
     halow_scan_in_progress = 0;
     halow_scan_user_cb = NULL;
+    halow_last_scan_state = scan_state;
 
     if (scan_state != MMWLAN_SCAN_SUCCESSFUL) {
         LOG_DRV_WARN("HaLow scan complete state=%d", (int)scan_state);
@@ -1092,8 +1205,23 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
     wireless_scan_result_t *scan_target = storage;
     int ret = 0;
 
-    if (halow_state == NETIF_STATE_DEINIT || halow_scan_in_progress) {
+    if (halow_state == NETIF_STATE_DEINIT) {
         return -1;
+    }
+
+    if (halow_scan_in_progress) {
+        if (wait_ms == 0) {
+            /* Async caller: scan already running */
+            return 0;
+        }
+        if (halow_scan_sem != NULL &&
+            osSemaphoreAcquire(halow_scan_sem, wait_ms) != osOK) {
+            return -1;
+        }
+        if (halow_last_scan_state != MMWLAN_SCAN_SUCCESSFUL) {
+            return -1;
+        }
+        /* Previous scan finished; start a fresh one below */
     }
 
     if (halow_dpp_reject_if_active_locked()) {
@@ -1144,6 +1272,7 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
 
     halow_scan_user_cb = callback;
     halow_scan_in_progress = 1;
+    halow_last_scan_state = MMWLAN_SCAN_SUCCESSFUL;
 
     scan_req.scan_rx_cb = halow_scan_rx_handler;
     scan_req.scan_complete_cb = halow_scan_complete_handler;
@@ -1169,9 +1298,10 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
         if (osSemaphoreAcquire(halow_scan_sem, wait_ms) != osOK) {
             (void)mmwlan_scan_abort();
             ret = -1;
-        } else if (scan_target != NULL && scan_target->scan_count == 0) {
+        } else if (halow_last_scan_state != MMWLAN_SCAN_SUCCESSFUL) {
             ret = -1;
         }
+        /* scan_count==0 with SUCCESSFUL is valid; caller checks AP list */
     }
 
     return ret;
@@ -1339,25 +1469,6 @@ int mm_halow_netif_up(void)
         return -1;
     }
 
-    /*
-     * Avoid bus/chip sleeping immediately after connect.
-     * Default dynamic PS timeout is ~100ms; on some platforms wake/busy signaling is marginal,
-     * causing CMD53 timeouts and pageset write failures shortly after link-up.
-     *
-     * This API requires UMAC core running; calling here ensures it can take effect.
-     */
-    {
-        /*
-         * NOTE: morse_ps_update_timeout() computes new_timeout = now_ms + timeout_ms.
-         * Using very large values like 0xFFFFFFFF can overflow and effectively become "now-1",
-         * causing immediate sleep and CMD53 timeouts. Use a large-but-safe value instead.
-         */
-        const uint32_t dyn_ps_ms = halow_netif_cfg.halow_cfg.ps_mode ? 100U : 3600000U; /* 1 hour */
-        enum mmwlan_status ps_status = mmwlan_set_dynamic_ps_timeout(dyn_ps_ms);
-        LOG_DRV_INFO("HaLow set_dynamic_ps_timeout(%lu ms) ret=%d",
-                     (unsigned long)dyn_ps_ms, (int)ps_status);
-    }
-
     /* Short diagnostic poll: if STA VIF isn't added, mmwlan_get_sta_state often stays DISABLED. */
     for (int i = 0; i < 10; i++) {
         uint8_t mac[6];
@@ -1458,38 +1569,50 @@ int mm_halow_netif_config(netif_config_t *netif_cfg)
         /* hostname stored elsewhere if needed */
     }
 
-    memcpy(&halow_netif_cfg.wireless_cfg, &netif_cfg->wireless_cfg, sizeof(halow_netif_cfg.wireless_cfg));
-    memcpy(&halow_netif_cfg.halow_cfg, &netif_cfg->halow_cfg, sizeof(halow_netif_cfg.halow_cfg));
-    memcpy(halow_netif_cfg.diy_mac, netif_cfg->diy_mac, sizeof(halow_netif_cfg.diy_mac));
-    halow_apply_sta_mac_policy();
-    halow_netif_cfg.ip_mode = netif_cfg->ip_mode;
-    memcpy(halow_netif_cfg.ip_addr, netif_cfg->ip_addr, sizeof(halow_netif_cfg.ip_addr));
-    memcpy(halow_netif_cfg.netmask, netif_cfg->netmask, sizeof(halow_netif_cfg.netmask));
-    memcpy(halow_netif_cfg.gw, netif_cfg->gw, sizeof(halow_netif_cfg.gw));
+    {
+        char prev_country[MM_HALOW_REGDOMAIN_CC_LEN];
+        int region_changed;
 
-    /*
-     * Before init: country_code is stored and applied in mm_halow_netif_init().
-     * After init (DOWN): apply regdomain dynamically (restart radio if needed).
-     */
-    if (halow_state == NETIF_STATE_DEINIT) {
+        strncpy(prev_country, halow_netif_cfg.halow_cfg.country_code, sizeof(prev_country) - 1);
+        prev_country[sizeof(prev_country) - 1] = '\0';
+
+        memcpy(&halow_netif_cfg.wireless_cfg, &netif_cfg->wireless_cfg, sizeof(halow_netif_cfg.wireless_cfg));
+        memcpy(&halow_netif_cfg.halow_cfg, &netif_cfg->halow_cfg, sizeof(halow_netif_cfg.halow_cfg));
+        memcpy(halow_netif_cfg.diy_mac, netif_cfg->diy_mac, sizeof(halow_netif_cfg.diy_mac));
+        halow_apply_sta_mac_policy();
+        halow_netif_cfg.ip_mode = netif_cfg->ip_mode;
+        memcpy(halow_netif_cfg.ip_addr, netif_cfg->ip_addr, sizeof(halow_netif_cfg.ip_addr));
+        memcpy(halow_netif_cfg.netmask, netif_cfg->netmask, sizeof(halow_netif_cfg.netmask));
+        memcpy(halow_netif_cfg.gw, netif_cfg->gw, sizeof(halow_netif_cfg.gw));
+
+        /*
+         * Before init: country_code is stored and applied in mm_halow_netif_init().
+         * After init (DOWN): apply regdomain dynamically (restart radio if needed).
+         */
+        if (halow_state == NETIF_STATE_DEINIT) {
+            return 0;
+        }
+
+        if (halow_mutex == NULL) {
+            return -1;
+        }
+
+        region_changed = !halow_country_code_same(prev_country, halow_netif_cfg.halow_cfg.country_code);
+
+        osMutexAcquire(halow_mutex, osWaitForever);
+        if (region_changed) {
+            if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
+                osMutexRelease(halow_mutex);
+                return -1;
+            }
+        }
+        if (halow_apply_halow_hw_config_locked() != 0) {
+            osMutexRelease(halow_mutex);
+            return -1;
+        }
+        osMutexRelease(halow_mutex);
         return 0;
     }
-
-    if (halow_mutex == NULL) {
-        return -1;
-    }
-
-    osMutexAcquire(halow_mutex, osWaitForever);
-    if (halow_apply_regdomain_locked(halow_netif_cfg.halow_cfg.country_code) != 0) {
-        osMutexRelease(halow_mutex);
-        return -1;
-    }
-    if (halow_apply_halow_hw_config_locked() != 0) {
-        osMutexRelease(halow_mutex);
-        return -1;
-    }
-    osMutexRelease(halow_mutex);
-    return 0;
 }
 
 static void halow_u8_from_ip_str(const char *str, uint8_t *ip)
