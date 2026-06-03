@@ -697,15 +697,19 @@ int nn_instance_inference_frame(nn_handle_t handle, uint8_t *input_data, uint32_
     }
 
     osMutexAcquire(nn->mtx_id, osWaitForever);
-    if (nn->input_buffer_size[0] != input_size) {
+
+    /* Convert camera uint8 to model input: float32, int8, or uint8 passthrough */
+    if (nn->input_buffer_size[0] == input_size * 4) {
+        /* uint8 → float32: (pixel - 127.5) * (1/127.5) → [-1, 1] */
+        float *dst = (float *)nn->input_buffer[0];
+        for (uint32_t i = 0; i < input_size; i++) {
+            dst[i] = ((float)input_data[i] - 127.5f) * 0.00784313725f;
+        }
+    } else if (nn->input_buffer_size[0] != input_size) {
         LOG_DRV_ERROR("input_buffer_size[0] != input_size\r\r\n");
         osMutexRelease(nn->mtx_id);
         return -1;
-    }
-
-    /* Models with int8 input (e.g. ST ISEG, zp=-128) need uint8→int8 conversion.
-       OD/FD models use uint8 input (zp=0) and work correctly with plain memcpy. */
-    if (nn->model.is_int8_input) {
+    } else if (nn->model.is_int8_input) {
         int8_t *dst = (int8_t *)nn->input_buffer[0];
         for (uint32_t i = 0; i < input_size; i++) {
             dst[i] = (int8_t)((int)input_data[i] - 128);
@@ -908,17 +912,17 @@ static cJSON* create_mpe_detection_json(const mpe_detect_t* detection, int index
     if (detection->keypoint_connections && detection->num_connections > 0) {
         cJSON* connections_array = cJSON_CreateArray();
         if (connections_array) {
-            for (uint8_t i = 0; i < detection->num_connections; i += 2) {
+            for (uint8_t i = 0; i < detection->num_connections; i++) {
                 cJSON* connection_json = cJSON_CreateObject();
                 if (connection_json) {
-                    cJSON_AddNumberToObject(connection_json, "from", detection->keypoint_connections[i]);
-                    cJSON_AddNumberToObject(connection_json, "to", detection->keypoint_connections[i + 1]);
+                    cJSON_AddNumberToObject(connection_json, "from", detection->keypoint_connections[i * 2]);
+                    cJSON_AddNumberToObject(connection_json, "to", detection->keypoint_connections[i * 2 + 1]);
                     cJSON_AddItemToArray(connections_array, connection_json);
                 }
             }
             cJSON_AddItemToObject(detection_json, "connections", connections_array);
         }
-        cJSON_AddNumberToObject(detection_json, "connection_count", detection->num_connections / 2);
+        cJSON_AddNumberToObject(detection_json, "connection_count", detection->num_connections);
     }
     
     return detection_json;
