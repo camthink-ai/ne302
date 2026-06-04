@@ -148,58 +148,19 @@ int32_t iseg_yolov8_pp_scoreFiltering_centroid_is8(iseg_yolov8_pp_in_centroid_t 
         detection_mask[k] = ((int32_t)pOutBuff_s8[d].pMask[k] - raw_zp);
       }
 
-      // Perform matrix multiplication
+      // Binary mask: threshold at 0.5 probability
       for (int32_t i = 0; i < pInput_static_param->size_masks; i++)
       {
-#ifdef ARM_MATH_MVEF
-          int32_t iter_loop = pInput_static_param->size_masks >> 2;
-          while(iter_loop--)
-          {
-            // Read for 4 ouputs
-              int32x4_t sum_product_s32x4 = vdupq_n_s32(0);
-
-              for (int32_t k = 0; k < pInput_static_param->nb_masks ; k++)
-              {
-                // Load 4 int8_t in int32x4_t register
-                int32x4_t rawMask = vldrbq_gather_offset_s32(Raw_masks, offset);
-                sum_product_s32x4 += detection_mask[k] * (rawMask - (int32_t)mask_zp);
-
-                Raw_masks++;
-              }
-              // Compare and store 4 results
-              mve_pred16_t p0 = vcmpgeq_n_s32(sum_product_s32x4, threshold_check_s32);
-              uint32x4_t outBinary = vpselq_u32(vdupq_n_u32(1), vdupq_n_u32(0), p0);
-              vstrbq_u32(binary_mask, outBinary);
-
-              binary_mask+=4;
-              Raw_masks+=3*pInput_static_param->nb_masks;
-          }
-          // Remaining
-          iter_loop = pInput_static_param->size_masks & 3;
-          while(iter_loop--)
+          for (int32_t j = 0; j < pInput_static_param->size_masks; j++)
           {
               int32_t sum_product = 0;
               for (int32_t k = 0; k < pInput_static_param->nb_masks; k++)
               {
                 sum_product += detection_mask[k] * ((int32_t)(*Raw_masks) - (int32_t)mask_zp);
-
                 Raw_masks++;
               }
-              *binary_mask++ = (sum_product >= threshold_check_s32)?1:0;
+              *binary_mask++ = (sum_product >= threshold_check_s32) ? 1 : 0;
           }
-#else
-          for (int32_t j = 0; j < pInput_static_param->size_masks; j++)
-          {
-              int32_t sum_product = 0;
-              for (int32_t k = 0; k < pInput_static_param->nb_masks ; k++)
-              {
-                sum_product += detection_mask[k] * ((int32_t)(*Raw_masks) - (int32_t)mask_zp);
-
-                Raw_masks++;
-              }
-              *binary_mask++ = (sum_product >= threshold_check_s32)?1:0;
-          }
-#endif
       }
       det_count++;
     }

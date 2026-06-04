@@ -63,6 +63,7 @@ typedef struct {
     uintptr_t model_ptr;              // model pointer
     uintptr_t config_ptr;             // model config pointer
     uintptr_t metadata_ptr;           // metadata pointer
+    bool is_int8_input;               // true if input data type is int8 (cached from input_data_type)
 } nn_model_info_t;
 
 // AI neural network module structure (single instance)

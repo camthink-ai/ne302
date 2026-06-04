@@ -24,11 +24,24 @@
 #include "mem.h"
 #include "ll_aton_runtime.h"
 #include "ll_aton_reloc_network.h"
+#include "debug.h"
+
+#include <math.h>
 
 #include "iseg_yolov8_pp_if.h"
 
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
+/* ST official ISEG model includes sigmoid + bbox normalization in graph.
+   However, ATON NPU strips sigmoid during compilation, outputting raw logits.
+   The library's int8 threshold formula (conf_threshold / scale + 0.5 + zp)
+   operates in the dequantized value space. We pass the user's probability
+   threshold directly; the library filters at logit > threshold (sigmoid > ~0.56
+   for threshold=0.25). Sigmoid is applied to the library's output confidence
+   in post-processing to get accurate probability values.
+   OD models avoid this issue because their zp=-128 maps dequantized range to [0, ~1],
+   which coincidentally covers probability space even if sigmoid is stripped. */
 
 /* Per-instance parameters for ISEG YOLOv8 UI postprocess */
 typedef struct {
@@ -40,6 +53,8 @@ typedef struct {
     float32_t *mask_float_buffer;          /* per-instance mask float buffer */
     int8_t *mask_int8_buffer;               /* per-instance mask int8 buffer */
     char **class_names;                     /* per-instance class name array */
+    uint8_t det_output_index;               /* ATON output index for detection tensor */
+    uint8_t mask_output_index;              /* ATON output index for mask tensor */
 } pp_iseg_yolo_v8_ui_params_t;
 
 /*
@@ -69,15 +84,45 @@ static int32_t init(const char *json_str, void **pp_params, void *nn_inst)
     NN_Instance_TypeDef *NN_Instance = (NN_Instance_TypeDef *)nn_inst;
     if (NN_Instance != NULL) {
         const LL_Buffer_InfoTypeDef *buffers_info = ll_aton_reloc_get_output_buffers_info(NN_Instance, 0);
-        if (buffers_info != NULL && buffers_info[0].scale != NULL) {
-            params->raw_output_scale = *(buffers_info[0].scale);
-            params->raw_output_zero_point = *(buffers_info[0].offset);
+
+        /* ATON orders output buffers by internal ID, which may differ from
+           TFLite export order. Detect by shape:
+           - Detection: shape[1] = 4(bbox) + nb_classes + nb_mask_coeff
+           - Mask: shape[1] = mask_spatial_dim (height of [1,H,W,32]) */
+#define ISEG_DET_CHANNELS   116   /* 4 bbox + 80 classes + 32 mask coefficients */
+#define ISEG_MASK_SPATIAL   64    /* 64x64 prototype mask height */
+        if (buffers_info == NULL) {
+            pp_ctx->det_output_index = 1;
+            pp_ctx->mask_output_index = 0;
+        } else {
+            int det_idx = -1, mask_idx = -1;
+            for (int i = 0; i < 2; i++) {
+                if (buffers_info[i].shape != NULL && buffers_info[i].shape[1] == ISEG_DET_CHANNELS) {
+                    det_idx = i;
+                    mask_idx = 1 - i;
+                } else if (buffers_info[i].shape != NULL && buffers_info[i].shape[1] == ISEG_MASK_SPATIAL) {
+                    mask_idx = i;
+                    det_idx = 1 - i;
+                }
+            }
+            /* Fallback: assume TFLite order if shape detection fails */
+            if (det_idx < 0) { det_idx = 1; mask_idx = 0; }
+
+            pp_ctx->det_output_index = det_idx;
+            pp_ctx->mask_output_index = mask_idx;
+
+            if (buffers_info[det_idx].scale != NULL) {
+                params->raw_output_scale = *(buffers_info[det_idx].scale);
+                params->raw_output_zero_point = *(buffers_info[det_idx].offset);
+            }
+            if (buffers_info[mask_idx].scale != NULL) {
+                params->mask_raw_output_scale = *(buffers_info[mask_idx].scale);
+                params->mask_raw_output_zero_point = *(buffers_info[mask_idx].offset);
+            }
         }
-        // Get mask quantization parameters from second output
-        if (buffers_info != NULL && buffers_info[1].scale != NULL) {
-            params->mask_raw_output_scale = *(buffers_info[1].scale);
-            params->mask_raw_output_zero_point = *(buffers_info[1].offset);
-        }
+        /* ST library expects channel-first [channels, boxes] layout (accessed via
+           arr[channel * nb_total_boxes + box]). ATON output is also channel-first,
+           so no transpose needed — pass raw data directly. */
     }
 
     params->nb_classes = 80;
@@ -165,7 +210,7 @@ static int32_t init(const char *json_str, void **pp_params, void *nn_inst)
     pp_ctx->scratch_detections_buffer = (iseg_yolov8_pp_scratchBuffer_s8_t *)hal_mem_alloc_large(sizeof(iseg_yolov8_pp_scratchBuffer_s8_t) * params->nb_total_boxes);
     pp_ctx->mask_float_buffer = (float32_t *)hal_mem_alloc_large(sizeof(float32_t) * params->nb_masks);
     pp_ctx->mask_int8_buffer = (int8_t *)hal_mem_alloc_large(sizeof(int8_t) * params->nb_masks * params->nb_total_boxes);
-    
+
     assert(pp_ctx->iseg_pp_buffer != NULL && pp_ctx->iseg_detect_buffer != NULL && pp_ctx->iseg_mask_buffer != NULL);
     assert(pp_ctx->scratch_detections_buffer != NULL && pp_ctx->mask_float_buffer != NULL && pp_ctx->mask_int8_buffer != NULL);
     
@@ -228,7 +273,7 @@ static int32_t deinit(void *pp_params)
         hal_mem_free(pp->mask_int8_buffer);
         pp->mask_int8_buffer = NULL;
     }
-    
+
     if (pp->class_names != NULL) {
         for (int i = 0; i < params->nb_classes; i++) {
             if (pp->class_names[i] != NULL) {
@@ -245,29 +290,55 @@ static int32_t deinit(void *pp_params)
 
 static void iseg_pp_out_t_to_pp_result_t(iseg_pp_out_t *pIsegOutput,
                                          pp_result_t *result,
-                                         const pp_iseg_yolo_v8_ui_params_t *pp)
+                                         const pp_iseg_yolo_v8_ui_params_t *pp,
+                                         float user_conf_threshold)
 {
     result->type = PP_TYPE_ISEG;
     result->is_valid = pIsegOutput->nb_detect > 0;
-    result->iseg.nb_detect = pIsegOutput->nb_detect;
     result->iseg.detects = pp->iseg_detect_buffer;
-    
-    // Convert detection format
+
+    /* ATON NPU strips sigmoid, library outputs raw logit confidence.
+       Apply sigmoid to get probability, then filter by user threshold. */
+    int32_t valid_count = 0;
     for (int i = 0; i < pIsegOutput->nb_detect; i++) {
-        result->iseg.detects[i].x = MAX(0.0f, MIN(1.0f, pIsegOutput->pOutBuff[i].x_center - pIsegOutput->pOutBuff[i].width / 2.0f));
-        result->iseg.detects[i].y = MAX(0.0f, MIN(1.0f, pIsegOutput->pOutBuff[i].y_center - pIsegOutput->pOutBuff[i].height / 2.0f));
-        result->iseg.detects[i].width = MAX(0.0f, MIN(1.0f, pIsegOutput->pOutBuff[i].width));
-        result->iseg.detects[i].height = MAX(0.0f, MIN(1.0f, pIsegOutput->pOutBuff[i].height));
-        result->iseg.detects[i].conf = pIsegOutput->pOutBuff[i].conf;
-        if (pIsegOutput->pOutBuff[i].class_index >= 0 &&
-            pIsegOutput->pOutBuff[i].class_index < pp->core.nb_classes &&
-            pp->class_names) {
-            result->iseg.detects[i].class_name = pp->class_names[pIsegOutput->pOutBuff[i].class_index];
-        } else {
-            result->iseg.detects[i].class_name = "unknown";
+        float logit_conf = pIsegOutput->pOutBuff[i].conf;
+        float prob_conf = 1.0f / (1.0f + expf(-logit_conf));
+
+        if (prob_conf < user_conf_threshold) {
+            continue;
         }
-        // Mask is already set during initialization
+
+        /* Bbox from library is already normalized [0,1] (x_center, y_center, w, h).
+           ST model includes bbox normalization in graph. */
+        float x_center = pIsegOutput->pOutBuff[i].x_center;
+        float y_center = pIsegOutput->pOutBuff[i].y_center;
+        float width = pIsegOutput->pOutBuff[i].width;
+        float height = pIsegOutput->pOutBuff[i].height;
+
+        result->iseg.detects[valid_count].x = MAX(0.0f, MIN(1.0f, x_center - width / 2.0f));
+        result->iseg.detects[valid_count].y = MAX(0.0f, MIN(1.0f, y_center - height / 2.0f));
+        result->iseg.detects[valid_count].width = MAX(0.0f, MIN(1.0f, width));
+        result->iseg.detects[valid_count].height = MAX(0.0f, MIN(1.0f, height));
+        result->iseg.detects[valid_count].conf = prob_conf;
+
+        int cls_idx = pIsegOutput->pOutBuff[i].class_index;
+        if (cls_idx >= 0 && cls_idx < pp->core.nb_classes && pp->class_names) {
+            result->iseg.detects[valid_count].class_name = pp->class_names[cls_idx];
+        } else {
+            result->iseg.detects[valid_count].class_name = "unknown";
+        }
+
+        /* Copy mask pointer from source detection */
+        if (valid_count != i) {
+            result->iseg.detects[valid_count].mask = result->iseg.detects[i].mask;
+            result->iseg.detects[valid_count].mask_size = result->iseg.detects[i].mask_size;
+        }
+
+        valid_count++;
     }
+
+    result->iseg.nb_detect = valid_count;
+    result->is_valid = valid_count > 0;
 }
 
 static int32_t run(void *pInput[], uint32_t nb_input, void *pResult, void *pp_params, void *nn_inst)
@@ -276,22 +347,32 @@ static int32_t run(void *pInput[], uint32_t nb_input, void *pResult, void *pp_pa
     pp_iseg_yolo_v8_ui_params_t *pp = (pp_iseg_yolo_v8_ui_params_t *)pp_params;
     iseg_yolov8_pp_static_param_t *params = &pp->core;
     int32_t error = AI_ISEG_POSTPROCESS_ERROR_NO;
-    
+
     params->nb_detect = 0;
     memset(pResult, 0, sizeof(pp_result_t));
 
     iseg_pp_out_t iseg_pp_out;
     iseg_pp_out.pOutBuff = pp->iseg_pp_buffer;
-    
+
+    /* ATON NPU strips sigmoid, so library outputs raw logit confidence.
+       Pass the user's probability threshold directly to the library.
+       The library's int8 gate (threshold_s8 = threshold / scale + 0.5 + zp)
+       will filter boxes where dequantized logit > threshold, equivalent to
+       sigmoid > ~0.56 for threshold=0.25. Exact sigmoid filtering happens
+       in iseg_pp_out_t_to_pp_result_t(). */
+    float user_conf_threshold = params->conf_threshold;
+
+    /* Use dynamically detected ATON output buffer indices.
+       Library expects channel-first [channels, boxes] — pass raw data directly. */
     iseg_yolov8_pp_in_centroid_t pp_input = {
-        .pRaw_detections = (int8_t *)pInput[0],
-        .pRaw_masks = (int8_t *)pInput[1],
+        .pRaw_detections = (int8_t *)pInput[pp->det_output_index],
+        .pRaw_masks = (int8_t *)pInput[pp->mask_output_index],
     };
-    
-    // Use int8 processing function for int8 models
+
     error = iseg_yolov8_pp_process_int8(&pp_input, &iseg_pp_out, params);
+
     if (error == AI_ISEG_POSTPROCESS_ERROR_NO) {
-        iseg_pp_out_t_to_pp_result_t(&iseg_pp_out, (pp_result_t *)pResult, pp);
+        iseg_pp_out_t_to_pp_result_t(&iseg_pp_out, (pp_result_t *)pResult, pp, user_conf_threshold);
     }
     return error;
 }
