@@ -32,6 +32,10 @@
 #include <mbedtls/sha512.h>
 #include <mbedtls/version.h>
 
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+#include "pka_p256_alt.h"
+#endif
+
 /* Note: this header includes #defines to adjust the names of the global functions in this file
  * to be in the mmint_ namespace to avoid namespace conflicts. */
 #include "hostap_morse_common.h"
@@ -846,6 +850,45 @@ int crypto_bignum_exptmod(const struct crypto_bignum *a,
                           const struct crypto_bignum *c,
                           struct crypto_bignum *d)
 {
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+    if (pka_p256_modulus_fits((const mbedtls_mpi *)c) &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)a) &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)b))
+    {
+        mbedtls_mpi R;
+        int hw_rc = -1;
+
+        if (b == d || c == d)
+        {
+            mbedtls_mpi_init(&R);
+            if (pka_p256_modexp_mpi(&R,
+                                    (const mbedtls_mpi *)a,
+                                    (const mbedtls_mpi *)b,
+                                    (const mbedtls_mpi *)c) == 0 &&
+                mbedtls_mpi_copy((mbedtls_mpi *)d, &R) == 0)
+            {
+                hw_rc = 0;
+            }
+            mbedtls_mpi_free(&R);
+        }
+        else
+        {
+            if (pka_p256_modexp_mpi((mbedtls_mpi *)d,
+                                    (const mbedtls_mpi *)a,
+                                    (const mbedtls_mpi *)b,
+                                    (const mbedtls_mpi *)c) == 0)
+            {
+                hw_rc = 0;
+            }
+        }
+
+        if (hw_rc == 0)
+        {
+            return 0;
+        }
+    }
+#endif
+
     /* (check if input params match d; d is the result) */
     /* (a == d) is ok in current mbedtls implementation */
     if (b == d || c == d) /*(not ok; store result in intermediate)*/
@@ -879,6 +922,17 @@ int crypto_bignum_inverse(const struct crypto_bignum *a,
                           const struct crypto_bignum *b,
                           struct crypto_bignum *c)
 {
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+    if (pka_p256_modulus_fits((const mbedtls_mpi *)b) &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)a) &&
+        pka_p256_modinv_mpi((mbedtls_mpi *)c,
+                            (const mbedtls_mpi *)a,
+                            (const mbedtls_mpi *)b) == 0)
+    {
+        return 0;
+    }
+#endif
+
     return mbedtls_mpi_inv_mod((mbedtls_mpi *)c, (const mbedtls_mpi *)a, (const mbedtls_mpi *)b) ?
                -1 :
                0;
@@ -925,6 +979,19 @@ int crypto_bignum_mulmod(const struct crypto_bignum *a,
                          const struct crypto_bignum *c,
                          struct crypto_bignum *d)
 {
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+    if (pka_p256_modulus_fits((const mbedtls_mpi *)c) &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)a) &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)b) &&
+        pka_p256_mulmod_mpi((mbedtls_mpi *)d,
+                            (const mbedtls_mpi *)a,
+                            (const mbedtls_mpi *)b,
+                            (const mbedtls_mpi *)c) == 0)
+    {
+        return 0;
+    }
+#endif
+
     return mbedtls_mpi_mul_mpi((mbedtls_mpi *)d, (const mbedtls_mpi *)a, (const mbedtls_mpi *)b) ||
                    mbedtls_mpi_mod_mpi((mbedtls_mpi *)d, (mbedtls_mpi *)d, (const mbedtls_mpi *)c) ?
                -1 :
@@ -1665,6 +1732,18 @@ int crypto_ec_point_mul(struct crypto_ec *e,
                         const struct crypto_bignum *b,
                         struct crypto_ec_point *res)
 {
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
+    if (((const mbedtls_ecp_group *)e)->id == MBEDTLS_ECP_DP_SECP256R1 &&
+        pka_p256_mpi_fits((const mbedtls_mpi *)b) &&
+        pka_p256_ec_mul((mbedtls_ecp_group *)e,
+                        (mbedtls_ecp_point *)res,
+                        (const mbedtls_mpi *)b,
+                        (const mbedtls_ecp_point *)p) == 0)
+    {
+        return 0;
+    }
+#endif
+
     return mbedtls_ecp_mul((mbedtls_ecp_group *)e,
                            (mbedtls_ecp_point *)res,
                            (const mbedtls_mpi *)b,

@@ -5,6 +5,7 @@
 
 #include "umac_regdb.h"
 #include "umac/config/umac_config.h"
+#include "mmlog.h"
 
 const char *umac_regdb_get_country_code(struct umac_data *umacd)
 {
@@ -15,6 +16,26 @@ const char *umac_regdb_get_country_code(struct umac_data *umacd)
         return "??";
     }
     return (const char *)channel_list->country_code;
+}
+
+/**
+ * Some APs advertise regional S1G operating-class indices that differ from the
+ * values stored in mmregdb for the same centre channel / bandwidth (see hostap
+ * morse.c: US us4 uses s1g class 4, AU au25 uses s1g class 25, both 8 MHz ch 44).
+ */
+static bool umac_regdb_op_class_cross_region_alias(uint8_t op_class,
+                                                   const struct mmwlan_s1g_channel *chan)
+{
+    if (chan->global_operating_class == 71 && chan->bw_mhz == 8U)
+    {
+        /* US/CA 8 MHz: accept AU/NZ index 25 and global 71 in addition to US s1g class 4 */
+        if (op_class == 25U || op_class == 71U)
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool umac_regdb_op_class_match(struct umac_data *umacd,
@@ -30,6 +51,11 @@ bool umac_regdb_op_class_match(struct umac_data *umacd,
 
     if ((op_class == (uint8_t)chan->global_operating_class) ||
         (op_class == (uint8_t)chan->s1g_operating_class))
+    {
+        return true;
+    }
+
+    if (umac_regdb_op_class_cross_region_alias(op_class, chan))
     {
         return true;
     }

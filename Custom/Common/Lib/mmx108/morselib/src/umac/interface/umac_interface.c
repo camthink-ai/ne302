@@ -196,7 +196,14 @@ enum mmwlan_status umac_interface_add(struct umac_data *umacd,
         if (ret)
         {
             MMLOG_WRN("Driver init failed with %d\n", ret);
-            status = MMWLAN_ERROR;
+            if (ret == -333)
+            {
+                status = MMWLAN_HW_DEVICE_UNAVAILABLE;
+            }
+            else
+            {
+                status = MMWLAN_ERROR;
+            }
             goto error;
         }
 

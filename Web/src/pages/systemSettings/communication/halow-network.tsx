@@ -16,6 +16,8 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { Input } from '@/components/ui/input';
 import WifiReloadMask from '@/components/wifi-reload-mask';
 import { sleep, retryFetch } from '@/utils';
+import { isValidPoeIp } from '@/utils/verify';
+import { toast } from 'sonner';
 import systemSettings from '@/services/api/systemSettings';
 
 type HalowData = {
@@ -27,6 +29,13 @@ type HalowData = {
     connected: boolean;
     is_known: boolean;
     last_connected_time: number;
+};
+
+type HalowIpConfig = {
+    ip_mode: 'dhcp' | 'static';
+    ip_address: string;
+    netmask: string;
+    gateway: string;
 };
 
 const filterOtherNetworks = (list: HalowData[], connected: HalowData | null) => {
@@ -45,7 +54,8 @@ export default function HalowNetworkPage() {
         scanHalow,
         setHalow,
         disconnectHalow,
-        deleteHalow,
+        getHalowIpReq,
+        setHalowIpReq,
     } = systemSettings;
 
     const [isLoading, setIsLoading] = useState(true);
@@ -61,6 +71,20 @@ export default function HalowNetworkPage() {
     const [loadingText, setLoadingText] = useState('');
     const [isReloading, setIsReloading] = useState(false);
     const [isErrorPassword, setIsErrorPassword] = useState(false);
+    const [isIpConfigDialogOpen, setIsIpConfigDialogOpen] = useState(false);
+    const [ipConfigLoading, setIpConfigLoading] = useState(false);
+    const [ipConfig, setIpConfig] = useState<HalowIpConfig>({
+        ip_mode: 'dhcp',
+        ip_address: '',
+        netmask: '',
+        gateway: '',
+    });
+    const [liveIp, setLiveIp] = useState<HalowIpConfig>({
+        ip_mode: 'dhcp',
+        ip_address: '',
+        netmask: '',
+        gateway: '',
+    });
 
     const getRegionLabel = useCallback((code: string) => {
         const key = `sys.system_management.halow_region_${code.toLowerCase()}`;
@@ -91,6 +115,15 @@ export default function HalowNetworkPage() {
             : null;
 
         setCurrentHalowData(connected);
+
+        if (data.connected) {
+            setLiveIp({
+                ip_mode: (data.ip_mode === 'static' ? 'static' : 'dhcp'),
+                ip_address: data.ip_address ?? '',
+                netmask: data.netmask ?? '',
+                gateway: data.gateway ?? '',
+            });
+        }
 
         const unknown: HalowData[] = data.scan_results?.unknown_networks ?? [];
         setOtherHalowDataList(filterOtherNetworks(unknown, connected));
@@ -194,13 +227,58 @@ export default function HalowNetworkPage() {
         }
     };
 
-    const handleForget = async (data: HalowData) => {
+    const openIpConfigDialog = async () => {
         try {
-            if (data.connected) {
-                await disconnectHalow({ interface: 'halow' });
+            setIpConfigLoading(true);
+            const res = await getHalowIpReq();
+            const mode = res.data?.ip_mode === 'static' ? 'static' : 'dhcp';
+            const next: HalowIpConfig = {
+                ip_mode: mode,
+                ip_address: res.data?.ip_address ?? '',
+                netmask: res.data?.netmask ?? '',
+                gateway: res.data?.gateway ?? '',
+            };
+            setIpConfig(next);
+            if (mode === 'dhcp') {
+                setLiveIp(next);
             }
-            await deleteHalow({ ssid: data.ssid, bssid: data.bssid });
-            await handleScan();
+            setIsIpConfigDialogOpen(true);
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            setIpConfigLoading(false);
+        }
+    };
+
+    const validateIpConfig = () => {
+        if (ipConfig.ip_mode !== 'static') {
+            return true;
+        }
+        if (!isValidPoeIp(ipConfig.ip_address) || !isValidPoeIp(ipConfig.netmask) || !isValidPoeIp(ipConfig.gateway)) {
+            toast.error(i18n._('errors.poe.parameter_configuration_error'));
+            return false;
+        }
+        return true;
+    };
+
+    const handleSaveIpConfig = async () => {
+        if (!validateIpConfig()) {
+            return;
+        }
+        const saveFn = () => setHalowIpReq(
+            ipConfig.ip_mode === 'dhcp'
+                ? { ip_mode: 'dhcp' }
+                : {
+                    ip_mode: 'static',
+                    ip_address: ipConfig.ip_address,
+                    netmask: ipConfig.netmask,
+                    gateway: ipConfig.gateway,
+                }
+        );
+        try {
+            await reloadMask(saveFn, 3000, 3, i18n._('sys.system_management.saving_network_config'));
+            setIsIpConfigDialogOpen(false);
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error(error);
@@ -234,6 +312,98 @@ export default function HalowNetworkPage() {
             setIsErrorPassword(false);
         }
     }, [halowPassword, isErrorPassword]);
+
+    const displayIp = ipConfig.ip_mode === 'dhcp' ? liveIp : ipConfig;
+
+    const ipConfigDialog = () => (
+        <Dialog open={isIpConfigDialogOpen} onOpenChange={setIsIpConfigDialogOpen}>
+            <DialogContent className="mx-8" showCloseButton={false}>
+                <DialogClose asChild>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setIsIpConfigDialogOpen(false)}
+                      className="absolute right-4 top-4 h-8 w-8 p-0 rounded-full opacity-70 hover:opacity-100 transition-opacity z-10"
+                    >
+                        <SvgIcon icon="close" className="w-4 h-4" />
+                    </Button>
+                </DialogClose>
+                <DialogHeader>
+                    <DialogTitle>{i18n._('sys.system_management.configure_network')}</DialogTitle>
+                </DialogHeader>
+                <div className="my-4 flex flex-col gap-3">
+                    <div className="flex justify-between items-center gap-2">
+                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_ip_mode')}</Label>
+                        <Select
+                          value={ipConfig.ip_mode}
+                          onValueChange={(value: 'dhcp' | 'static') => {
+                                if (value === 'dhcp') {
+                                    setIpConfig({
+                                        ip_mode: 'dhcp',
+                                        ip_address: liveIp.ip_address,
+                                        netmask: liveIp.netmask,
+                                        gateway: liveIp.gateway,
+                                    });
+                                } else {
+                                    setIpConfig((prev) => ({ ...prev, ip_mode: 'static' }));
+                                }
+                            }}
+                        >
+                            <SelectTrigger className="w-[140px]">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="dhcp">{i18n._('sys.system_management.dhcp')}</SelectItem>
+                                <SelectItem value="static">{i18n._('sys.system_management.static')}</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between items-center gap-2">
+                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.ip_address')}</Label>
+                        <Input
+                          type="text"
+                          variant="ghost"
+                          className="text-right"
+                          readOnly={ipConfig.ip_mode === 'dhcp'}
+                          value={displayIp.ip_address}
+                          onChange={(e) => setIpConfig({ ...ipConfig, ip_address: (e.target as HTMLInputElement).value })}
+                          placeholder={i18n._('sys.system_management.ip_address')}
+                        />
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between items-center gap-2">
+                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.netmask')}</Label>
+                        <Input
+                          type="text"
+                          variant="ghost"
+                          className="text-right"
+                          readOnly={ipConfig.ip_mode === 'dhcp'}
+                          value={displayIp.netmask}
+                          onChange={(e) => setIpConfig({ ...ipConfig, netmask: (e.target as HTMLInputElement).value })}
+                          placeholder={i18n._('sys.system_management.netmask')}
+                        />
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between items-center gap-2">
+                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.gateway')}</Label>
+                        <Input
+                          type="text"
+                          variant="ghost"
+                          className="text-right"
+                          readOnly={ipConfig.ip_mode === 'dhcp'}
+                          value={displayIp.gateway}
+                          onChange={(e) => setIpConfig({ ...ipConfig, gateway: (e.target as HTMLInputElement).value })}
+                          placeholder={i18n._('sys.system_management.gateway')}
+                        />
+                    </div>
+                </div>
+                <DialogFooter>
+                    <Button size="sm" className="w-1/2 md:w-auto" variant="outline" onClick={() => setIsIpConfigDialogOpen(false)}>{i18n._('common.cancel')}</Button>
+                    <Button size="sm" className="w-1/2 md:w-auto" variant="primary" disabled={ipConfigLoading} onClick={() => handleSaveIpConfig()}>{i18n._('common.confirm')}</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
 
     const connectDialog = () => (
         <Dialog
@@ -361,7 +531,7 @@ export default function HalowNetworkPage() {
                                                 <div className="flex flex-col m-1">
                                                     <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleDisconnect()}>{i18n._('sys.system_management.disconnect')}</div>
                                                     <Separator className="my-1" />
-                                                    <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleForget(currentHalowData)}>{i18n._('sys.system_management.forget')}</div>
+                                                    <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => openIpConfigDialog()}>{i18n._('sys.system_management.configure_network')}</div>
                                                 </div>
                                             </PopoverContent>
                                         </Popover>
@@ -394,6 +564,7 @@ export default function HalowNetworkPage() {
                 </div>
             )}
             {connectDialog()}
+            {ipConfigDialog()}
             {showReloadMask && <WifiReloadMask loadingText={loadingText} isLoading={isReloading} />}
         </div>
     );

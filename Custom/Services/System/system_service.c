@@ -3363,6 +3363,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         
         if (ret != AICAM_OK) {
             LOG_SVC_ERROR("[TIMING] Step 1 FAILED (fast capture): %d (duration: %lu ms)", ret, (unsigned long)step_duration);
+            g_capture_in_progress = AICAM_FALSE;
             return ret;
         }
         LOG_SVC_INFO("[TIMING] Step 1 COMPLETED (fast capture): Image captured - %u bytes, frame_id: %lu (duration: %lu ms)", 
@@ -3375,6 +3376,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         
         if (ret != AICAM_OK) {
             LOG_SVC_ERROR("[TIMING] Step 1 FAILED: %d (duration: %lu ms)", ret, (unsigned long)step_duration);
+            g_capture_in_progress = AICAM_FALSE;
             return ret;
         }
         LOG_SVC_INFO("[TIMING] Step 1 COMPLETED: Image captured - %u bytes, frame_id: %lu (duration: %lu ms)", 
@@ -3515,6 +3517,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     // Validate capture result
     if (!jpeg_buffer) {
         LOG_SVC_ERROR("[TIMING] Validation FAILED: jpeg_buffer is NULL");
+        g_capture_in_progress = AICAM_FALSE;
         return AICAM_ERROR;
     }
     if (jpeg_size == 0) {
@@ -3526,6 +3529,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         }
         jpeg_buffer = NULL;
         jpeg_copy = NULL;
+        g_capture_in_progress = AICAM_FALSE;
         return AICAM_ERROR;
     }
 
@@ -3543,6 +3547,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         }
         jpeg_buffer = NULL;
         jpeg_copy = NULL;
+        g_capture_in_progress = AICAM_FALSE;
         return ret;
     }
 
@@ -3617,7 +3622,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         uint32_t current_flags = service_get_ready_flags();
         LOG_SVC_INFO("[TIMING] Step 3.1: Current service flags: 0x%08X, MQTT_NET_CONNECTED: %s",
                      current_flags, (current_flags & MQTT_NET_CONNECTED) ? "YES" : "NO");
-        aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 30000);
+        aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 15000);
         if (result != AICAM_OK) {
             LOG_SVC_INFO("[TIMING] Step 3.1 FAILED: MQTT network not ready: %d — skip MQTT, try webhook/SD", result);
             LOG_SVC_INFO("[TIMING] Step 3.1: Final service flags: 0x%08X", service_get_ready_flags());

@@ -223,8 +223,8 @@ typedef struct {
     network_scan_result_t known_networks[16]; // Known network configuration
     uint32_t known_network_count;           // Known network count
     
-    // Communication type settings
-    uint32_t preferred_comm_type;           // Preferred communication type (0=None, 1=WiFi, 2=Cellular, 3=PoE)
+    // Communication type settings (values = communication_type_t in communication_service.h)
+    uint32_t preferred_comm_type;           // 0=None, 1=WiFi, 2=HaLow, 3=Cellular, 4=PoE
     aicam_bool_t enable_auto_priority;      // Enable automatic priority-based switching
     
     // Cellular/4G settings
@@ -239,6 +239,11 @@ typedef struct {
     uint32_t halow_security;
     char halow_country_code[8];
     char halow_bssid[18];
+    /** @ref POE_IP_MODE_DHCP or @ref POE_IP_MODE_STATIC */
+    uint32_t halow_ip_mode;
+    uint8_t halow_ip_addr[4];
+    uint8_t halow_netmask[4];
+    uint8_t halow_gateway[4];
 } network_service_config_t;
  
  // Power mode configuration structure

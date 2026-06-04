@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-MorseMicroCommercial
  */
 
+#include <string.h>
+
 #include "umac_scan.h"
 #include "umac_scan_data.h"
 #include "mmlog.h"
@@ -179,6 +181,8 @@ enum mmwlan_status umac_scan_store_scan_config(struct umac_data *umacd,
 
 void umac_scan_fill_result(struct mmwlan_scan_result *res, const struct umac_scan_response *rsp)
 {
+    const struct dot11_ie_s1g_operation *s1g_op;
+
     *res = (struct mmwlan_scan_result){
         .rssi = rsp->rssi,
         .bssid = rsp->frame.bssid,
@@ -192,8 +196,20 @@ void umac_scan_fill_result(struct mmwlan_scan_result *res, const struct umac_sca
         .bw_mhz = rsp->bw_mhz,
         .op_bw_mhz = rsp->op_bw_mhz,
         .noise_dbm = rsp->noise_dbm,
+        .s1g_operation_ie_valid = false,
     };
+    memset(res->s1g_operation_ie, 0, sizeof(res->s1g_operation_ie));
     PACK_LE64(res->tsf, rsp->frame.timestamp);
+
+    if (rsp->frame.ies != NULL && rsp->frame.ies_len > 0U)
+    {
+        s1g_op = ie_s1g_operation_find(rsp->frame.ies, rsp->frame.ies_len);
+        if (s1g_op != NULL)
+        {
+            memcpy(res->s1g_operation_ie, s1g_op, MMWLAN_PRECONNECT_S1G_OP_IE_LEN);
+            res->s1g_operation_ie_valid = true;
+        }
+    }
 }
 
 void umac_scan_process_probe_resp(struct umac_data *umacd, struct mmpktview *rxbufview)

@@ -1173,11 +1173,16 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 	wpa_s->scan_req = NORMAL_SCAN_REQ;
 
 	if (connect_without_scan) {
+		struct wpa_bss *bss = NULL;
+
 		wpa_s->connect_without_scan = NULL;
 		if (ssid) {
-			wpa_printf(MSG_DEBUG, "Start a pre-selected network "
-				   "without scan step");
-			wpa_supplicant_associate(wpa_s, NULL, ssid);
+			if (ssid->bssid_set)
+				bss = wpa_bss_get_bssid_latest(wpa_s,
+							       ssid->bssid);
+			wpa_printf(MSG_DEBUG,
+				   "Start a pre-selected network without scan step");
+			wpa_supplicant_associate(wpa_s, bss, ssid);
 			return;
 		}
 	}

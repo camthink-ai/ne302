@@ -27,6 +27,7 @@ extern "C" {
 /**
  * @brief Communication type enumeration
  * @note Priority: PoE > HaLow > Cellular > WiFi (higher value = higher priority)
+ * @note NVS preferred_comm_type and qs_comm_pref_type (0–4) use the same numeric values.
  */
 typedef enum {
     COMM_TYPE_NONE = 0,                     // No communication type

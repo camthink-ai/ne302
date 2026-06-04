@@ -37,7 +37,7 @@ static struct mmosal_semb *dma_semb_handle;
 extern SPI_HandleTypeDef hspi6;
 
 #define MMHAL_SPI_POLL_TIMEOUT_MS (1000U)
-#define DMA_WAIT_TMO_MS           (100U)
+#define DMA_WAIT_TMO_MS           (200U)
 /* mm-ekh08-h753: use DMA for transfers >= 16 bytes */
 #define DMA_TRANSFER_MIN_LENGTH   (16U)
 #define SPI6_BUFFER_LENGTH        (2048U)

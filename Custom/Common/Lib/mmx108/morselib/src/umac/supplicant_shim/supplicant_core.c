@@ -12,6 +12,8 @@
 #include "umac_supp_shim_private.h"
 #include "umac/datapath/umac_datapath.h"
 #include "umac/interface/umac_interface.h"
+#include "umac/scan/umac_scan.h"
+#include "mmosal.h"
 
 #if MMLOG_LEVEL < MMLOG_LEVEL_ERR
 #define WPA_LOG_LEVEL (MSG_ERROR + 1)
@@ -152,11 +154,25 @@ enum mmwlan_status umac_supp_connect(struct umac_data *umacd)
     MMLOG_DBG("WPAS: Connect\n");
 
     struct umac_supp_shim_data *data = umac_data_get_supp_shim(umacd);
+    const struct mmwlan_sta_args *args = umac_connection_get_sta_args(umacd);
+
     if (!data->is_started || data->sta_wpa_s == NULL)
     {
         return MMWLAN_UNAVAILABLE;
     }
 
+    /*
+     * Quick join skips WPAS scan but HAL/mmipal may still leave the hw scan VIF
+     * active. Abort before set_channel during auth (avoids SET_CHANNEL timeout).
+     */
+    wpas_abort_ongoing_scan(data->sta_wpa_s);
+    umac_scan_abort(umacd, NULL);
+    if (args != NULL && args->preconnect_bss_valid)
+    {
+        mmosal_task_sleep(100);
+    }
+
+    (void)mmwpas_prepare_quick_connect(data, args);
     wpas_request_connection(data->sta_wpa_s);
     return MMWLAN_SUCCESS;
 }

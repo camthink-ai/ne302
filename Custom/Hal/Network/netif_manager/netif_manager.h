@@ -40,7 +40,7 @@
 #define NETIF_ETH_WAN_SBUF_CHANGE_IDLE_TIME (10)
 #define NETIF_ETH_WAN_W5500_FW_VERSION      (0x04) ///< W5500 firmware version 0.4
 
-#define NETIF_4G_CAT1_IS_ENABLE             (0)
+#define NETIF_4G_CAT1_IS_ENABLE             (1)
 #define NETIF_4G_CAT1_INIT_TIMEOUT_MS       (10000)
 #define NETIF_4G_CAT1_CNT_TIMEOUT_MS        (30000)
 #define NETIF_4G_CAT1_EXIT_TIMEOUT_MS       (10000)

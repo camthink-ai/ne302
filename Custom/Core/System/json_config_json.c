@@ -402,6 +402,40 @@ static void parse_network_service(cJSON *json, network_service_config_t *cfg)
         json_get_bool(poe, "validate_gateway", &cfg->poe.validate_gateway);
         json_get_bool(poe, "detect_ip_conflict", &cfg->poe.detect_ip_conflict);
     }
+
+    /* Wi-Fi HaLow */
+    {
+        cJSON *halow = cJSON_GetObjectItem(json, "halow");
+        if (cJSON_IsObject(halow)) {
+            uint32_t temp = 0;
+            json_get_string(halow, "ssid", cfg->halow_ssid, sizeof(cfg->halow_ssid));
+            json_get_string(halow, "password", cfg->halow_password, sizeof(cfg->halow_password));
+            json_get_uint32(halow, "security", &cfg->halow_security);
+            json_get_string(halow, "country_code", cfg->halow_country_code, sizeof(cfg->halow_country_code));
+            json_get_string(halow, "bssid", cfg->halow_bssid, sizeof(cfg->halow_bssid));
+            json_get_uint32(halow, "ip_mode", &temp);
+            cfg->halow_ip_mode = temp;
+
+            cJSON *ip_arr = cJSON_GetObjectItem(halow, "ip_addr");
+            if (cJSON_IsArray(ip_arr) && cJSON_GetArraySize(ip_arr) == 4) {
+                for (int i = 0; i < 4; i++) {
+                    cfg->halow_ip_addr[i] = (uint8_t)cJSON_GetArrayItem(ip_arr, i)->valueint;
+                }
+            }
+            ip_arr = cJSON_GetObjectItem(halow, "netmask");
+            if (cJSON_IsArray(ip_arr) && cJSON_GetArraySize(ip_arr) == 4) {
+                for (int i = 0; i < 4; i++) {
+                    cfg->halow_netmask[i] = (uint8_t)cJSON_GetArrayItem(ip_arr, i)->valueint;
+                }
+            }
+            ip_arr = cJSON_GetObjectItem(halow, "gateway");
+            if (cJSON_IsArray(ip_arr) && cJSON_GetArraySize(ip_arr) == 4) {
+                for (int i = 0; i < 4; i++) {
+                    cfg->halow_gateway[i] = (uint8_t)cJSON_GetArrayItem(ip_arr, i)->valueint;
+                }
+            }
+        }
+    }
 }
 
 static void json_save_cert_data(cJSON *obj, const char *key, const char *cert_path, uint16_t cert_len)
@@ -923,6 +957,37 @@ static cJSON *serialize_network_service(const network_service_config_t *cfg)
     cJSON_AddBoolToObject(poe, "detect_ip_conflict", cfg->poe.detect_ip_conflict);
     
     cJSON_AddItemToObject(json, "poe", poe);
+
+    /* Wi-Fi HaLow */
+    {
+        cJSON *halow = cJSON_CreateObject();
+        cJSON_AddStringToObject(halow, "ssid", cfg->halow_ssid);
+        cJSON_AddStringToObject(halow, "password", cfg->halow_password);
+        cJSON_AddNumberToObject(halow, "security", cfg->halow_security);
+        cJSON_AddStringToObject(halow, "country_code", cfg->halow_country_code);
+        cJSON_AddStringToObject(halow, "bssid", cfg->halow_bssid);
+        cJSON_AddNumberToObject(halow, "ip_mode", cfg->halow_ip_mode);
+
+        cJSON *ip_arr = cJSON_CreateArray();
+        for (int i = 0; i < 4; i++) {
+            cJSON_AddItemToArray(ip_arr, cJSON_CreateNumber(cfg->halow_ip_addr[i]));
+        }
+        cJSON_AddItemToObject(halow, "ip_addr", ip_arr);
+
+        ip_arr = cJSON_CreateArray();
+        for (int i = 0; i < 4; i++) {
+            cJSON_AddItemToArray(ip_arr, cJSON_CreateNumber(cfg->halow_netmask[i]));
+        }
+        cJSON_AddItemToObject(halow, "netmask", ip_arr);
+
+        ip_arr = cJSON_CreateArray();
+        for (int i = 0; i < 4; i++) {
+            cJSON_AddItemToArray(ip_arr, cJSON_CreateNumber(cfg->halow_gateway[i]));
+        }
+        cJSON_AddItemToObject(halow, "gateway", ip_arr);
+
+        cJSON_AddItemToObject(json, "halow", halow);
+    }
 
     return json;
 }

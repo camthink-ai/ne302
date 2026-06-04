@@ -38,12 +38,18 @@ struct netif *mmipal_get_lwip_netif(void);
 enum mmwlan_status mmwlan_sta_set_mac_addr(const uint8_t *mac_addr);
 
 #define HALOW_SCAN_RESULT_MAX           (64)
+/** S1G Operation IE size (EID + len + 5 payload bytes). */
+#define HALOW_S1G_OPERATION_IE_LEN      (MMWLAN_PRECONNECT_S1G_OP_IE_LEN)
+/** Max age of scan-derived quick-join cache (ms). */
+#define HALOW_PRECONNECT_TTL_MS         (60000U)
+/** IEEE 802.11ah S1G Operation element ID. */
+#define HALOW_DOT11_IE_S1G_OPERATION    (232U)
 /** Cat1/HaLow rail settle after sleep power-on (PWR_HALOW shares PWR_CAT1). */
-#define HALOW_PWR_SETTLE_MS             50U
-#define HALOW_INIT_RETRY_DELAY_MS       100U
-#define HALOW_INIT_POWER_CYCLE_MS       30U
+#define HALOW_PWR_SETTLE_MS             100U
+#define HALOW_INIT_RETRY_DELAY_MS       10U
+#define HALOW_INIT_POWER_CYCLE_MS       50U
 #define HALOW_STACK_INIT_MAX_ATTEMPTS   3U
-#define HALOW_LINK_WAIT_MS              (30000U)
+#define HALOW_LINK_WAIT_MS              (15000U)
 #define HALOW_DPP_DEFAULT_TIMEOUT_MS    (120000U)
 
 static netif_config_t halow_netif_cfg = {
@@ -92,6 +98,185 @@ static enum mmwlan_scan_state halow_last_scan_state = MMWLAN_SCAN_SUCCESSFUL;
 static PowerHandle halow_pwr_handle = 0;
 
 static uint8_t halow_pwr_acquired = 0;
+
+typedef struct {
+    uint8_t  valid;
+    uint8_t  bssid[6];
+    uint16_t beacon_interval;
+    uint8_t  s1g_operation_ie[HALOW_S1G_OPERATION_IE_LEN];
+    uint32_t channel_freq_hz;
+    int16_t  rssi;
+    uint16_t probe_ies_len;
+    uint8_t  probe_ies[MMWLAN_PRECONNECT_PROBE_IES_MAX];
+    uint32_t cached_ms;
+} halow_preconnect_entry_t;
+
+static halow_preconnect_entry_t halow_preconnect_cache[HALOW_SCAN_RESULT_MAX];
+static uint8_t halow_preconnect_cache_count = 0;
+
+static uint8_t halow_preconnect_cache_valid_count(uint32_t now_ms)
+{
+    uint8_t n = 0;
+
+    for (uint8_t i = 0; i < halow_preconnect_cache_count; i++) {
+        halow_preconnect_entry_t *e = &halow_preconnect_cache[i];
+        if (!e->valid) {
+            continue;
+        }
+        if ((now_ms - e->cached_ms) > HALOW_PRECONNECT_TTL_MS) {
+            e->valid = 0;
+            continue;
+        }
+        n++;
+    }
+    return n;
+}
+
+static void halow_preconnect_cache_clear(void)
+{
+    memset(halow_preconnect_cache, 0, sizeof(halow_preconnect_cache));
+    halow_preconnect_cache_count = 0;
+}
+
+static int halow_extract_s1g_operation_ie(const uint8_t *ies, uint16_t ies_len,
+                                          uint8_t out[HALOW_S1G_OPERATION_IE_LEN])
+{
+    const uint8_t *p = ies;
+    size_t left = ies_len;
+
+    if (ies == NULL || out == NULL) {
+        return -1;
+    }
+
+    while (left >= 2U) {
+        uint8_t eid = p[0];
+        uint8_t elen = p[1];
+
+        p += 2U;
+        left -= 2U;
+        if ((size_t)elen > left) {
+            break;
+        }
+        if (eid == HALOW_DOT11_IE_S1G_OPERATION && elen == 5U) {
+            out[0] = eid;
+            out[1] = elen;
+            memcpy(out + 2U, p, elen);
+            return 0;
+        }
+        p += elen;
+        left -= elen;
+    }
+
+    return -1;
+}
+
+static halow_preconnect_entry_t *halow_preconnect_find_entry(const uint8_t bssid[6], uint32_t now_ms)
+{
+    for (uint8_t i = 0; i < halow_preconnect_cache_count; i++) {
+        halow_preconnect_entry_t *e = &halow_preconnect_cache[i];
+        if (!e->valid) {
+            continue;
+        }
+        if ((now_ms - e->cached_ms) > HALOW_PRECONNECT_TTL_MS) {
+            e->valid = 0;
+            continue;
+        }
+        if (memcmp(e->bssid, bssid, 6) == 0) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static void halow_preconnect_cache_store(const struct mmwlan_scan_result *result)
+{
+    uint8_t s1g_ie[HALOW_S1G_OPERATION_IE_LEN];
+    halow_preconnect_entry_t *slot;
+    uint32_t now_ms;
+
+    if (result == NULL || result->bssid == NULL) {
+        return;
+    }
+    if (result->s1g_operation_ie_valid) {
+        memcpy(s1g_ie, result->s1g_operation_ie, sizeof(s1g_ie));
+    } else if (result->ies == NULL || result->ies_len == 0U) {
+        return;
+    } else if (halow_extract_s1g_operation_ie(result->ies, result->ies_len, s1g_ie) != 0) {
+        return;
+    }
+
+    now_ms = HAL_GetTick();
+    slot = halow_preconnect_find_entry(result->bssid, now_ms);
+    if (slot == NULL) {
+        if (halow_preconnect_cache_count >= HALOW_SCAN_RESULT_MAX) {
+            return;
+        }
+        slot = &halow_preconnect_cache[halow_preconnect_cache_count++];
+    }
+
+    slot->valid = 1;
+    memcpy(slot->bssid, result->bssid, 6);
+    slot->beacon_interval = result->beacon_interval;
+    memcpy(slot->s1g_operation_ie, s1g_ie, sizeof(s1g_ie));
+    slot->channel_freq_hz = result->channel_freq_hz;
+    slot->rssi = result->rssi;
+    slot->probe_ies_len = 0U;
+    if (result->ies != NULL && result->ies_len > 0U) {
+        uint16_t copy_len = result->ies_len;
+        if (copy_len > MMWLAN_PRECONNECT_PROBE_IES_MAX) {
+            copy_len = MMWLAN_PRECONNECT_PROBE_IES_MAX;
+        }
+        memcpy(slot->probe_ies, result->ies, copy_len);
+        slot->probe_ies_len = copy_len;
+    }
+    slot->cached_ms = now_ms;
+}
+
+static void halow_preconnect_scan_rx_cb(const struct mmwlan_scan_result *result, void *arg)
+{
+    (void)arg;
+    halow_preconnect_cache_store(result);
+}
+
+static int halow_preconnect_fill_sta_args(struct mmwlan_sta_args *sta_args)
+{
+    halow_preconnect_entry_t *entry;
+    uint32_t now_ms;
+    uint8_t cached_count;
+
+    if (sta_args == NULL) {
+        return 0;
+    }
+    if (!NETIF_MAC_IS_UNICAST(sta_args->bssid)) {
+        return 0;
+    }
+
+    now_ms = HAL_GetTick();
+    cached_count = halow_preconnect_cache_valid_count(now_ms);
+    if (cached_count == 0U) {
+        return 0;
+    }
+
+    entry = halow_preconnect_find_entry(sta_args->bssid, now_ms);
+    if (entry == NULL) {
+        return 0;
+    }
+
+    sta_args->preconnect_bss_valid = true;
+    sta_args->preconnect_beacon_interval = entry->beacon_interval;
+    memcpy(sta_args->preconnect_s1g_operation_ie,
+           entry->s1g_operation_ie,
+           sizeof(sta_args->preconnect_s1g_operation_ie));
+    sta_args->preconnect_channel_freq_hz = entry->channel_freq_hz;
+    sta_args->preconnect_rssi = entry->rssi;
+    sta_args->preconnect_probe_ies_len = entry->probe_ies_len;
+    if (entry->probe_ies_len > 0U) {
+        memcpy(sta_args->preconnect_probe_ies,
+               entry->probe_ies,
+               entry->probe_ies_len);
+    }
+    return 1;
+}
 
 static void halow_resolve_sta_mac(uint8_t mac[6])
 {
@@ -401,6 +586,7 @@ static void halow_stack_teardown_attempt_locked(void)
  */
 static int halow_stack_init_locked(void)
 {
+    int ret = 0;
     unsigned attempt;
 
     mm_halow_gpios_init();
@@ -446,10 +632,12 @@ static int halow_stack_init_locked(void)
 
         (void)halow_apply_halow_hw_config_locked();
 
-        if (halow_mmwlan_boot_locked() == 0) {
+        ret = halow_mmwlan_boot_locked();
+        if (ret == 0) {
             halow_stack_ready = 0;
             return 0;
-        }
+        } 
+        if (ret == -333) return -333;
 
         halow_stack_teardown_attempt_locked();
     }
@@ -542,13 +730,16 @@ static int halow_mmwlan_teardown_locked(void)
 
 static int halow_mmwlan_boot_locked(void)
 {
+    int ret = 0;
     struct mmwlan_boot_args boot_args = MMWLAN_BOOT_ARGS_INIT;
 
     /* Ensure the HAL BCF callback uses a region-appropriate BCF at next boot. */
     mmhal_wlan_select_bcf_for_country(halow_netif_cfg.halow_cfg.country_code);
 
-    if (mmwlan_boot(&boot_args) != MMWLAN_SUCCESS) {
-        LOG_DRV_ERROR("HaLow mmwlan_boot failed");
+    ret = mmwlan_boot(&boot_args);
+    if (ret != MMWLAN_SUCCESS) {
+        LOG_DRV_ERROR("HaLow mmwlan_boot failed, ret=%d", ret);
+        if (ret == MMWLAN_HW_DEVICE_UNAVAILABLE) return -333;
         return -1;
     }
 
@@ -981,6 +1172,16 @@ static void halow_fill_sta_args(struct mmwlan_sta_args *sta_args)
     sta_args->bgscan_short_interval_s = hc->bgscan_short_interval_s;
     sta_args->bgscan_signal_threshold_dbm = hc->bgscan_signal_threshold_dbm;
     sta_args->bgscan_long_interval_s = hc->bgscan_long_interval_s;
+
+    /* Feed preconnect cache from wpas/connect-time scans as well as mmwlan_scan_request(). */
+    sta_args->scan_rx_cb = halow_preconnect_scan_rx_cb;
+    sta_args->scan_rx_cb_arg = NULL;
+
+    sta_args->sae_owe_ec_groups[0]=19;
+    sta_args->sae_owe_ec_groups[1]=0;
+    sta_args->sae_owe_ec_groups[2]=0;
+
+    (void)halow_preconnect_fill_sta_args(sta_args);
 }
 
 static void halow_scan_result_to_info(const struct mmwlan_scan_result *src, wireless_scan_info_t *dst)
@@ -1141,6 +1342,7 @@ static void halow_scan_rx_handler(const struct mmwlan_scan_result *result, void 
 
     /* Convert once, then de-duplicate (see NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW). */
     halow_scan_result_to_info(result, &tmp);
+    halow_preconnect_cache_store(result);
 
     if (target->scan_info != NULL) {
         for (uint8_t i = 0; i < target->scan_count; i++) {
@@ -1231,6 +1433,8 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
     if (halow_ensure_mmwlan_booted_locked() != 0) {
         return -1;
     }
+
+    halow_preconnect_cache_clear();
 
     if (halow_scan_sem == NULL) {
         halow_scan_sem = osSemaphoreNew(1, 0, NULL);
@@ -1452,9 +1656,16 @@ int mm_halow_netif_up(void)
     (void)mmwlan_set_dynamic_ps_timeout(halow_netif_cfg.halow_cfg.ps_mode ? 100 : 3600000U);
     (void)halow_apply_halow_hw_config_locked();
 
+    /*
+     * Ensure HAL preconnect scan is fully torn down before STA enable; otherwise
+     * mmdrv_set_channel during SAE auth often times out (rx page too short / -116).
+     */
+    (void)mmwlan_scan_abort();
+    if (sta_args.preconnect_bss_valid) {
+        osDelay(100);
+    }
+
     status = mmwlan_sta_enable(&sta_args, mm_halow_sta_status_callback);
-    LOG_DRV_INFO("HaLow mmwlan_sta_enable ret=%d sta_state=%d",
-                 (int)status, (int)mmwlan_get_sta_state());
     if (status != MMWLAN_SUCCESS) {
         if (status == MMWLAN_UNAVAILABLE) {
             LOG_DRV_ERROR("mmwlan_sta_enable failed: %d (UMAC busy, e.g. DPP still active)",
@@ -1469,11 +1680,9 @@ int mm_halow_netif_up(void)
         return -1;
     }
 
-    /* Short diagnostic poll: if STA VIF isn't added, mmwlan_get_sta_state often stays DISABLED. */
     for (int i = 0; i < 10; i++) {
         uint8_t mac[6];
         sta_state = mmwlan_get_sta_state();
-        LOG_DRV_DEBUG("HaLow sta_state=%d (t+%dms)", (int)sta_state, (i + 1) * 200);
         halow_resolve_sta_mac(mac);
         halow_try_set_sta_mac_runtime(mac);
         if (sta_state == MMWLAN_STA_CONNECTED || sta_state == MMWLAN_STA_CONNECTING) {
@@ -1629,6 +1838,33 @@ static void halow_u8_from_ip_str(const char *str, uint8_t *ip)
     }
 }
 
+int mm_halow_apply_ip_config(void)
+{
+    struct mmipal_ip_config ip_cfg;
+    char ip_str[16];
+    char mask_str[16];
+    char gw_str[16];
+
+    if (!halow_stack_ready) {
+        return 0;
+    }
+
+    memset(&ip_cfg, 0, sizeof(ip_cfg));
+    if (halow_netif_cfg.ip_mode == NETIF_IP_MODE_DHCP) {
+        ip_cfg.mode = MMIPAL_DHCP;
+    } else {
+        ip_cfg.mode = MMIPAL_STATIC;
+        halow_ip_u8_to_str(halow_netif_cfg.ip_addr, ip_str, sizeof(ip_str));
+        halow_ip_u8_to_str(halow_netif_cfg.netmask, mask_str, sizeof(mask_str));
+        halow_ip_u8_to_str(halow_netif_cfg.gw, gw_str, sizeof(gw_str));
+        strncpy(ip_cfg.ip_addr, ip_str, sizeof(ip_cfg.ip_addr) - 1U);
+        strncpy(ip_cfg.netmask, mask_str, sizeof(ip_cfg.netmask) - 1U);
+        strncpy(ip_cfg.gateway_addr, gw_str, sizeof(ip_cfg.gateway_addr) - 1U);
+    }
+
+    return (mmipal_set_ip_config(&ip_cfg) == MMIPAL_SUCCESS) ? 0 : -1;
+}
+
 int mm_halow_netif_info(netif_info_t *netif_info)
 {
     struct netif *nif;
@@ -1737,6 +1973,28 @@ int mm_halow_update_storage_scan_result(uint32_t timeout_ms)
     ret = halow_run_scan_locked(&halow_storage_scan_result, NULL, timeout_ms);
     osMutexRelease(halow_mutex);
     return ret;
+}
+
+int mm_halow_set_preconnect_target(const uint8_t bssid[6])
+{
+    halow_preconnect_entry_t *entry;
+    uint32_t now_ms;
+
+    if (halow_mutex == NULL || bssid == NULL || !NETIF_MAC_IS_UNICAST(bssid)) {
+        return -1;
+    }
+
+    osMutexAcquire(halow_mutex, osWaitForever);
+    now_ms = HAL_GetTick();
+    entry = halow_preconnect_find_entry(bssid, now_ms);
+    if (entry == NULL) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+
+    memcpy(halow_netif_cfg.wireless_cfg.bssid, bssid, 6);
+    osMutexRelease(halow_mutex);
+    return 0;
 }
 
 int mm_halow_set_regdomain(const char *country_code)

@@ -135,6 +135,16 @@
 #define MBEDTLS_ECDH_C
 #define MBEDTLS_ECDSA_C
 
+/* PKA hardware offload for P-256 (port/pka_p256_alt.c, ecp_alt.c, ecdh_alt.c, ecdsa_alt.c) */
+#define MBEDTLS_ECP_INTERNAL_ALT
+#define MBEDTLS_ECP_NORMALIZE_JAC_ALT
+#define MBEDTLS_ECP_DOUBLE_JAC_ALT
+#define MBEDTLS_ECP_ADD_MIXED_ALT
+#define MBEDTLS_ECDH_GEN_PUBLIC_ALT
+#define MBEDTLS_ECDH_COMPUTE_SHARED_ALT
+#define MBEDTLS_ECDSA_SIGN_ALT
+#define MBEDTLS_ECDSA_VERIFY_ALT
+
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION
 
 /*

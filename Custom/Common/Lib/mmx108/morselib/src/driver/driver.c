@@ -227,6 +227,7 @@ int mmdrv_init(struct mmdrv_chip_info *chip_info, const char *country_code)
     if (result != MORSE_SUCCESS)
     {
         MMLOG_ERR("Transport init failed\n");
+        result = -333; // indicate to upper layer that the hardware is not available
         goto error_transport;
     }
 

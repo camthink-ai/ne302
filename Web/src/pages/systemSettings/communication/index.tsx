@@ -101,23 +101,35 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
         setIsCommunicationModeDialogOpen(true);
         communicationModeDialogValue.current = value;
     }
+
+    const isAutoSelection = netWorkStatus?.is_auto_selection ?? netWorkStatus?.preferred_type === 'none';
+
     return (
         <div>
             {/* {showWifiReloadMask && <WifiReloadMask loadingText={i18n._('sys.system_management.network_disconnected')} isLoading={false} />} */}
             {isMobile && renderBackSlot()}
-            <div className="flex gap-2 justify-between my-4">
+            <div className="flex gap-2 justify-between items-center my-4">
                 <Label className="text-sm font-bold text-text-primary">{i18n._('sys.system_management.change_communication')}</Label>
-                <Select value={communicationMode} onValueChange={(value) => openCommunicationModeDialog(value)}>
-                    <SelectTrigger>
-                        <SelectValue placeholder={i18n._('sys.system_management.communication_mode')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'wifi') && <SelectItem value="wifi">{i18n._('sys.system_management.wifi')}</SelectItem>}
-                        {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'halow') && <SelectItem value="halow">{i18n._('sys.system_management.halow')}</SelectItem>}
-                        {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'cellular') && <SelectItem value="cellular">{i18n._('sys.system_management.cellular_network')}</SelectItem>}
-                        {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'poe') && <SelectItem value="poe">{i18n._('sys.system_management.poe_network')}</SelectItem>}
-                    </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                    {!isLoading && netWorkStatus && (
+                        <span className="text-sm text-text-secondary shrink-0">
+                            {isAutoSelection
+                                ? i18n._('sys.system_management.comm_selection_auto')
+                                : i18n._('sys.system_management.comm_selection_manual')}
+                        </span>
+                    )}
+                    <Select value={communicationMode} onValueChange={(value) => openCommunicationModeDialog(value)}>
+                        <SelectTrigger>
+                            <SelectValue placeholder={i18n._('sys.system_management.communication_mode')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'wifi') && <SelectItem value="wifi">{i18n._('sys.system_management.wifi')}</SelectItem>}
+                            {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'halow') && <SelectItem value="halow">{i18n._('sys.system_management.halow')}</SelectItem>}
+                            {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'cellular') && <SelectItem value="cellular">{i18n._('sys.system_management.cellular_network')}</SelectItem>}
+                            {netWorkStatus?.available_comm_types.find((item: any) => item.type === 'poe') && <SelectItem value="poe">{i18n._('sys.system_management.poe_network')}</SelectItem>}
+                        </SelectContent>
+                    </Select>
+                </div>
             </div>
             {isLoading && <CommunicationSkeleton />}
             {communicationMode === 'wifi' && !isLoading && <WifiNetworkPage />}

@@ -114,7 +114,13 @@ const systemSettings = {
     scanHalow: () => request.post('/api/v1/system/network/halow/scan', {}),
     setHalow: (data: { interface: string; ssid: string; bssid: string; password: string; region?: string }) => request.post('/api/v1/system/network/halow', data),
     disconnectHalow: (data: { interface?: string }) => request.post('/api/v1/system/network/halow/disconnect', data),
-    deleteHalow: (data: { ssid?: string; bssid?: string }) => request.post('/api/v1/system/network/halow/delete', data),
+    getHalowIpReq: () => request.get('/api/v1/system/network/halow/ip'),
+    setHalowIpReq: (data: {
+        ip_mode: 'dhcp' | 'static';
+        ip_address?: string;
+        netmask?: string;
+        gateway?: string;
+    }) => request.post('/api/v1/system/network/halow/ip', data),
 }
 
 export default systemSettings;

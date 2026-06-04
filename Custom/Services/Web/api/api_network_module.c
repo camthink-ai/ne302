@@ -294,6 +294,15 @@ aicam_result_t network_status_handler(http_handler_context_t *ctx) {
     }
     cJSON_AddItemToObject(response_json, "available_comm_types", available_comm_types);
     cJSON_AddNumberToObject(response_json, "available_comm_count", available_count);
+
+    /* Selection mode: manual (NVS preferred set) vs auto (priority-based at startup) */
+    communication_type_t preferred_type = communication_get_preferred_type();
+    aicam_bool_t auto_priority = communication_get_auto_priority();
+    cJSON_AddStringToObject(response_json, "preferred_type", network_comm_type_api_string(preferred_type));
+    cJSON_AddBoolToObject(response_json, "auto_priority", auto_priority);
+    cJSON_AddBoolToObject(response_json, "is_auto_selection", preferred_type == COMM_TYPE_NONE);
+    cJSON_AddStringToObject(response_json, "selection_mode",
+                            preferred_type == COMM_TYPE_NONE ? "auto" : "manual");
     
     // 7. Current connection brief info (for status bar, based on active_type)
     cJSON* current_comm_info = cJSON_CreateObject();
@@ -1208,10 +1217,25 @@ aicam_result_t network_halow_sta_handler(http_handler_context_t *ctx)
     cJSON_AddNumberToObject(response_json, "channel", hw_info.wireless_cfg.channel);
     {
         char ip_str[16];
+        char mask_str[16];
+        char gw_str[16];
         char mac_str[18];
         snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
                  hw_info.ip_addr[0], hw_info.ip_addr[1], hw_info.ip_addr[2], hw_info.ip_addr[3]);
+        snprintf(mask_str, sizeof(mask_str), "%d.%d.%d.%d",
+                 hw_info.netmask[0], hw_info.netmask[1], hw_info.netmask[2], hw_info.netmask[3]);
+        snprintf(gw_str, sizeof(gw_str), "%d.%d.%d.%d",
+                 hw_info.gw[0], hw_info.gw[1], hw_info.gw[2], hw_info.gw[3]);
         cJSON_AddStringToObject(response_json, "ip_address", ip_str);
+        cJSON_AddStringToObject(response_json, "netmask", mask_str);
+        cJSON_AddStringToObject(response_json, "gateway", gw_str);
+        if (sys_net_ok) {
+            cJSON_AddStringToObject(response_json, "ip_mode",
+                                   (sys_net.halow_ip_mode == POE_IP_MODE_STATIC) ? "static" : "dhcp");
+        } else {
+            cJSON_AddStringToObject(response_json, "ip_mode",
+                                   (hw_info.ip_mode == NETIF_IP_MODE_DHCP) ? "dhcp" : "static");
+        }
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
                  hw_info.if_mac[0], hw_info.if_mac[1], hw_info.if_mac[2],
                  hw_info.if_mac[3], hw_info.if_mac[4], hw_info.if_mac[5]);
@@ -1524,7 +1548,6 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx)
     strncpy(cfg.wireless_cfg.pw, password, sizeof(cfg.wireless_cfg.pw) - 1U);
     cfg.wireless_cfg.pw[sizeof(cfg.wireless_cfg.pw) - 1U] = '\0';
     cfg.wireless_cfg.security = security;
-    cfg.ip_mode = NETIF_IP_MODE_DHCP;
 
     if (bssid != NULL && strlen(bssid) == 17) {
         unsigned int bssid_bytes[6];
@@ -1549,6 +1572,12 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx)
         strncpy(sys_net.halow_country_code, cc, sizeof(sys_net.halow_country_code) - 1U);
         sys_net.halow_country_code[sizeof(sys_net.halow_country_code) - 1U] = '\0';
     }
+
+    cfg.ip_mode = (sys_net.halow_ip_mode == POE_IP_MODE_STATIC) ?
+                  NETIF_IP_MODE_STATIC : NETIF_IP_MODE_DHCP;
+    memcpy(cfg.ip_addr, sys_net.halow_ip_addr, sizeof(cfg.ip_addr));
+    memcpy(cfg.netmask, sys_net.halow_netmask, sizeof(cfg.netmask));
+    memcpy(cfg.gw, sys_net.halow_gateway, sizeof(cfg.gw));
 
     if (nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
         cJSON_Delete(request_json);
@@ -1673,6 +1702,189 @@ aicam_result_t network_halow_delete_handler(http_handler_context_t *ctx)
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
     }
     return api_response_success(ctx, json_string, "HaLow cleared");
+}
+
+static void halow_copy_ip_service_to_cfg(const network_service_config_t *sys, netif_config_t *cfg)
+{
+    cfg->ip_mode = (sys->halow_ip_mode == POE_IP_MODE_STATIC) ?
+                   NETIF_IP_MODE_STATIC : NETIF_IP_MODE_DHCP;
+    memcpy(cfg->ip_addr, sys->halow_ip_addr, sizeof(cfg->ip_addr));
+    memcpy(cfg->netmask, sys->halow_netmask, sizeof(cfg->netmask));
+    memcpy(cfg->gw, sys->halow_gateway, sizeof(cfg->gw));
+}
+
+static void halow_fill_ip_json(cJSON *obj, netif_ip_mode_t mode,
+                               const uint8_t ip[4], const uint8_t mask[4], const uint8_t gw[4])
+{
+    char buf[16];
+
+    cJSON_AddStringToObject(obj, "ip_mode",
+                            (mode == NETIF_IP_MODE_DHCP) ? "dhcp" : "static");
+    snprintf(buf, sizeof(buf), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+    cJSON_AddStringToObject(obj, "ip_address", buf);
+    snprintf(buf, sizeof(buf), "%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3]);
+    cJSON_AddStringToObject(obj, "netmask", buf);
+    snprintf(buf, sizeof(buf), "%d.%d.%d.%d", gw[0], gw[1], gw[2], gw[3]);
+    cJSON_AddStringToObject(obj, "gateway", buf);
+}
+
+static int halow_parse_ipv4_item(cJSON *root, const char *key, uint8_t out[4])
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    const char *str;
+    unsigned int a, b, c, d;
+
+    if (item == NULL || !cJSON_IsString(item)) {
+        return -1;
+    }
+    str = cJSON_GetStringValue(item);
+    if (str == NULL || sscanf(str, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+        return -1;
+    }
+    out[0] = (uint8_t)a;
+    out[1] = (uint8_t)b;
+    out[2] = (uint8_t)c;
+    out[3] = (uint8_t)d;
+    return 0;
+}
+
+/**
+ * @brief GET/POST /api/v1/system/network/halow/ip
+ */
+aicam_result_t network_halow_ip_handler(http_handler_context_t *ctx)
+{
+    netif_config_t cfg;
+    netif_info_t hw_info;
+    network_service_config_t sys_net = {0};
+    cJSON *response_json;
+    char *json_string;
+    uint8_t ip[4];
+    uint8_t mask[4];
+    uint8_t gw[4];
+    netif_ip_mode_t cfg_mode;
+
+    if (!ctx) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (!communication_is_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Communication service is not running");
+    }
+
+    response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+
+    if (json_config_get_network_service_config(&sys_net) != AICAM_OK) {
+        cJSON_Delete(response_json);
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get network service configuration");
+    }
+
+    cfg_mode = (sys_net.halow_ip_mode == POE_IP_MODE_STATIC) ?
+               NETIF_IP_MODE_STATIC : NETIF_IP_MODE_DHCP;
+    memcpy(ip, sys_net.halow_ip_addr, sizeof(ip));
+    memcpy(mask, sys_net.halow_netmask, sizeof(mask));
+    memcpy(gw, sys_net.halow_gateway, sizeof(gw));
+
+    if (strcmp(ctx->request.method, "GET") == 0) {
+        memset(&hw_info, 0, sizeof(hw_info));
+        if (nm_get_netif_info(NETIF_NAME_WIFI_HALOW, &hw_info) == AICAM_OK &&
+            hw_info.state == NETIF_STATE_UP &&
+            cfg_mode == NETIF_IP_MODE_DHCP) {
+            memcpy(ip, hw_info.ip_addr, sizeof(ip));
+            memcpy(mask, hw_info.netmask, sizeof(mask));
+            memcpy(gw, hw_info.gw, sizeof(gw));
+        }
+
+        halow_fill_ip_json(response_json, cfg_mode, ip, mask, gw);
+    } else if (strcmp(ctx->request.method, "POST") == 0) {
+        cJSON *request_json;
+        cJSON *ip_mode_item;
+        aicam_bool_t apply_live = AICAM_FALSE;
+
+        request_json = web_api_parse_body(ctx);
+        if (!request_json) {
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON request body");
+        }
+
+        ip_mode_item = cJSON_GetObjectItem(request_json, "ip_mode");
+        if (ip_mode_item && cJSON_IsString(ip_mode_item)) {
+            const char *mode_str = cJSON_GetStringValue(ip_mode_item);
+            if (mode_str != NULL && strcmp(mode_str, "dhcp") == 0) {
+                sys_net.halow_ip_mode = POE_IP_MODE_DHCP;
+                cfg_mode = NETIF_IP_MODE_DHCP;
+            } else if (mode_str != NULL && strcmp(mode_str, "static") == 0) {
+                sys_net.halow_ip_mode = POE_IP_MODE_STATIC;
+                cfg_mode = NETIF_IP_MODE_STATIC;
+                if (halow_parse_ipv4_item(request_json, "ip_address", sys_net.halow_ip_addr) != 0 ||
+                    halow_parse_ipv4_item(request_json, "netmask", sys_net.halow_netmask) != 0 ||
+                    halow_parse_ipv4_item(request_json, "gateway", sys_net.halow_gateway) != 0) {
+                    cJSON_Delete(request_json);
+                    cJSON_Delete(response_json);
+                    return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
+                                              "Static mode requires valid ip_address, netmask and gateway");
+                }
+                memcpy(ip, sys_net.halow_ip_addr, sizeof(ip));
+                memcpy(mask, sys_net.halow_netmask, sizeof(mask));
+                memcpy(gw, sys_net.halow_gateway, sizeof(gw));
+            } else {
+                cJSON_Delete(request_json);
+                cJSON_Delete(response_json);
+                return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "ip_mode must be dhcp or static");
+            }
+        }
+
+        if (json_config_set_network_service_config(&sys_net) != AICAM_OK) {
+            cJSON_Delete(request_json);
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to save HaLow IP configuration");
+        }
+
+        if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
+            cJSON_Delete(request_json);
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get HaLow interface configuration");
+        }
+
+        halow_copy_ip_service_to_cfg(&sys_net, &cfg);
+        if (nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
+            cJSON_Delete(request_json);
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to apply HaLow IP configuration");
+        }
+
+        memset(&hw_info, 0, sizeof(hw_info));
+        if (nm_get_netif_info(NETIF_NAME_WIFI_HALOW, &hw_info) == AICAM_OK &&
+            hw_info.state == NETIF_STATE_UP) {
+            apply_live = AICAM_TRUE;
+        }
+        cJSON_Delete(request_json);
+
+        if (apply_live && mm_halow_apply_ip_config() != 0) {
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to apply HaLow IP configuration");
+        }
+
+        if (cfg_mode == NETIF_IP_MODE_DHCP && apply_live) {
+            memcpy(ip, hw_info.ip_addr, sizeof(ip));
+            memcpy(mask, hw_info.netmask, sizeof(mask));
+            memcpy(gw, hw_info.gw, sizeof(gw));
+        }
+
+        halow_fill_ip_json(response_json, cfg_mode, ip, mask, gw);
+        cJSON_AddStringToObject(response_json, "message", "HaLow IP configuration updated");
+    } else {
+        cJSON_Delete(response_json);
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET or POST method is allowed");
+    }
+
+    json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+    return api_response_success(ctx, json_string, "HaLow IP configuration");
 }
 #endif /* NETIF_WIFI_HALOW_IS_ENABLE */
 
@@ -3358,6 +3570,20 @@ static const api_route_t network_module_routes[] = {
         .path = API_PATH_PREFIX"/system/network/halow/delete",
         .method = "POST",
         .handler = network_halow_delete_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/halow/ip",
+        .method = "GET",
+        .handler = network_halow_ip_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/halow/ip",
+        .method = "POST",
+        .handler = network_halow_ip_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

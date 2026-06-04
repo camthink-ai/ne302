@@ -1281,7 +1281,11 @@ void sme_authenticate(struct wpa_supplicant *wpa_s,
 {
 	struct wpa_connect_work *cwork;
 
-	if (bss == NULL || ssid == NULL)
+	if (ssid == NULL)
+		return;
+	if (bss == NULL && ssid->bssid_set)
+		bss = wpa_bss_get_bssid_latest(wpa_s, ssid->bssid);
+	if (bss == NULL)
 		return;
 	if (wpa_s->connect_work) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "SME: Reject sme_authenticate() call since connect_work exist");

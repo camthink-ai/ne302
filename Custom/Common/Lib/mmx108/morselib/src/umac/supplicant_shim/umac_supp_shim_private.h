@@ -73,3 +73,7 @@ enum mmwlan_status umac_supp_start_supp(struct umac_data *umacd);
 
 
 void umac_supp_event(void *ctx, enum wpa_event_type event, union wpa_event_data *data);
+
+
+bool mmwpas_prepare_quick_connect(struct umac_supp_shim_data *data,
+                                  const struct mmwlan_sta_args *args);

@@ -31,6 +31,15 @@
 #include "umac/wnm_sleep/umac_wnm_sleep.h"
 #include "umac/ies/s1g_capabilities.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wc++-compat"
+#include "hostap/src/utils/includes.h"
+#include "hostap/src/utils/os.h"
+#include "hostap/wpa_supplicant/bss.h"
+#include "hostap/wpa_supplicant/wpa_supplicant_i.h"
+#pragma GCC diagnostic pop
+
 
 #define HZ_TO_KHZ(x) ((x) / 1000)
 
@@ -439,6 +448,127 @@ static bool mmwpas_bss_cache_lookup(struct umac_supp_shim_data *data,
 
     return false;
 }
+
+/**
+ * Seed the WPAS BSS table so connect_without_scan can call sme_authenticate()
+ * with a non-NULL @c wpa_bss (SME returns immediately when bss is NULL).
+ */
+static bool mmwpas_inject_quick_connect_bss(struct umac_supp_shim_data *data,
+                                            const struct mmwlan_sta_args *args)
+{
+    struct wpa_supplicant *wpa_s;
+    struct wpa_scan_res *res;
+    size_t res_len;
+    uint8_t *ies;
+    struct os_reltime now;
+    uint32_t freq_hz;
+
+    if (data == NULL || data->sta_wpa_s == NULL || args == NULL) {
+        return false;
+    }
+    if (!args->preconnect_bss_valid || mm_mac_addr_is_zero(args->bssid)) {
+        return false;
+    }
+
+    wpa_s = data->sta_wpa_s;
+    if (args->preconnect_probe_ies_len == 0U) {
+        return false;
+    }
+
+    res_len = sizeof(*res) + args->preconnect_probe_ies_len;
+    res = (struct wpa_scan_res *)os_zalloc(res_len);
+    if (res == NULL) {
+        return false;
+    }
+
+    freq_hz = args->preconnect_channel_freq_hz;
+    if (freq_hz == 0U) {
+        struct ie_s1g_operation s1g_op;
+        if (ie_s1g_operation_parse((struct dot11_ie_s1g_operation *)
+                                       args->preconnect_s1g_operation_ie,
+                                   &s1g_op)) {
+            const struct mmwlan_s1g_channel *chan =
+                umac_regdb_get_channel(umac_data_get_umacd(),
+                                       s1g_op.operating_channel_index);
+            if (chan != NULL) {
+                freq_hz = chan->centre_freq_hz;
+            }
+        }
+    }
+
+    res->flags = WPA_SCAN_QUAL_INVALID | WPA_SCAN_LEVEL_DBM;
+    mac_addr_copy(res->bssid, args->bssid);
+    if (freq_hz != 0U) {
+        res->freq = KHZ_TO_MHZ(HZ_TO_KHZ(freq_hz));
+        res->freq_offset = KHZ_TO_S1G_OFFSET(HZ_TO_KHZ(freq_hz));
+    }
+    res->beacon_int = args->preconnect_beacon_interval;
+    res->level = args->preconnect_rssi;
+    res->ie_len = args->preconnect_probe_ies_len;
+    res->noise = 0;
+    ies = (uint8_t *)(res + 1);
+    memcpy(ies, args->preconnect_probe_ies, res->ie_len);
+
+    os_get_reltime(&now);
+    wpa_bss_update_start(wpa_s);
+    wpa_bss_update_scan_res(wpa_s, res, &now);
+    wpa_bss_update_end(wpa_s, NULL, 1);
+    os_free(res);
+
+    if (wpa_bss_get_bssid_latest(wpa_s, args->bssid) == NULL) {
+        return false;
+    }
+
+    return true;
+}
+
+
+bool mmwpas_prepare_quick_connect(struct umac_supp_shim_data *data,
+                                  const struct mmwlan_sta_args *args)
+{
+    struct umac_connection_bss_cfg cfg;
+
+    if (data == NULL || data->sta_wpa_s == NULL || args == NULL)
+    {
+        return false;
+    }
+
+    if (!args->preconnect_bss_valid || mm_mac_addr_is_zero(args->bssid))
+    {
+        return false;
+    }
+
+    if (!ie_s1g_operation_parse((struct dot11_ie_s1g_operation *)args->preconnect_s1g_operation_ie,
+                                &cfg.channel_cfg))
+    {
+        return false;
+    }
+
+    mmosal_free(data->bss_cache);
+    data->bss_cache = NULL;
+
+    data->bss_cache = (struct bss_cache *)mmosal_malloc(BSS_CACHE_SIZE(1));
+    if (data->bss_cache == NULL)
+    {
+        return false;
+    }
+
+    data->bss_cache->num_entries = 1;
+    struct bss_cache_entry *entry = &data->bss_cache->entries[0];
+    memcpy(entry->bssid, args->bssid, sizeof(entry->bssid));
+    memcpy(entry->s1g_operation_ie,
+           args->preconnect_s1g_operation_ie,
+           sizeof(entry->s1g_operation_ie));
+    entry->beacon_interval = args->preconnect_beacon_interval;
+
+    if (!mmwpas_inject_quick_connect_bss(data, args)) {
+        return false;
+    }
+
+    data->sta_wpa_s->connect_without_scan = data->sta_wpa_s->conf->ssid;
+    return true;
+}
+
 
 static void mmwpas_scan_complete_handler(struct umac_data *umacd,
                                          enum mmwlan_scan_state result_code)

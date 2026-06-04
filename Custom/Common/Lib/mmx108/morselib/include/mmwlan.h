@@ -80,6 +80,8 @@ enum mmwlan_status
     /** Indicates that the specified VIF is not active or that no VIF was specified and a VIF
      *  could not be automatically inferred. */
     MMWLAN_VIF_ERROR,
+    /** Indicates that the hardware device is not available. */
+    MMWLAN_HW_DEVICE_UNAVAILABLE,
 };
 
 /** Maximum allowable length of an SSID. */
@@ -693,6 +695,11 @@ static inline enum mmwlan_status mmwlan_get_mac_addr(uint8_t *mac_addr)
  * API for performing WLAN Scan operations.
  */
 
+/** Length of @ref mmwlan_scan_result.s1g_operation_ie (full dot11 S1G Operation IE). */
+#define MMWLAN_PRECONNECT_S1G_OP_IE_LEN (7U)
+/** Max probe-response IE bytes cached for quick join (RSN/SAE, etc.). */
+#define MMWLAN_PRECONNECT_PROBE_IES_MAX (384U)
+
 /** Result of the scan request. */
 struct mmwlan_scan_result
 {
@@ -725,6 +732,12 @@ struct mmwlan_scan_result
     int8_t noise_dbm;
     /** TSF timestamp in the Probe Response frame. */
     uint64_t tsf;
+    /**
+     * When true, @c s1g_operation_ie holds the full S1G Operation IE from this probe
+     * (same layout as @ref mmwlan_sta_args.preconnect_s1g_operation_ie).
+     */
+    bool s1g_operation_ie_valid;
+    uint8_t s1g_operation_ie[MMWLAN_PRECONNECT_S1G_OP_IE_LEN];
 };
 
 /** mmwlan scan rx callback function prototype. */
@@ -1173,6 +1186,26 @@ struct mmwlan_sta_args
      * 4-address mode, this will trigger the AP to move the STA to a separate virtual interface.
      */
     enum mmwlan_4addr_mode use_4addr;
+    /**
+     * When true together with a non-zero @c bssid and valid @c preconnect_s1g_operation_ie,
+     * the driver may skip the connect-time scan and associate directly using cached probe data.
+     */
+    bool preconnect_bss_valid;
+    /** Beacon interval from the probe response used for quick join (when @c preconnect_bss_valid). */
+    uint16_t preconnect_beacon_interval;
+    /**
+     * Raw S1G Operation IE (EID 232, 7 bytes) from the probe response.
+     * Required for quick join channel configuration.
+     */
+    uint8_t preconnect_s1g_operation_ie[MMWLAN_PRECONNECT_S1G_OP_IE_LEN];
+    /** Centre frequency (Hz) from the cached probe response. */
+    uint32_t preconnect_channel_freq_hz;
+    /** RSSI (dBm) from the cached probe response. */
+    int16_t preconnect_rssi;
+    /** Length of @c preconnect_probe_ies (0 if only S1G IE was cached). */
+    uint16_t preconnect_probe_ies_len;
+    /** Full probe-response IE blob for WPAS BSS table seeding. */
+    uint8_t preconnect_probe_ies[MMWLAN_PRECONNECT_PROBE_IES_MAX];
 };
 
 /**
@@ -1205,6 +1238,13 @@ struct mmwlan_sta_args
         .sta_evt_cb = NULL,                                            \
         .sta_evt_cb_arg = NULL,                                        \
         .use_4addr = MMWLAN_4ADDR_MODE_DISABLED,                       \
+        .preconnect_bss_valid = false,                                 \
+        .preconnect_beacon_interval = 0,                               \
+        .preconnect_s1g_operation_ie = { 0 },                          \
+        .preconnect_channel_freq_hz = 0,                               \
+        .preconnect_rssi = 0,                                          \
+        .preconnect_probe_ies_len = 0,                                 \
+        .preconnect_probe_ies = { 0 },                               \
     }
 
 /**

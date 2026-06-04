@@ -17,6 +17,13 @@ int mm_halow_start_scan(wireless_scan_callback_t callback);
 wireless_scan_result_t *mm_halow_get_storage_scan_result(void);
 int mm_halow_update_storage_scan_result(uint32_t timeout_ms);
 
+/**
+ * Select a scanned AP for quick join (sets @c wireless_cfg.bssid).
+ * Requires a prior scan that captured S1G Operation IE for @p bssid (within 60s).
+ * @return 0 on success, -1 if @p bssid is not in the quick-join cache.
+ */
+int mm_halow_set_preconnect_target(const uint8_t bssid[6]);
+
 int mm_halow_set_regdomain(const char *country_code);
 
 /** Country code buffer size (2 letters + null), matches @ref MMWLAN_COUNTRY_CODE_LEN. */
@@ -39,6 +46,12 @@ int mm_halow_print_version(void);
  *                     and then prints metadata. If NULL, uses the current HaLow config country code.
  */
 int mm_halow_print_bcf_info(const char *country_code);
+
+/**
+ * Apply @c halow_netif_cfg IP settings at runtime (DHCP or static).
+ * @return 0 on success, -1 if stack not ready or mmipal rejected the change.
+ */
+int mm_halow_apply_ip_config(void);
 
 /** HaLow DPP (Wi-Fi Easy Connect) completion events. */
 typedef enum {

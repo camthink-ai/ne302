@@ -746,6 +746,24 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save HaLow BSSID to NVS");
 
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_IP_MODE, config->halow_ip_mode);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow IP mode to NVS");
+
+    {
+        uint32_t ip_val = ((uint32_t)config->halow_ip_addr[0] << 24) | ((uint32_t)config->halow_ip_addr[1] << 16) |
+                          ((uint32_t)config->halow_ip_addr[2] << 8) | config->halow_ip_addr[3];
+        result = json_config_nvs_write_uint32(NVS_KEY_HALOW_IP_ADDR, ip_val);
+
+        uint32_t mask_val = ((uint32_t)config->halow_netmask[0] << 24) | ((uint32_t)config->halow_netmask[1] << 16) |
+                            ((uint32_t)config->halow_netmask[2] << 8) | config->halow_netmask[3];
+        result = json_config_nvs_write_uint32(NVS_KEY_HALOW_NETMASK, mask_val);
+
+        uint32_t gw_val = ((uint32_t)config->halow_gateway[0] << 24) | ((uint32_t)config->halow_gateway[1] << 16) |
+                          ((uint32_t)config->halow_gateway[2] << 8) | config->halow_gateway[3];
+        result = json_config_nvs_write_uint32(NVS_KEY_HALOW_GATEWAY, gw_val);
+    }
+
     // Save known_network_count
     result = json_config_nvs_write_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, config->known_network_count);
     if (result != AICAM_OK)
@@ -1923,6 +1941,32 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
     result = json_config_nvs_read_string(NVS_KEY_HALOW_BSSID, config->network_service.halow_bssid, sizeof(config->network_service.halow_bssid));
     if (result != AICAM_OK)
         json_config_nvs_write_string(NVS_KEY_HALOW_BSSID, config->network_service.halow_bssid);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_IP_MODE, &temp_uint32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_ip_mode = temp_uint32;
+    } else {
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_IP_MODE, config->network_service.halow_ip_mode);
+    }
+
+    if (json_config_nvs_read_uint32(NVS_KEY_HALOW_IP_ADDR, &temp_uint32) == AICAM_OK) {
+        config->network_service.halow_ip_addr[0] = (temp_uint32 >> 24) & 0xFF;
+        config->network_service.halow_ip_addr[1] = (temp_uint32 >> 16) & 0xFF;
+        config->network_service.halow_ip_addr[2] = (temp_uint32 >> 8) & 0xFF;
+        config->network_service.halow_ip_addr[3] = temp_uint32 & 0xFF;
+    }
+    if (json_config_nvs_read_uint32(NVS_KEY_HALOW_NETMASK, &temp_uint32) == AICAM_OK) {
+        config->network_service.halow_netmask[0] = (temp_uint32 >> 24) & 0xFF;
+        config->network_service.halow_netmask[1] = (temp_uint32 >> 16) & 0xFF;
+        config->network_service.halow_netmask[2] = (temp_uint32 >> 8) & 0xFF;
+        config->network_service.halow_netmask[3] = temp_uint32 & 0xFF;
+    }
+    if (json_config_nvs_read_uint32(NVS_KEY_HALOW_GATEWAY, &temp_uint32) == AICAM_OK) {
+        config->network_service.halow_gateway[0] = (temp_uint32 >> 24) & 0xFF;
+        config->network_service.halow_gateway[1] = (temp_uint32 >> 16) & 0xFF;
+        config->network_service.halow_gateway[2] = (temp_uint32 >> 8) & 0xFF;
+        config->network_service.halow_gateway[3] = temp_uint32 & 0xFF;
+    }
 
     // Load known_network_count
     result = json_config_nvs_read_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, &temp_uint32);

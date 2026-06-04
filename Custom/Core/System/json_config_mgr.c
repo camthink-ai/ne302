@@ -164,7 +164,11 @@
         .halow_security = 0,
         .halow_country_code = "",
         .halow_bssid = "",
-         
+        .halow_ip_mode = POE_IP_MODE_DHCP,
+        .halow_ip_addr = {192, 168, 12, 199},
+        .halow_netmask = {255, 255, 255, 0},
+        .halow_gateway = {192, 168, 12, 1},
+
          // PoE/Ethernet default configuration
          .poe = {
              .ip_mode = POE_IP_MODE_DHCP,                // Default to DHCP

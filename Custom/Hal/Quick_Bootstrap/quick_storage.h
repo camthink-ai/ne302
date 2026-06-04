@@ -101,14 +101,16 @@ int quick_storage_read_work_mode_config(qs_work_mode_config_t *work_mode_config)
 
 /**
  * @brief Communication preference type
+ * @note Concrete values MUST match communication_type_t in communication_service.h:
+ *       0=none, 1=WiFi, 2=HaLow, 3=Cellular, 4=PoE. AUTO/DISABLE are quick-bootstrap only.
  */
 typedef enum {
-    COMM_PREF_TYPE_AUTO = 0,
-    COMM_PREF_TYPE_WIFI = 1,
-    COMM_PREF_TYPE_CELLULAR = 2,
-    COMM_PREF_TYPE_POE = 3,
-    COMM_PREF_TYPE_HALOW = 4,
-    COMM_PREF_TYPE_DISABLE = 0XFF,
+    COMM_PREF_TYPE_AUTO     = 0,    /* COMM_TYPE_NONE + enable_auto_priority */
+    COMM_PREF_TYPE_WIFI     = 1,    /* COMM_TYPE_WIFI */
+    COMM_PREF_TYPE_HALOW    = 2,    /* COMM_TYPE_HALOW */
+    COMM_PREF_TYPE_CELLULAR = 3,    /* COMM_TYPE_CELLULAR */
+    COMM_PREF_TYPE_POE      = 4,    /* COMM_TYPE_POE */
+    COMM_PREF_TYPE_DISABLE  = 0xFF,
 } qs_comm_pref_type_t;
 
 /**

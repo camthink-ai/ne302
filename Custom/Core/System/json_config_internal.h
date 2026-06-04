@@ -184,6 +184,10 @@
 #define NVS_KEY_HALOW_SECURITY          "hw_sec"
 #define NVS_KEY_HALOW_COUNTRY_CODE      "hw_cc"
 #define NVS_KEY_HALOW_BSSID              "hw_bssid"
+#define NVS_KEY_HALOW_IP_MODE            "hw_ip_mode"
+#define NVS_KEY_HALOW_IP_ADDR            "hw_ip"
+#define NVS_KEY_HALOW_NETMASK            "hw_mask"
+#define NVS_KEY_HALOW_GATEWAY            "hw_gw"
 
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"

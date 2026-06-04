@@ -172,6 +172,80 @@ static void make_startup_connection_decision(void);
 static communication_type_t get_highest_priority_available_type(void);
 static void startup_timeout_callback(void *argument);
 
+#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+/**
+ * @brief Validate NVS preferred_comm_type as communication_type_t (communication_service.h).
+ */
+static communication_type_t comm_nvs_to_comm_type(uint32_t raw)
+{
+    if (raw >= (uint32_t)COMM_TYPE_MAX) {
+        return COMM_TYPE_NONE;
+    }
+    return (communication_type_t)raw;
+}
+
+static void comm_reload_preferred_type_from_nvs(void)
+{
+    network_service_config_t net_cfg;
+    if (json_config_get_network_service_config(&net_cfg) != AICAM_OK) {
+        return;
+    }
+
+    g_communication_service.preferred_type =
+        comm_nvs_to_comm_type(net_cfg.preferred_comm_type);
+    g_communication_service.config.preferred_type = g_communication_service.preferred_type;
+    g_communication_service.config.enable_auto_priority = net_cfg.enable_auto_priority;
+}
+
+/**
+ * @brief User explicitly prefers 4G, or low-power wakeup should reuse last 4G path.
+ *        In this mode init 4G first; try HaLow only if 4G init fails.
+ */
+static aicam_bool_t comm_prefers_cellular_over_halow_init(void)
+{
+    communication_type_t pref = g_communication_service.preferred_type;
+
+    if (pref == COMM_TYPE_CELLULAR) {
+        return AICAM_TRUE;
+    }
+    if (pref != COMM_TYPE_NONE) {
+        return AICAM_FALSE;
+    }
+
+    /* RTC/PIR/button wakeup: no explicit preferred in NVS — follow last active comm type. */
+    if (system_service_requires_time_optimized_mode(system_service_get_wakeup_source_type())) {
+        device_info_config_t dev;
+        if (json_config_get_device_info_config(&dev) == AICAM_OK &&
+            communication_type_from_string(dev.communication_type) == COMM_TYPE_CELLULAR) {
+            return AICAM_TRUE;
+        }
+    }
+
+    return AICAM_FALSE;
+}
+
+static aicam_result_t comm_start_halow_init_fallback(const char *reason)
+{
+    if (!g_communication_service.config.auto_start_halow ||
+        !g_communication_service.halow_available ||
+        g_communication_service.halow_init_started) {
+        return AICAM_OK;
+    }
+
+    g_communication_service.halow_init_started = AICAM_TRUE;
+    LOG_SVC_INFO("%s", reason);
+    aicam_result_t halow_result = netif_init_manager_init_async(NETIF_NAME_WIFI_HALOW);
+    if (halow_result != AICAM_OK) {
+        LOG_SVC_WARN("Failed to start HaLow initialization: %d", halow_result);
+        g_communication_service.halow_init_started = AICAM_FALSE;
+        g_communication_service.halow_ready = AICAM_TRUE;
+        g_communication_service.halow_initialized = AICAM_FALSE;
+        g_communication_service.halow_available = AICAM_FALSE;
+    }
+    return halow_result;
+}
+#endif
+
 /* ==================== Known Networks Persistence ==================== */
 
 /**
@@ -891,8 +965,10 @@ aicam_result_t communication_service_init(void *config)
     // Load communication and cellular configuration from NVS
     network_service_config_t net_cfg;
     if (json_config_get_network_service_config(&net_cfg) == AICAM_OK) {
-        // Load communication type preferences
-        g_communication_service.preferred_type = (communication_type_t)net_cfg.preferred_comm_type;
+        // Load communication type preferences (normalize COMM_PREF vs COMM_TYPE encoding)
+        g_communication_service.preferred_type =
+            comm_nvs_to_comm_type(net_cfg.preferred_comm_type);
+        g_communication_service.config.preferred_type = g_communication_service.preferred_type;
         g_communication_service.config.enable_auto_priority = net_cfg.enable_auto_priority;
         
         // Load cellular settings
@@ -1085,6 +1161,10 @@ aicam_result_t communication_service_start(void)
     g_communication_service.poe_ready = AICAM_FALSE;
     g_communication_service.startup_decision_made = AICAM_FALSE;
     g_communication_service.startup_begin_time = rtc_get_uptime_ms();
+
+#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+    comm_reload_preferred_type_from_nvs();
+#endif
     
     // Create startup timeout timer
     if (g_communication_service.startup_timeout_timer == NULL) {
@@ -1127,8 +1207,36 @@ aicam_result_t communication_service_start(void)
         // Note: try_connect_known_networks() will be called in on_wifi_sta_ready() callback
     }
 
+#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+    aicam_bool_t cellular_first = comm_prefers_cellular_over_halow_init();
+#else
+    aicam_bool_t cellular_first = AICAM_FALSE;
+#endif
+
+#if NETIF_4G_CAT1_IS_ENABLE
+    /* Only init 4G at boot when explicitly preferred; HaLow-first uses on_halow_ready fallback. */
+    if (g_communication_service.config.auto_start_cellular && cellular_first) {
+        LOG_SVC_INFO("Starting async Cellular/4G initialization (preferred)...");
+        g_communication_service.cellular_init_started = AICAM_TRUE;
+        aicam_result_t cellular_result = netif_init_manager_init_async(NETIF_NAME_4G_CAT1);
+        if (cellular_result != AICAM_OK) {
+            LOG_SVC_WARN("Failed to start Cellular initialization: %d", cellular_result);
+            g_communication_service.cellular_init_started = AICAM_FALSE;
+            g_communication_service.cellular_ready = AICAM_TRUE;
 #if NETIF_WIFI_HALOW_IS_ENABLE
-    if (g_communication_service.config.auto_start_halow && g_communication_service.halow_available) {
+            if (cellular_first) {
+                (void)comm_start_halow_init_fallback(
+                    "Cellular init task failed to start, trying fallback HaLow initialization...");
+            }
+#endif
+        }
+    }
+#endif
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (!cellular_first &&
+        g_communication_service.config.auto_start_halow &&
+        g_communication_service.halow_available) {
         LOG_SVC_INFO("Starting async HaLow initialization...");
         g_communication_service.halow_init_started = AICAM_TRUE;
         aicam_result_t halow_result = netif_init_manager_init_async(NETIF_NAME_WIFI_HALOW);
@@ -1138,20 +1246,6 @@ aicam_result_t communication_service_start(void)
             g_communication_service.halow_ready = AICAM_TRUE;
             g_communication_service.halow_initialized = AICAM_FALSE;
             g_communication_service.halow_available = AICAM_FALSE;
-        }
-    }
-#endif
-    
-#if NETIF_4G_CAT1_IS_ENABLE
-    if (g_communication_service.config.auto_start_cellular &&
-        !g_communication_service.halow_init_started) {
-        LOG_SVC_INFO("Starting async Cellular/4G initialization...");
-        g_communication_service.cellular_init_started = AICAM_TRUE;
-        aicam_result_t cellular_result = netif_init_manager_init_async(NETIF_NAME_4G_CAT1);
-        if (cellular_result != AICAM_OK) {
-            LOG_SVC_WARN("Failed to start Cellular initialization: %d", cellular_result);
-            g_communication_service.cellular_init_started = AICAM_FALSE;
-            g_communication_service.cellular_ready = AICAM_TRUE;
         }
     }
 #endif
@@ -1802,6 +1896,13 @@ static void startup_timeout_callback(void *argument)
  */
 static communication_type_t get_highest_priority_available_type(void)
 {
+#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+    if (comm_prefers_cellular_over_halow_init() &&
+        g_communication_service.cellular_available) {
+        return COMM_TYPE_CELLULAR;
+    }
+#endif
+
     // Priority: PoE > HaLow > Cellular > WiFi
 #if NETIF_ETH_WAN_IS_ENABLE
     if (g_communication_service.poe_available) {
@@ -1892,7 +1993,19 @@ static void make_startup_connection_decision(void)
         }
         
         if (!hw_available) {
-            LOG_SVC_WARN("Preferred type %s hardware not available, auto-fallback", 
+#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+            if (target_type == COMM_TYPE_CELLULAR &&
+                comm_prefers_cellular_over_halow_init()) {
+                LOG_SVC_WARN("Preferred Cellular hardware not available, trying HaLow fallback init");
+                (void)comm_start_halow_init_fallback(
+                    "Cellular unavailable at startup, trying HaLow initialization...");
+                /* Keep preferred CELLULAR in NVS; wait for HaLow init before deciding. */
+                g_communication_service.startup_decision_made = AICAM_FALSE;
+                g_communication_service.halow_ready = AICAM_FALSE;
+                return;
+            }
+#endif
+            LOG_SVC_WARN("Preferred type %s hardware not available, auto-fallback",
                         communication_type_to_string(target_type));
             communication_set_preferred_type(COMM_TYPE_NONE);
             target_type = get_highest_priority_available_type();
@@ -2422,6 +2535,12 @@ static aicam_result_t apply_halow_config_from_json(void)
         }
     }
 
+    if_cfg.ip_mode = (net_cfg.halow_ip_mode == POE_IP_MODE_STATIC) ?
+                     NETIF_IP_MODE_STATIC : NETIF_IP_MODE_DHCP;
+    memcpy(if_cfg.ip_addr, net_cfg.halow_ip_addr, sizeof(if_cfg.ip_addr));
+    memcpy(if_cfg.netmask, net_cfg.halow_netmask, sizeof(if_cfg.netmask));
+    memcpy(if_cfg.gw, net_cfg.halow_gateway, sizeof(if_cfg.gw));
+
     int cfg_ret = nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg);
     if (cfg_ret != 0) {
         LOG_SVC_ERROR("Failed to set HaLow netif config: %d", cfg_ret);
@@ -2440,6 +2559,9 @@ static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_tim
         LOG_SVC_WARN("HaLow scan failed or timed out");
         return AICAM_FALSE;
     }
+
+    /* Let Morse hw-scan VIF finish teardown before STA connect / set_channel. */
+    osDelay(50);
 
     wireless_scan_result_t *scan = nm_wireless_get_scan_result_ex(NETIF_NAME_WIFI_HALOW);
     if (scan == NULL || scan->scan_info == NULL || scan->scan_count == 0) {
@@ -2523,7 +2645,9 @@ static void on_halow_ready(const char *if_name, aicam_result_t result)
         g_communication_service.stats.last_error_code = result;
 
 #if NETIF_4G_CAT1_IS_ENABLE
-        if (g_communication_service.config.auto_start_cellular &&
+        /* HaLow-first mode: fall back to 4G when HaLow init fails */
+        if (!comm_prefers_cellular_over_halow_init() &&
+            g_communication_service.config.auto_start_cellular &&
             !g_communication_service.cellular_init_started) {
             g_communication_service.cellular_init_started = AICAM_TRUE;
             LOG_SVC_INFO("HaLow failed, starting deferred Cellular/4G initialization...");
@@ -2620,6 +2744,13 @@ static void on_cellular_ready(const char *if_name, aicam_result_t result)
         
         uint32_t init_time = netif_init_manager_get_init_time(if_name);
         LOG_SVC_INFO("Cellular initialization completed in %u ms", init_time);
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+        /* 4G-first mode: skip HaLow init when 4G succeeded */
+        if (comm_prefers_cellular_over_halow_init()) {
+            g_communication_service.halow_ready = AICAM_TRUE;
+        }
+#endif
         
     } else {
         LOG_SVC_INFO("Cellular/4G initialization failed: %d", result);
@@ -2627,6 +2758,14 @@ static void on_cellular_ready(const char *if_name, aicam_result_t result)
         g_communication_service.cellular_available = AICAM_FALSE;
         g_communication_service.stats.failed_connections++;
         g_communication_service.stats.last_error_code = result;
+
+#if NETIF_WIFI_HALOW_IS_ENABLE
+        /* 4G-first mode: fall back to HaLow when 4G init fails */
+        if (comm_prefers_cellular_over_halow_init()) {
+            (void)comm_start_halow_init_fallback(
+                "Cellular failed, starting fallback HaLow initialization...");
+        }
+#endif
     }
     
     // Check if all interfaces ready, then make connection decision

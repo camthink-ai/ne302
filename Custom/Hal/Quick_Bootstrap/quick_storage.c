@@ -881,7 +881,21 @@ int quick_storage_read_netif_config(qs_comm_pref_type_t comm_pref_type, netif_co
                 }
             }
         }
-        netif_config->ip_mode = NETIF_IP_MODE_DHCP;
+        if (qs_nvs_read_uint32(NVS_KEY_HALOW_IP_MODE, &temp_u32) == AICAM_OK) {
+            netif_config->ip_mode = (temp_u32 == POE_IP_MODE_STATIC) ?
+                                    NETIF_IP_MODE_STATIC : NETIF_IP_MODE_DHCP;
+        } else {
+            netif_config->ip_mode = NETIF_IP_MODE_DHCP;
+        }
+        if (qs_nvs_read_uint32(NVS_KEY_HALOW_IP_ADDR, &temp_u32) == AICAM_OK) {
+            u32_to_ipv4(temp_u32, netif_config->ip_addr);
+        }
+        if (qs_nvs_read_uint32(NVS_KEY_HALOW_NETMASK, &temp_u32) == AICAM_OK) {
+            u32_to_ipv4(temp_u32, netif_config->netmask);
+        }
+        if (qs_nvs_read_uint32(NVS_KEY_HALOW_GATEWAY, &temp_u32) == AICAM_OK) {
+            u32_to_ipv4(temp_u32, netif_config->gw);
+        }
         return AICAM_OK;
     }
 #endif
