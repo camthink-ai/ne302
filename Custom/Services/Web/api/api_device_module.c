@@ -686,8 +686,12 @@ aicam_result_t device_light_config_handler(http_handler_context_t *ctx) {
         cJSON_AddBoolToObject(response_json, "connected", light_config.connected);
         cJSON_AddStringToObject(response_json, "mode", get_light_mode_string(light_config.mode));
         cJSON_AddNumberToObject(response_json, "brightness_level", light_config.brightness_level);
-        //cJSON_AddBoolToObject(response_json, "auto_trigger_enabled", light_config.auto_trigger_enabled);
-        //cJSON_AddNumberToObject(response_json, "light_threshold", light_config.light_threshold);
+        cJSON_AddNumberToObject(response_json, "light_threshold", light_config.light_threshold);
+
+        uint32_t ambient_light_level = 0;
+        if (device_service_get_ambient_light_level(&ambient_light_level) == AICAM_OK) {
+            cJSON_AddNumberToObject(response_json, "ambient_light_level", ambient_light_level);
+        }
         
         // Add custom schedule information
         cJSON* schedule_json = cJSON_CreateObject();
@@ -749,23 +753,16 @@ aicam_result_t device_light_config_handler(http_handler_context_t *ctx) {
             }
         }
         
-        // Update auto trigger if provided
-        // cJSON* auto_trigger_item = cJSON_GetObjectItem(request_json, "auto_trigger_enabled");
-        // if (auto_trigger_item && cJSON_IsBool(auto_trigger_item)) {
-        //     light_config.auto_trigger_enabled = cJSON_IsTrue(auto_trigger_item) ? AICAM_TRUE : AICAM_FALSE;
-        // }
-        
-        // Update light threshold if provided
-        // cJSON* threshold_item = cJSON_GetObjectItem(request_json, "light_threshold");
-        // if (threshold_item && cJSON_IsNumber(threshold_item)) {
-        //     double threshold_value = cJSON_GetNumberValue(threshold_item);
-        //     if (threshold_value >= 0.0 && threshold_value <= 1000.0) {
-        //         light_config.light_threshold = (uint32_t)threshold_value;
-        //     } else {
-        //         cJSON_Delete(request_json);
-        //         return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Light threshold must be between 0 and 1000");
-        //     }
-        // }
+        cJSON* threshold_item = cJSON_GetObjectItem(request_json, "light_threshold");
+        if (threshold_item && cJSON_IsNumber(threshold_item)) {
+            double threshold_value = cJSON_GetNumberValue(threshold_item);
+            if (threshold_value >= 0.0 && threshold_value <= 100.0) {
+                light_config.light_threshold = (uint32_t)threshold_value;
+            } else {
+                cJSON_Delete(request_json);
+                return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Light threshold must be between 0 and 100");
+            }
+        }
         
         // Update custom schedule if provided
         cJSON* schedule_item = cJSON_GetObjectItem(request_json, "custom_schedule");
@@ -820,8 +817,7 @@ aicam_result_t device_light_config_handler(http_handler_context_t *ctx) {
         cJSON_AddStringToObject(response_json, "message", "Light configuration updated successfully");
         cJSON_AddStringToObject(response_json, "mode", get_light_mode_string(light_config.mode));
         cJSON_AddNumberToObject(response_json, "brightness_level", light_config.brightness_level);
-        //cJSON_AddBoolToObject(response_json, "auto_trigger_enabled", light_config.auto_trigger_enabled);
-        //cJSON_AddNumberToObject(response_json, "light_threshold", light_config.light_threshold);
+        cJSON_AddNumberToObject(response_json, "light_threshold", light_config.light_threshold);
         
         // Send response
         char* json_string = cJSON_Print(response_json);

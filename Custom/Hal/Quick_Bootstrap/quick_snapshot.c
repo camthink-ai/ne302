@@ -317,12 +317,19 @@ static void qs_snapshot_thread(void *argument)
         qt_prof_step(&prof, "[QS] snap:ai_info ");
     }
 
-    /* light control: follow device_service fast path behavior (AUTO treated as ON) */
+    /* light control: follow device_service behavior */
     if (s_cfg.light_mode != QS_LIGHT_MODE_OFF) {
         aicam_bool_t light_on = AICAM_FALSE;
         if (s_cfg.light_mode == QS_LIGHT_MODE_ON) light_on = AICAM_TRUE;
-        else if (s_cfg.light_mode == QS_LIGHT_MODE_AUTO) light_on = AICAM_TRUE;
-        else if (s_cfg.light_mode == QS_LIGHT_MODE_CUSTOM) {
+        else if (s_cfg.light_mode == QS_LIGHT_MODE_AUTO) {
+            device_t *light_sensor = device_find_pattern(LIGHT_DEVICE_NAME, DEV_TYPE_MISC);
+            if (light_sensor) {
+                uint8_t rate = 0;
+                if (device_ioctl(light_sensor, MISC_CMD_ADC_GET_PERCENT, (uint8_t *)&rate, 0) == 0) {
+                    light_on = (rate < s_cfg.light_threshold) ? AICAM_TRUE : AICAM_FALSE;
+                }
+            }
+        } else if (s_cfg.light_mode == QS_LIGHT_MODE_CUSTOM) {
             /* custom schedule is handled by upper layer in normal flow; here keep it simple and ON if within [start,end) */
             uint32_t now_s = 0;
             /* rtc_get_time is in services; avoid dependency here. */

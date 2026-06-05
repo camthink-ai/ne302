@@ -14,8 +14,10 @@ export interface SetHardwareInfoReq {
     capture_storage_ai: boolean;
 }
 export interface SetLightConfigReq {
-    mode: 'auto' | 'custom' | 'off';
+    mode: 'off' | 'on' | 'auto' | 'custom';
     brightness_level: number;
+    light_threshold?: number;
+    ambient_light_level?: number;
     connected?: boolean;
     custom_schedule: {
         start_hour: number;
@@ -23,6 +25,10 @@ export interface SetLightConfigReq {
         end_hour: number;
         end_minute: number;
     }
+}
+
+export interface ControlLightReq {
+    enable: boolean;
 }
 
 /** FSBL persisted profile ids (see fsbl_app_common.h) */
@@ -46,6 +52,7 @@ const hardwareManagement = {
     postIspProfileImportReq: (body: Record<string, unknown>) => request.post('/api/v1/isp/config/import', body),
     getLightConfigReq: () => request.get('/api/v1/device/light/config'),
     setLightConfigReq: (data: SetLightConfigReq) => request.post('/api/v1/device/light/config', data),
+    controlLightReq: (data: ControlLightReq) => request.post('/api/v1/device/light/control', data),
 }
 
 export default hardwareManagement;

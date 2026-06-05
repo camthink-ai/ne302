@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { useLingui } from '@lingui/react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -6,16 +6,23 @@ import TimePicker from '@/components/time-picker';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
 import Slider from '@/components/slider';
+import SvgIcon from '@/components/svg-icon';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/tooltip';
 import hardwareServiceApi, { type SetLightConfigReq } from '@/services/api/hardware-management';
+
+type LightMode = SetLightConfigReq['mode'];
 
 export default function Light() {
    const { i18n } = useLingui();
    const [startTime, setStartTime] = useState('10:00');
    const [endTime, setEndTime] = useState('12:00');
    const [lightConfig, setLightConfig] = useState<SetLightConfigReq>({
-      mode: 'auto',
+      mode: 'off',
       brightness_level: 0,
+      light_threshold: 30,
       connected: false,
       custom_schedule: {
          start_hour: 0,
@@ -24,8 +31,27 @@ export default function Light() {
          end_minute: 0,
       },
    })
+   const lightConfigRef = useRef(lightConfig);
+   const testLightOnRef = useRef(false);
+   const brightnessApplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const latestBrightnessRef = useRef<number>(lightConfig.brightness_level);
+   const [testLightOn, setTestLightOn] = useState(false);
    const [loading, setLoading] = useState(true);
-   const { getLightConfigReq, setLightConfigReq } = hardwareServiceApi;
+   const [refreshingAmbient, setRefreshingAmbient] = useState(false);
+   const { getLightConfigReq, setLightConfigReq, controlLightReq } = hardwareServiceApi;
+
+   useEffect(() => {
+      lightConfigRef.current = lightConfig;
+   }, [lightConfig]);
+
+   useEffect(() => {
+      latestBrightnessRef.current = lightConfig.brightness_level;
+   }, [lightConfig.brightness_level]);
+
+   useEffect(() => {
+      testLightOnRef.current = testLightOn;
+   }, [testLightOn]);
+
    const initLightConfig = async () => {
       try {
          setLoading(true);
@@ -53,12 +79,66 @@ export default function Light() {
          throw error;
       }
    }
-   const handleSetMode = async (value: 'auto' | 'custom' | 'off') => {
+   const handleSetMode = async (value: LightMode) => {
       await handleSetLightConfig({ ...lightConfig, mode: value });
       setLightConfig({ ...lightConfig, mode: value });
    }
    const handleSetLightBrightness = async (value: number) => {
-      await handleSetLightConfig({ ...lightConfig, brightness_level: value });
+      const nextCfg: SetLightConfigReq = { ...lightConfigRef.current, brightness_level: value };
+      await handleSetLightConfig(nextCfg);
+      if (testLightOnRef.current) {
+         await controlLightReq({ enable: true });
+      }
+   }
+
+   const handleSetLightThreshold = async (value: number) => {
+      const nextCfg: SetLightConfigReq = { ...lightConfigRef.current, light_threshold: value };
+      await handleSetLightConfig(nextCfg);
+   }
+
+   const handleRefreshAmbientLight = async () => {
+      try {
+         setRefreshingAmbient(true);
+         const res = await getLightConfigReq();
+         setLightConfig(prev => ({
+            ...prev,
+            ambient_light_level: res.data.ambient_light_level,
+         }));
+      } catch (error) {
+         console.error('handleRefreshAmbientLight', error);
+      } finally {
+         setRefreshingAmbient(false);
+      }
+   }
+
+   const handleToggleTestLight = async (checked: boolean) => {
+      if (!checked && brightnessApplyTimerRef.current) {
+         clearTimeout(brightnessApplyTimerRef.current);
+         brightnessApplyTimerRef.current = null;
+      }
+      testLightOnRef.current = checked;
+      setTestLightOn(checked);
+      try {
+         if (checked) {
+            const value = lightConfigRef.current.brightness_level;
+            latestBrightnessRef.current = value;
+            const nextCfg: SetLightConfigReq = {
+               ...lightConfigRef.current,
+               brightness_level: value,
+            };
+            await handleSetLightConfig(nextCfg);
+            await controlLightReq({ enable: true });
+         } else {
+            await controlLightReq({ enable: false });
+         }
+      } catch (error) {
+         console.error('handleToggleTestLight', error);
+         testLightOnRef.current = !checked;
+         setTestLightOn(!checked);
+         if (checked) {
+            controlLightReq({ enable: false }).catch(() => {});
+         }
+      }
    }
 
    const handleSetStartTime = async (value: string) => {
@@ -80,6 +160,38 @@ export default function Light() {
          </div>
       </div>
    )
+
+   useEffect(() => {
+      if (loading) return;
+      if (!lightConfig?.connected || lightConfig.mode === 'off') {
+         if (testLightOn) {
+            if (brightnessApplyTimerRef.current) {
+               clearTimeout(brightnessApplyTimerRef.current);
+               brightnessApplyTimerRef.current = null;
+            }
+            controlLightReq({ enable: false }).catch(error => {
+               console.error('auto-disable test light', error);
+            });
+            setTestLightOn(false);
+         }
+      }
+   }, [lightConfig?.connected, lightConfig?.mode, loading, testLightOn]);
+
+   const scheduleRealtimeBrightnessApply = (value: number) => {
+      latestBrightnessRef.current = value;
+      if (!testLightOnRef.current) return;
+      if (brightnessApplyTimerRef.current) {
+         clearTimeout(brightnessApplyTimerRef.current);
+      }
+      brightnessApplyTimerRef.current = setTimeout(() => {
+         handleSetLightBrightness(latestBrightnessRef.current).catch(error => {
+            console.error('scheduleRealtimeBrightnessApply', error);
+         });
+      }, 150);
+   };
+
+   const thresholdValue = lightConfig.light_threshold ?? 30;
+
    return (
       <div>
          {loading ? skeletonScreen() : (
@@ -104,13 +216,13 @@ export default function Light() {
                            >
                               <SelectValue
                                 placeholder={i18n._('sys.hardware_management.fill_light_desc')}
-
                               />
                            </SelectTrigger>
                            <SelectContent>
-                              <SelectItem value="custom">{i18n._('sys.hardware_management.fill_light_type_custom')}</SelectItem>
-                              <SelectItem value="auto">{i18n._('sys.hardware_management.fill_light_type_open')}</SelectItem>
                               <SelectItem value="off">{i18n._('sys.hardware_management.fill_light_type_close')}</SelectItem>
+                              <SelectItem value="on">{i18n._('sys.hardware_management.fill_light_type_open')}</SelectItem>
+                              <SelectItem value="auto">{i18n._('sys.hardware_management.fill_light_type_auto')}</SelectItem>
+                              <SelectItem value="custom">{i18n._('sys.hardware_management.fill_light_type_custom')}</SelectItem>
                            </SelectContent>
                         </Select>
                      </div>
@@ -127,13 +239,80 @@ export default function Light() {
                            </div>
                         </>
                      )}
-                     {(lightConfig.mode === 'auto' || lightConfig.mode === 'custom') ? (
+                     {lightConfig.mode === 'auto' && (
+                        <>
+                           <Separator />
+                           <div className="flex justify-between items-center">
+                              <Label>{i18n._('sys.hardware_management.ambient_light_level')}</Label>
+                              <div className="flex items-center gap-2">
+                                 <p>{typeof lightConfig.ambient_light_level === 'number' ? `${lightConfig.ambient_light_level}%` : '-'}</p>
+                                 <Button
+                                   className="w-8 h-8 p-0"
+                                   variant="ghost"
+                                   disabled={refreshingAmbient}
+                                   onClick={handleRefreshAmbientLight}
+                                   title={i18n._('sys.device_tool.reload')}
+                                 >
+                                    <SvgIcon icon="reload2" className={`w-4 h-4 ${refreshingAmbient ? 'animate-spin' : ''}`} />
+                                 </Button>
+                              </div>
+                           </div>
+                           <Separator />
+                           <div className="flex justify-between">
+                              <Label>{i18n._('sys.hardware_management.light_threshold')}</Label>
+                              <div className="flex items-center gap-2">
+                                 <Slider
+                                   className="w-4xs md:w-2xs"
+                                   value={thresholdValue}
+                                   onChange={value => {
+                                      setLightConfig({ ...lightConfigRef.current, light_threshold: value });
+                                   }}
+                                   onChangeEnd={value => handleSetLightThreshold(value)}
+                                   max={100}
+                                   step={1}
+                                 />
+                                 <Input
+                                   className="w-[65px]"
+                                   type="number"
+                                   value={thresholdValue}
+                                   min={0}
+                                   max={100}
+                                   step={1}
+                                   onChange={(e) => {
+                                      const input = e.target as HTMLInputElement;
+                                      const n = Math.round(Number(input.value));
+                                      const clamped = Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
+                                      input.value = String(clamped);
+                                      setLightConfig({ ...lightConfig, light_threshold: clamped });
+                                    }}
+                                   onBlur={e => handleSetLightThreshold(Math.max(0, Math.min(100, Number.isNaN(Number((e.target as HTMLInputElement).value)) ? 0 : Number((e.target as HTMLInputElement).value))))}
+                                 />
+                              </div>
+                           </div>
+                           <p className="text-xs text-gray-500">{i18n._('sys.hardware_management.light_threshold_desc')}</p>
+                        </>
+                     )}
+                     {lightConfig.mode !== 'off' ? (
                         <>
                            <Separator />
                            <div className="flex justify-between">
                               <Label>{i18n._('sys.hardware_management.light_brightness')}</Label>
                               <div className="flex items-center gap-2">
-                                 <Slider className="w-4xs md:w-2xs" value={lightConfig.brightness_level} onChange={value => setLightConfig({ ...lightConfig, brightness_level: value })} onChangeEnd={value => handleSetLightBrightness(value)} max={100} step={1} />
+                                 <Slider
+                                   className="w-4xs md:w-2xs"
+                                   value={lightConfig.brightness_level}
+                                   onChange={value => {
+                                      const nextCfg: SetLightConfigReq = {
+                                         ...lightConfigRef.current,
+                                         brightness_level: value,
+                                      };
+                                      setLightConfig(nextCfg);
+                                      scheduleRealtimeBrightnessApply(value);
+                                   }}
+                                   onChangeEnd={value => handleSetLightBrightness(value)}
+                                   max={100}
+                                   step={1}
+                                 />
                                  <Input
                                    className="w-[65px]"
                                    type="number"
@@ -151,6 +330,21 @@ export default function Light() {
                                    onBlur={e => handleSetLightBrightness(Math.max(0, Math.min(100, Number.isNaN(Number((e.target as HTMLInputElement).value)) ? 0 : Number((e.target as HTMLInputElement).value))))}
                                  />
                               </div>
+                           </div>
+                           <Separator />
+                           <div className="flex justify-between items-center">
+                              <div className="flex items-center gap-2">
+                                 <Label>{i18n._('sys.hardware_management.fill_light_test')}</Label>
+                                 <Tooltip>
+                                    <TooltipTrigger>
+                                       <SvgIcon icon="info" className="w-4 h-4 text-gray-500" />
+                                    </TooltipTrigger>
+                                    <TooltipContent className="max-w-80 text-pretty">
+                                       {i18n._('sys.hardware_management.fill_light_test_tooltip')}
+                                    </TooltipContent>
+                                 </Tooltip>
+                              </div>
+                              <Switch checked={testLightOn} onCheckedChange={handleToggleTestLight} />
                            </div>
                         </>
                      ) : (

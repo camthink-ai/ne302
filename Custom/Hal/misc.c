@@ -644,7 +644,8 @@ static int light_get_value(uint8_t *rate)
     // osDelay(100);
     ADC_get_value(&voltage, 1);
     // pwr_manager_release(g_light.pwr_handle);
-    LOG_SIMPLE("light  get  voltage :%ld \r\n",voltage);
+    // LOG_SIMPLE("light  get  voltage :%ld \r\n",voltage);
+    voltage *= 2;
     voltage = MIN(MAX(voltage, LIGHT_MIN_SENS), LIGHT_MAX_SENS);
     *rate = (uint8_t)((voltage - LIGHT_MIN_SENS) * 100 / (LIGHT_MAX_SENS - LIGHT_MIN_SENS));
     return 0;

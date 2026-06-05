@@ -59,6 +59,7 @@ typedef struct {
     
     // Light management
     device_t *light_device;
+    device_t *light_sensor_device;
     light_config_t light_config;
     aicam_bool_t light_initialized;
     
@@ -577,6 +578,36 @@ static void update_battery_info(device_info_config_t *info)
 
 
 /**
+ * @brief Read ambient light level from light sensor (0-100%)
+ */
+static aicam_result_t read_ambient_light_level(uint32_t *light_level)
+{
+    if (!light_level) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    if (!g_device_service.light_sensor_device) {
+        g_device_service.light_sensor_device = device_find_pattern(LIGHT_DEVICE_NAME, DEV_TYPE_MISC);
+    }
+    if (!g_device_service.light_sensor_device) {
+        return AICAM_ERROR_NOT_FOUND;
+    }
+
+    uint8_t rate = 0;
+    int ret = device_ioctl(g_device_service.light_sensor_device,
+                           MISC_CMD_ADC_GET_PERCENT,
+                           (uint8_t *)&rate,
+                           0);
+    if (ret != 0) {
+        return AICAM_ERROR_IO;
+    }
+
+    *light_level = (uint32_t)rate;
+    g_device_service.sensor_data.light_level = *light_level;
+    return AICAM_OK;
+}
+
+/**
  * @brief Check if current time is within custom light schedule
  */
 static aicam_bool_t is_in_custom_light_schedule(const light_config_t *config)
@@ -603,50 +634,34 @@ static aicam_bool_t is_in_custom_light_schedule(const light_config_t *config)
 }
 
 /**
- * @brief Apply light control based on configuration
+ * @brief Decide whether fill light should be enabled for current configuration
  */
-static void apply_light_control(const light_config_t *config)
+static aicam_bool_t should_enable_fill_light(const light_config_t *config)
 {
-    if (!config || !config->connected || !g_device_service.light_device) {
-        return;
+    if (!config || !config->connected) {
+        return AICAM_FALSE;
     }
-    
-    aicam_bool_t should_enable = AICAM_FALSE;
-    
+
     switch (config->mode) {
         case LIGHT_MODE_OFF:
-            should_enable = AICAM_FALSE;
-            break;
-            
+            return AICAM_FALSE;
+
         case LIGHT_MODE_ON:
-            should_enable = AICAM_TRUE;
-            break;
-            
-        case LIGHT_MODE_AUTO:
-            // Auto control based on light sensor
-            if (config->auto_trigger_enabled && g_device_service.sensor_initialized) {
-                should_enable = (g_device_service.sensor_data.light_level < config->light_threshold);
+            return AICAM_TRUE;
+
+        case LIGHT_MODE_AUTO: {
+            uint32_t level = 0;
+            if (read_ambient_light_level(&level) != AICAM_OK) {
+                return AICAM_FALSE;
             }
-            break;
-            
+            return (level < config->light_threshold);
+        }
+
         case LIGHT_MODE_CUSTOM:
-            should_enable = is_in_custom_light_schedule(config);
-            break;
-            
+            return is_in_custom_light_schedule(config);
+
         default:
-            break;
-    }
-    
-    // Control fill light hardware through HAL layer interface
-    if (should_enable) {
-        // Set brightness level
-        uint8_t duty = config->brightness_level;
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
-        LOG_SVC_DEBUG("Light turned ON with brightness: %u%% (duty: %u)", config->brightness_level, duty);
-    } else {
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
-        LOG_SVC_DEBUG("Light turned OFF");
+            return AICAM_FALSE;
     }
 }
 
@@ -806,7 +821,7 @@ aicam_result_t device_service_start(void)
         LOG_SVC_INFO("Jpeg device found");
     }
     
-    // Find and initialize light device (using the same device name as flash_cmd)
+    // Find and initialize fill light device (PWM)
     g_device_service.light_device = device_find_pattern(FLASH_DEVICE_NAME, DEV_TYPE_MISC);
     if (g_device_service.light_device) {
         LOG_SVC_INFO("Light device found: %s", FLASH_DEVICE_NAME);
@@ -815,7 +830,15 @@ aicam_result_t device_service_start(void)
     } else {
         LOG_SVC_WARN("Light device not found: %s", FLASH_DEVICE_NAME);
     }
-    
+
+    // Find ambient light sensor device (ADC)
+    g_device_service.light_sensor_device = device_find_pattern(LIGHT_DEVICE_NAME, DEV_TYPE_MISC);
+    if (g_device_service.light_sensor_device) {
+        LOG_SVC_INFO("Light sensor device found: %s", LIGHT_DEVICE_NAME);
+    } else {
+        LOG_SVC_WARN("Light sensor device not found: %s", LIGHT_DEVICE_NAME);
+    }
+
     // Find and initialize LED device
     g_device_service.led_device = device_find_pattern(IND_EXT_DEVICE_NAME, DEV_TYPE_MISC);
     if (g_device_service.led_device) {
@@ -1197,22 +1220,32 @@ aicam_result_t device_service_light_set_config(const light_config_t *config)
     }
     
     // Validate parameters
-    if (config->brightness_level > 100 || 
+    if (config->brightness_level > 100 ||
+        config->light_threshold > 100 ||
         config->start_hour >= 24 || config->end_hour >= 24 ||
         config->start_minute >= 60 || config->end_minute >= 60) {
         return AICAM_ERROR_INVALID_PARAM;
     }
     
     memcpy(&g_device_service.light_config, config, sizeof(light_config_t));
+
+    if (g_device_service.light_config.mode == LIGHT_MODE_AUTO) {
+        g_device_service.light_config.auto_trigger_enabled = AICAM_TRUE;
+    }
     
     //store config to json_config_mgr
     aicam_result_t result = json_config_set_device_service_light_config(&g_device_service.light_config);
     if (result != AICAM_OK) {
         LOG_SVC_ERROR("Failed to set light configuration: %d", result);
     }
+
+    if (g_device_service.light_initialized &&
+        g_device_service.light_config.mode == LIGHT_MODE_OFF) {
+        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
+    }
     
-    LOG_SVC_INFO("Light configuration updated: mode=%d, brightness=%u%%", 
-                config->mode, config->brightness_level);
+    LOG_SVC_INFO("Light configuration updated: mode=%d, brightness=%u%%, threshold=%u",
+                config->mode, config->brightness_level, config->light_threshold);
     
     return AICAM_OK;
 }
@@ -1264,12 +1297,22 @@ aicam_result_t device_service_light_set_brightness(uint32_t brightness_level)
     // Update brightness level in configuration
     g_device_service.light_config.brightness_level = brightness_level;
     
+    // Set PWM duty cycle
     uint8_t duty = brightness_level;
     device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
     
     LOG_SVC_INFO("Light brightness set to: %u%% (duty: %u)", brightness_level, duty);
     
     return AICAM_OK;
+}
+
+aicam_result_t device_service_get_ambient_light_level(uint32_t *light_level)
+{
+    if (!g_device_service.initialized) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+
+    return read_ambient_light_level(light_level);
 }
 
 aicam_result_t device_service_light_blink(uint32_t blink_times, uint32_t interval_ms)
@@ -1509,31 +1552,7 @@ aicam_result_t device_service_camera_capture(uint8_t **buffer, int *out_len,
 
 
     // 1. light control
-    if (g_device_service.light_config.mode == LIGHT_MODE_AUTO &&
-        g_device_service.light_config.auto_trigger_enabled)
-    {
-        light_on = AICAM_TRUE;
-    }
-    else if (g_device_service.light_config.mode == LIGHT_MODE_CUSTOM)
-    {
-        RTC_TIME_S now_time = rtc_get_time();
-        int start_minutes = g_device_service.light_config.start_hour * 60 + g_device_service.light_config.start_minute;
-        int end_minutes = g_device_service.light_config.end_hour * 60 + g_device_service.light_config.end_minute;
-        int now_minutes = now_time.hour * 60 + now_time.minute;
-
-        if (start_minutes < end_minutes)
-        {
-            light_on = (now_minutes >= start_minutes && now_minutes < end_minutes);
-        }
-        else if (start_minutes > end_minutes)
-        {
-            light_on = (now_minutes >= start_minutes || now_minutes < end_minutes);
-        }
-        else
-        {
-            light_on = AICAM_FALSE;
-        }
-    }
+    light_on = should_enable_fill_light(&g_device_service.light_config);
 
     if (light_on)
     {
@@ -1897,31 +1916,7 @@ aicam_result_t device_service_camera_capture_fast(uint8_t **buffer, int *out_len
 
     // 7. Light control (same logic as device_service_camera_capture)
     if (g_device_service.light_initialized && g_device_service.light_device) {
-        if (g_device_service.light_config.mode == LIGHT_MODE_AUTO &&
-            g_device_service.light_config.auto_trigger_enabled)
-        {
-            light_on = AICAM_TRUE;
-        }
-        else if (g_device_service.light_config.mode == LIGHT_MODE_CUSTOM)
-        {
-            RTC_TIME_S now_time = rtc_get_time();
-            int start_minutes = g_device_service.light_config.start_hour * 60 + g_device_service.light_config.start_minute;
-            int end_minutes = g_device_service.light_config.end_hour * 60 + g_device_service.light_config.end_minute;
-            int now_minutes = now_time.hour * 60 + now_time.minute;
-
-            if (start_minutes < end_minutes)
-            {
-                light_on = (now_minutes >= start_minutes && now_minutes < end_minutes);
-            }
-            else if (start_minutes > end_minutes)
-            {
-                light_on = (now_minutes >= start_minutes || now_minutes < end_minutes);
-            }
-            else
-            {
-                light_on = AICAM_FALSE;
-            }
-        }
+        light_on = should_enable_fill_light(&g_device_service.light_config);
 
         if (light_on)
         {
@@ -2095,25 +2090,21 @@ aicam_result_t device_service_sensor_read(sensor_data_t *data)
         return AICAM_ERROR_NOT_INITIALIZED;
     }
     
-    // TODO: Read actual sensor data through HAL layer interface
-    // For now, simulate sensor readings
+    uint32_t light_level = 0;
+    if (read_ambient_light_level(&light_level) != AICAM_OK) {
+        light_level = g_device_service.sensor_data.light_level;
+    }
+
+    // TODO: Read temperature/humidity/PIR through HAL when available
     g_device_service.sensor_data.temperature = 20.0f + (float)(rand() % 20);
     g_device_service.sensor_data.humidity = 30.0f + (float)(rand() % 40);
-    g_device_service.sensor_data.light_level = 100 + (rand() % 900);
-    
-    // PIR detection simulation
+    g_device_service.sensor_data.light_level = light_level;
+
     if (g_device_service.pir_enabled) {
         g_device_service.sensor_data.pir_detected = (rand() % 10 == 0) ? AICAM_TRUE : AICAM_FALSE;
     }
     
     memcpy(data, &g_device_service.sensor_data, sizeof(sensor_data_t));
-    
-    // Update light control based on light sensor reading
-    if (g_device_service.light_initialized && 
-        g_device_service.light_config.mode == LIGHT_MODE_AUTO &&
-        g_device_service.light_config.auto_trigger_enabled) {
-        apply_light_control(&g_device_service.light_config);
-    }
     
     return AICAM_OK;
 }

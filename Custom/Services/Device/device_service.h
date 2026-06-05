@@ -263,6 +263,13 @@ aicam_result_t device_service_light_set_brightness(uint32_t brightness_level);
  */
 aicam_result_t device_service_light_blink(uint32_t blink_times, uint32_t interval_ms);
 
+/**
+ * @brief Read ambient light level from light sensor (0-100%)
+ * @param light_level Output ambient light level
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t device_service_get_ambient_light_level(uint32_t *light_level);
+
 /* ==================== Camera Interface ==================== */
 
 /**
