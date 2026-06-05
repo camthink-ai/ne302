@@ -1,8 +1,8 @@
-# NE301 Development Scripts - Complete Guide
+# NE302 Development Scripts - Complete Guide
 
 > **Documentation Index**: See [DOC_INDEX.md](DOC_INDEX.md)
 
-This directory contains essential development tools for the NE301 STM32N6570 project, including model generation, OTA packaging, and device flashing.
+This directory contains essential development tools for the NE302 STM32N6570 project, including model generation, OTA packaging, and device flashing.
 
 ## 📚 Table of Contents
 
@@ -97,19 +97,19 @@ make clean all
 
 # Step 2: Sign Binary (for secure boot)
 cd ../../Script
-./maker.sh sign ../Appli/Debug/ne301_Appli.bin
-# Output: ../Appli/Debug/ne301_Appli_signed.bin
+./maker.sh sign ../Appli/Debug/ne302_Appli.bin
+# Output: ../Appli/Debug/ne302_Appli_signed.bin
 
 # Step 3: Create OTA Package (REQUIRED! ALL parameters required!)
-python ota_packer.py ../Appli/Debug/ne301_Appli_signed.bin \
+python ota_packer.py ../Appli/Debug/ne302_Appli_signed.bin \
     -t app \
-    -n "NE301_APP" \
-    -d "NE301 Main Application" \
+    -n "NE302_APP" \
+    -d "NE302 Main Application" \
     -v 1.0.0.1 \
-    -o ../Appli/Debug/ne301_Appli_signed_v1.0.0.1_ota.bin
+    -o ../Appli/Debug/ne302_Appli_signed_v1.0.0.1_ota.bin
 
 # Step 4: Flash to Device
-./maker.sh flash ../Appli/Debug/ne301_Appli_signed_v1.0.0.1_ota.bin 0x70100000
+./maker.sh flash ../Appli/Debug/ne302_Appli_signed_v1.0.0.1_ota.bin 0x70100000
 ```
 
 ### Workflow 2: Web Development & Deployment
@@ -130,8 +130,8 @@ cd ../Script
 python ota_packer.py ../Web/firmware_assets/web-assets.bin \
     -o ../Web/firmware_assets/web-assets_v1.5.0.88_ota.bin \
     -t web \
-    -n "NE301_WEB" \
-    -d "NE301 Web User Interface" \
+    -n "NE302_WEB" \
+    -d "NE302 Web User Interface" \
     -v 1.5.0.88
 
 # Step 3: Verify OTA Package
@@ -153,7 +153,7 @@ cd Script
 # Step 1: Generate Model Binary
 ./generate-reloc-model.sh \
     -m ../Model/weights/yolov8n_256_quant_pc_uf_pose_coco-st.tflite \
-    -f reloc-ne301@../Model/neural_art_reloc.json \
+    -f reloc-ne302@../Model/neural_art_reloc.json \
     -o network_rel.bin
 
 # Step 2: Create Model Package
@@ -212,10 +212,10 @@ done
 cd ../../Script
 
 # Flash FSBL first
-./maker.sh flash ota_packages/ne301_FSBL_v1.0.0.2_ota.bin 0x70000000
+./maker.sh flash ota_packages/ne302_FSBL_v1.0.0.2_ota.bin 0x70000000
 
 # Flash APP
-./maker.sh flash ota_packages/ne301_Appli_v2.3.1.125_ota.bin 0x70100000
+./maker.sh flash ota_packages/ne302_Appli_v2.3.1.125_ota.bin 0x70100000
 
 # Flash Web Assets
 ./maker.sh flash ota_packages/web-assets_v1.5.0.88_ota.bin 0x70400000

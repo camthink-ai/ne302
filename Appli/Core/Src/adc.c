@@ -319,7 +319,7 @@ int ADC_get_value(uint32_t *value, uint8_t adc_num)
 		goto ADCEXIT;
 	}
 
-    if (HAL_IS_BIT_SET(HAL_ADC_GetState(hadc), HAL_ADC_STATE_REG_EOC)) {
+  if (HAL_IS_BIT_SET(HAL_ADC_GetState(hadc), HAL_ADC_STATE_REG_EOC)) {
 		adc_raw = HAL_ADC_GetValue(hadc);
 	} else {
 		goto ADCEXIT;

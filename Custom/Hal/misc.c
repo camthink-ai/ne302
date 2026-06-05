@@ -67,6 +67,7 @@ static key_instance_t f_key ={
 };
 
 static pwm_cfg_t flash_cfg = {
+    .last_on_max_duty = 0,
     .duty = FLASH_DUTY
 };
 
@@ -383,16 +384,32 @@ static void flash_on(void)
     if(g_flash.state != true){
         pwr_manager_acquire(g_flash.pwr_handle);
     }
-    TIM_set_duty(pwm_cfg->duty);
+
+    if (pwm_cfg->duty > 0) {
+        if (pwm_cfg->duty < 15 && pwm_cfg->last_on_max_duty < 15) {
+            TIM_set_duty(15);
+            pwm_cfg->last_on_max_duty = 15;
+            osDelay(10);
+        }
+        TIM_set_duty(pwm_cfg->duty);
+        if (pwm_cfg->duty > pwm_cfg->last_on_max_duty) {
+            pwm_cfg->last_on_max_duty = pwm_cfg->duty;
+        }
+    } else {
+        TIM_set_duty(0);
+        pwm_cfg->last_on_max_duty = 0;
+    }
     g_flash.state = true;
 }
 
 static void flash_off(void)
 {
+    pwm_cfg_t * pwm_cfg = (pwm_cfg_t *)g_flash.config;
     TIM_set_duty(0);
     if(g_flash.state != false){
         pwr_manager_release(g_flash.pwr_handle);
     }
+    pwm_cfg->last_on_max_duty = 0;
     g_flash.state = false;
 }
 
@@ -623,10 +640,10 @@ static int light_get_value(uint8_t *rate)
     uint32_t voltage = 0;
     if(!g_light.is_init)
         return -1;
-    pwr_manager_acquire(g_light.pwr_handle);
-    osDelay(1000);
+    // pwr_manager_acquire(g_light.pwr_handle);
+    // osDelay(100);
     ADC_get_value(&voltage, 1);
-    pwr_manager_release(g_light.pwr_handle);
+    // pwr_manager_release(g_light.pwr_handle);
     LOG_SIMPLE("light  get  voltage :%ld \r\n",voltage);
     voltage = MIN(MAX(voltage, LIGHT_MIN_SENS), LIGHT_MAX_SENS);
     *rate = (uint8_t)((voltage - LIGHT_MIN_SENS) * 100 / (LIGHT_MAX_SENS - LIGHT_MIN_SENS));
@@ -639,7 +656,7 @@ static int light_init(void *priv)
     MX_ADC1_Init();
     light->mtx_id = osMutexNew(NULL);
     light->type = MISC_TYPE_ADC;
-    light->pwr_handle = pwr_manager_get_handle(PWR_SENSOR_NAME);
+    // light->pwr_handle = pwr_manager_get_handle(PWR_SENSOR_NAME);
     light->is_init = true;
     return 0;
 }
@@ -652,15 +669,15 @@ static int light_deinit(void *priv)
         osMutexDelete(light->mtx_id);
         light->mtx_id = NULL;
     }
-    if (light->pwr_handle != 0) {
-        pwr_manager_release(light->pwr_handle);
-        light->pwr_handle = 0;
-    }
+    // if (light->pwr_handle != 0) {
+    //     pwr_manager_release(light->pwr_handle);
+    //     light->pwr_handle = 0;
+    // }
     MX_ADC1_DeInit();
     return 0;
 }
 
-__attribute__((unused)) static void light_register(void)
+static void light_register(void)
 {
     static dev_ops_t light_ops = {
         .init = light_init, 
@@ -676,7 +693,7 @@ __attribute__((unused)) static void light_register(void)
     device_register(g_light.dev);
 }
 
-__attribute__((unused)) static void light_unregister(void)
+static void light_unregister(void)
 {
     if (g_light.dev) {
         device_unregister(g_light.dev);
@@ -696,7 +713,7 @@ static int battery_get_value(void)
     pwr_manager_release(g_battery.pwr_handle);
 
     voltage *= 4;
-    LOG_SIMPLE("batv: %ld \r\n",voltage);
+    // LOG_SIMPLE("batv: %ld \r\n",voltage);
     if (voltage < BATTERY_MIN_VOLTAGE / 2) {
         // maybe typec inserted
         rate = 255;
@@ -844,7 +861,7 @@ int misc_register(void)
     flash_register();
     ind_register();
     ind_ext_register();
-    // light_register();
+    light_register();
     battery_register();
     io_register();
 
@@ -864,7 +881,7 @@ int misc_unregister(void)
 
     // Unregister all submodules
     battery_unregister();
-    // light_unregister();
+    light_unregister();
     ind_unregister();
     ind_ext_unregister();
     flash_unregister();

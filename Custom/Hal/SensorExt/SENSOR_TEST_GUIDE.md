@@ -1,6 +1,6 @@
 # Sensor Test Guide
 
-This document describes how to test the SensorExt sensors on the NE301 platform via the debug CLI (AICAM shell). It is based on actual test logs and covers the I2C bus scan, sensor example (sexp) modes, and expected outputs.
+This document describes how to test the SensorExt sensors on the NE302 platform via the debug CLI (AICAM shell). It is based on actual test logs and covers the I2C bus scan, sensor example (sexp) modes, and expected outputs.
 
 ---
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 ######################################
 # Docker Entrypoint Script
-# NE301 Development Environment
+# NE302 Development Environment
 ######################################
 
 set -e
@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}=========================================${NC}"
-echo -e "${GREEN}NE301 Docker Build Environment${NC}"
+echo -e "${GREEN}NE302 Docker Build Environment${NC}"
 echo -e "${GREEN}=========================================${NC}"
 echo ""
 

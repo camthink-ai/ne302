@@ -107,6 +107,7 @@ typedef struct {
 } blink_params_t;
 
 typedef struct {
+    uint8_t last_on_max_duty;
     uint8_t duty;
 } pwm_cfg_t;
 

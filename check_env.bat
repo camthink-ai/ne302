@@ -5,7 +5,7 @@ REM ######################################
 REM # Checks if all required tools are installed
 
 echo =========================================
-echo NE301 Required Tools Check
+echo NE302 Required Tools Check
 echo =========================================
 echo.
 

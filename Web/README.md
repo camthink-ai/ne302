@@ -1,4 +1,4 @@
-# NE301 Frontend
+# NE302 Frontend
 
 ## Environment Requirements
 

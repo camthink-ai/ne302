@@ -17,10 +17,10 @@ export default function ExportFirmware({ isExportFirmwareDialogOpen, setIsExport
     type FirmwareMap = Record<'app' | 'web' | 'device' | 'ai', FirmwareItem>;
     const [loading, setLoading] = useState(false);
     const [fireWares, setFireWares] = useState<FirmwareMap>({
-        app: { selected: false, filename: 'ne301_Appli.bin' },
-        web: { selected: false, filename: 'ne301_web.bin' },
-        device: { selected: false, filename: 'ne301_device.json' },
-        ai: { selected: false, filename: 'ne301_ai_model.bin' }
+        app: { selected: false, filename: 'ne302_Appli.bin' },
+        web: { selected: false, filename: 'ne302_web.bin' },
+        device: { selected: false, filename: 'ne302_device.json' },
+        ai: { selected: false, filename: 'ne302_ai_model.bin' }
     });
 
     const handleExportFirmware = async () => {

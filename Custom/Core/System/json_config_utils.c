@@ -169,7 +169,7 @@
              }
          }
          
-         snprintf(device_name, name_size, "NE301-%s", mac_suffix);
+         snprintf(device_name, name_size, "NE302-%s", mac_suffix);
      } else {
          // Fallback if MAC format is unexpected
          snprintf(device_name, name_size, "AICAM-000000");

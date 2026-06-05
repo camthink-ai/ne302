@@ -55,11 +55,11 @@ if [ -n "$VERSION_SUFFIX" ]; then
 fi
 
 # Process FSBL firmware
-FSBL_FILE="$BIN_DIR/ne301_FSBL_signed.bin"
+FSBL_FILE="$BIN_DIR/ne302_FSBL_signed.bin"
 if [ -f "$FSBL_FILE" ]; then
     echo "Processing FSBL firmware..."
     # Build output filename with suffix
-    OUTPUT_NAME="ne301_FSBL_v${FSBL_VERSION}"
+    OUTPUT_NAME="ne302_FSBL_v${FSBL_VERSION}"
     if [ -n "$VERSION_SUFFIX" ]; then
         OUTPUT_NAME="${OUTPUT_NAME}_${VERSION_SUFFIX}"
     fi
@@ -67,8 +67,8 @@ if [ -f "$FSBL_FILE" ]; then
     
     python ota_packer.py "$FSBL_FILE" \
         -o "$OUTPUT_DIR/$OUTPUT_NAME" \
-        -n "NE301_FSBL" \
-        -d "NE301 First Stage Boot Loader" \
+        -n "NE302_FSBL" \
+        -d "NE302 First Stage Boot Loader" \
         -t fsbl \
         -v "${FSBL_VERSION}" \
         $SUFFIX_ARG
@@ -77,11 +77,11 @@ else
 fi
 
 # Process APP firmware
-APP_FILE="$BIN_DIR/ne301_Appli_signed.bin"
+APP_FILE="$BIN_DIR/ne302_Appli_signed.bin"
 if [ -f "$APP_FILE" ]; then
     echo "Processing APP firmware..."
     # Build output filename with suffix
-    OUTPUT_NAME="ne301_Appli_v${APP_VERSION}"
+    OUTPUT_NAME="ne302_Appli_v${APP_VERSION}"
     if [ -n "$VERSION_SUFFIX" ]; then
         OUTPUT_NAME="${OUTPUT_NAME}_${VERSION_SUFFIX}"
     fi
@@ -89,8 +89,8 @@ if [ -f "$APP_FILE" ]; then
     
     python ota_packer.py "$APP_FILE" \
         -o "$OUTPUT_DIR/$OUTPUT_NAME" \
-        -n "NE301_APP" \
-        -d "NE301 Main Application" \
+        -n "NE302_APP" \
+        -d "NE302 Main Application" \
         -t app \
         -v "${APP_VERSION}" \
         $SUFFIX_ARG
@@ -111,8 +111,8 @@ if [ -f "$WEB_FILE" ]; then
     
     python ota_packer.py "$WEB_FILE" \
         -o "$OUTPUT_DIR/$OUTPUT_NAME" \
-        -n "NE301_WEB" \
-        -d "NE301 Web Assets" \
+        -n "NE302_WEB" \
+        -d "NE302 Web Assets" \
         -t web \
         -v "${WEB_VERSION}" \
         $SUFFIX_ARG
@@ -139,7 +139,7 @@ for model_file in "$BIN_DIR"/model_*.bin; do
         python ota_packer.py "$model_file" \
             -o "$OUTPUT_DIR/$OUTPUT_NAME" \
             -n "$model_name" \
-            -d "AI Model for NE301" \
+            -d "AI Model for NE302" \
             -t ai_model \
             -v "${AI_MODEL_VERSION}" \
             $SUFFIX_ARG

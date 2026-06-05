@@ -1,6 +1,6 @@
 /**
  * @file factory_test.c
- * @brief NE301 Factory Test Module Implementation
+ * @brief NE302 Factory Test Module Implementation
  */
 
 #include "factory_test.h"
@@ -263,7 +263,7 @@ int factory_test_run(uint32_t test_mask, factory_test_report_t *report) {
     uint32_t start_tick = osKernelGetTickCount();
     
     LOG_SIMPLE("\r\n========================================\r\n");
-    LOG_SIMPLE("NE301 Factory Test Starting...\r\n");
+    LOG_SIMPLE("NE302 Factory Test Starting...\r\n");
     LOG_SIMPLE("========================================\r\n");
     
     // Define test items in order
@@ -486,11 +486,11 @@ int factory_generate_serial_number(char *buffer, size_t size) {
     uint32_t uid1 = HAL_GetUIDw1();
     uint32_t uid2 = HAL_GetUIDw2();
     
-    // Generate serial number: NE301-YYYYMM-XXXXX
+    // Generate serial number: NE302-YYYYMM-XXXXX
     uint32_t unique_part = (uid0 ^ uid1 ^ uid2) & 0xFFFFF;
     
     // Get date (simplified - use RTC if available)
-    snprintf(buffer, size, "NE301-202512-%05lu", (unsigned long)unique_part);
+    snprintf(buffer, size, "NE302-202512-%05lu", (unsigned long)unique_part);
     
     return 0;
 }

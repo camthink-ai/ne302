@@ -36,7 +36,7 @@ This toolkit provides comprehensive model processing capabilities for STM32N6:
 ./generate-reloc-model.sh -m my_model.tflite -o my_network.bin -f "default@./config.json"
 
 # With additional stedgeai arguments
-./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne301@neural_art_reloc.json -o network.bin -a "--abc xxx --xyz xxx"
+./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne302@neural_art_reloc.json -o network.bin -a "--abc xxx --xyz xxx"
 
 # Clean generated files
 ./generate-reloc-model.sh -c
@@ -199,7 +199,7 @@ The `-a|--append` option allows you to pass additional arguments directly to the
 ./generate-reloc-model.sh -m my_model.tflite -a "--verbose --debug-info"
 
 # Combine multiple options
-./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne301@neural_art_reloc.json -o network.bin -a "--abc xxx --xyz xxx"
+./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne302@neural_art_reloc.json -o network.bin -a "--abc xxx --xyz xxx"
 ```
 
 ### Important Notes
@@ -245,7 +245,7 @@ The `-a|--append` option allows you to pass additional arguments directly to the
 ### For Object Detection (YOLO-X)
 ```bash
 # 1. Generate model binary
-./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne301@neural_art_reloc.json -o network_rel.bin
+./generate-reloc-model.sh -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne302@neural_art_reloc.json -o network_rel.bin
 
 # 2. Create package
 python model_packager.py create \
@@ -260,7 +260,7 @@ cp yolox_detection.bin ../bin/
 ### For Pose Estimation (YOLOv8)
 ```bash
 # 1. Generate model binary
-./generate-reloc-model.sh -m yolov8n_256_quant_pc_uf_pose_coco-st.tflite -f reloc-ne301@neural_art_reloc.json -o network_rel.bin
+./generate-reloc-model.sh -m yolov8n_256_quant_pc_uf_pose_coco-st.tflite -f reloc-ne302@neural_art_reloc.json -o network_rel.bin
 
 # 2. Create package
 python model_packager.py create \

@@ -1,4 +1,4 @@
-# NE301 Development Environment Setup Guide
+# NE302 Development Environment Setup Guide
 
 ## Quick Start
 
@@ -245,7 +245,7 @@ export PATH="/opt/arm-gnu-toolchain/bin:$PATH"
 Create `.make.env` in project root:
 
 ```makefile
-# NE301 Makefile Configuration
+# NE302 Makefile Configuration
 
 # ARM GCC Toolchain path
 GCC_PATH = C:/ST/STM32CubeCLT/GNU-tools-for-STM32/bin

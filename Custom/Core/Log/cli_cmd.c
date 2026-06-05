@@ -567,6 +567,7 @@ static int flash_cmd(int argc, char* argv[])
 
     device_t *misc = device_find_pattern(FLASH_DEVICE_NAME, DEV_TYPE_MISC);
     if(misc == NULL){
+        LOG_SIMPLE("flash device not found\r\n");
         return -1;
     }
 
@@ -575,19 +576,25 @@ static int flash_cmd(int argc, char* argv[])
     }else if(strcmp(argv[1], "off") == 0){
         device_ioctl(misc, MISC_CMD_PWM_OFF, 0, 0);
     }else if(strcmp(argv[1], "duty") == 0){
-        if (argc < 3)
+        if (argc < 3) {
+            LOG_SIMPLE("Usage: flash duty <duty>\r\n");
             return -1; 
+        }
         sscanf(argv[2], "%d", &duty);
         uint8_t data = (uint8_t)duty;
         device_ioctl(misc, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&data, 0);
         device_ioctl(misc, MISC_CMD_PWM_ON, 0, 0);
     }else if(strcmp(argv[1], "blink") == 0){
-        if (argc < 4)
+        if (argc < 4) {
+            LOG_SIMPLE("Usage: flash blink <blink_times> <interval_ms>\r\n");
             return -1;
+        }
         sscanf(argv[2], "%d", &blink_params.blink_times);
         sscanf(argv[3], "%d", &blink_params.interval_ms);
         device_ioctl(misc, MISC_CMD_PWM_SET_BLINK, (uint8_t *)&blink_params, 0);
     }
+
+    LOG_SIMPLE("flash command success\r\n");
     return 0;
 }
 

@@ -136,7 +136,7 @@ show_usage() {
     echo "  $0 --model my_model.tflite --output my_output.bin"
     echo ""
     echo "  # With additional stedgeai arguments:"
-    echo "  $0 -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne301@neural_art_reloc.json -o network.bin -a \"--abc xxx --xyz xxx\""
+    echo "  $0 -m st_yolo_x_nano_480_1.0_0.25_3_int8.tflite -f reloc-ne302@neural_art_reloc.json -o network.bin -a \"--abc xxx --xyz xxx\""
     echo "  $0 -m my_model.tflite -a \"--optimization-level high --memory-layout custom\""
     echo ""
     echo "  # Using positional arguments:"

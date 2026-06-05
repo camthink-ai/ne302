@@ -188,7 +188,7 @@ aicam_result_t rtsp_generate_sdp(char *sdp_buf, uint32_t buf_size,
     int len = snprintf(sdp_buf, buf_size,
         "v=0\r\n"
         "o=- 0 0 IN IP4 %s\r\n"
-        "s=NE301 RTSP Stream\r\n"
+        "s=NE302 RTSP Stream\r\n"
         "t=0 0\r\n"
         "m=video 0 RTP/AVP 96\r\n"
         "a=rtpmap:96 H264/90000\r\n"
@@ -238,7 +238,7 @@ static aicam_bool_t check_auth_required(rtsp_client_t *client, const char *cseq,
         if (method_str &&
             rtsp_digest_verify(auth_hdr, method_str,
                                auth_cfg.username, auth_cfg.password,
-                               client->nonce, "NE301")) {
+                               client->nonce, "NE302")) {
             client->authenticated = AICAM_TRUE;
             return AICAM_TRUE;
         }
@@ -256,7 +256,7 @@ static aicam_bool_t check_auth_required(rtsp_client_t *client, const char *cseq,
     int len = snprintf(resp_401, sizeof(resp_401),
         "RTSP/1.0 401 Unauthorized\r\n"
         "CSeq: %s\r\n"
-        "WWW-Authenticate: Digest realm=\"NE301\", nonce=\"%s\"\r\n"
+        "WWW-Authenticate: Digest realm=\"NE302\", nonce=\"%s\"\r\n"
         "\r\n",
         cseq ? cseq : "0", nonce);
     send_response(client->tcp_socket, resp_401, len);
@@ -301,7 +301,7 @@ static aicam_result_t handle_describe(rtsp_client_t *client, const char *cseq,
             int len = snprintf(resp_401, sizeof(resp_401),
                 "RTSP/1.0 401 Unauthorized\r\n"
                 "CSeq: %s\r\n"
-                "WWW-Authenticate: Digest realm=\"NE301\", nonce=\"%s\"\r\n"
+                "WWW-Authenticate: Digest realm=\"NE302\", nonce=\"%s\"\r\n"
                 "\r\n",
                 cseq ? cseq : "0", nonce);
             send_response(client->tcp_socket, resp_401, len);
@@ -314,7 +314,7 @@ static aicam_result_t handle_describe(rtsp_client_t *client, const char *cseq,
 
         if (!rtsp_digest_verify(auth_hdr, "DESCRIBE",
                                 auth_cfg.username, auth_cfg.password,
-                                client->nonce, "NE301")) {
+                                client->nonce, "NE302")) {
             LOG_SVC_WARN("RTSP: DESCRIBE auth FAILED");
             send_simple_response(client->tcp_socket, 403, "Forbidden", cseq, NULL);
             return AICAM_OK;

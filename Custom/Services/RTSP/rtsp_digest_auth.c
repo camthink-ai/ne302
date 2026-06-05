@@ -179,7 +179,7 @@ void rtsp_digest_build_challenge(const char *nonce, const char *realm,
 {
     snprintf(header, size,
              "Digest realm=\"%s\", nonce=\"%s\"",
-             realm ? realm : "NE301", nonce ? nonce : "");
+             realm ? realm : "NE302", nonce ? nonce : "");
 }
 
 static aicam_bool_t parse_quoted_value(const char *str, const char *key,
@@ -243,7 +243,7 @@ aicam_bool_t rtsp_digest_verify(const char *auth_header, const char *method,
     static char ha1_input[512], ha2_input[512], response_input[512];
     static char ha1[33], ha2[33], expected_response[33];
 
-    snprintf(ha1_input, sizeof(ha1_input), "%s:%s:%s", username, realm ? realm : "NE301", password);
+    snprintf(ha1_input, sizeof(ha1_input), "%s:%s:%s", username, realm ? realm : "NE302", password);
     md5_hex(ha1_input, strlen(ha1_input), ha1);
 
     snprintf(ha2_input, sizeof(ha2_input), "%s:%s", method, recv_uri);

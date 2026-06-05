@@ -102,6 +102,6 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]
 
 LABEL maintainer="CamThink Development Team" \
-      description="NE301 STM32N6570 AI Vision Camera Build Environment" \
+      description="NE302 STM32N6570 AI Vision Camera Build Environment" \
       version="1.0"
 

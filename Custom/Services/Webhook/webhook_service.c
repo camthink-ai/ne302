@@ -28,7 +28,7 @@
 #define WEBHOOK_TASK_STACK      (4096 * 4)
 #define WEBHOOK_TASK_PRIORITY   osPriorityBelowNormal
 #define WEBHOOK_TIMEOUT_MS      15000
-#define WEBHOOK_BOUNDARY        "----NE301WebhookBoundary"
+#define WEBHOOK_BOUNDARY        "----NE302WebhookBoundary"
 
 /* ISRG Root X1 (Let's Encrypt) — https://letsencrypt.org/certs/isrgrootx1.pem */
 #define WEBHOOK_CA_ISRG_X1 \

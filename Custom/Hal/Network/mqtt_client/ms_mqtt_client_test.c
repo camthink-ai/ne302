@@ -161,7 +161,7 @@ static const ms_mqtt_config_t ms_mqtt_default_config = {
         .is_verify_hostname = 1,
     },
     .last_will = {
-        .topic = "ne301/will/test",
+        .topic = "ne302/will/test",
         .msg = "last will message",
         .msg_len = 0,
         .qos = 1,

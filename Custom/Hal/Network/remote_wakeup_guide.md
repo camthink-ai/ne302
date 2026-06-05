@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This document describes how to use the remote wake-up sleep function on the NE301 platform. This function allows the device to enter low-power sleep mode and receive remote wake-up commands through the MQTT protocol, enabling remote control of the device.
+This document describes how to use the remote wake-up sleep function on the NE302 platform. This function allows the device to enter low-power sleep mode and receive remote wake-up commands through the MQTT protocol, enabling remote control of the device.
 
 The remote wake-up process mainly involves the following modules:
 - **Network Interface Management Module** (`netif_manager`): Configure WiFi network card and remote wake-up mode
@@ -14,7 +14,7 @@ The remote wake-up process mainly involves the following modules:
 ## 2. Prerequisites
 
 ### 2.1 Hardware Requirements
-- NE301 platform hardware
+- NE302 platform hardware
 - WiFi chip (SI91X) working normally
 - U0 module initialized and working normally
 
@@ -847,7 +847,7 @@ int u0_module_get_wakeup_flag(uint32_t *wakeup_flag);
 
 - **Document Version**: V1.0
 - **Creation Date**: 2025-01-XX
-- **Applicable Platform**: NE301
+- **Applicable Platform**: NE302
 - **Maintainer**: Development Team
 
 ---

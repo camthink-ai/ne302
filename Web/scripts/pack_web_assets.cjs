@@ -29,8 +29,8 @@ function main() {
     inputBin,
     '-o', outputBin,
     '-t', 'web',
-    '-n', 'NE301_WEB',
-    '-d', 'NE301 Web User Interface',
+    '-n', 'NE302_WEB',
+    '-d', 'NE302 Web User Interface',
     '-v', version,
   ];
 

@@ -3567,7 +3567,7 @@ static aicam_bool_t mqtt_build_topics(const char *mac_str, mqtt_service_config_t
         strcmp(cfg->data_receive_topic, "aicam/data/receive") == 0)
     {
         snprintf(cfg->data_receive_topic, sizeof(cfg->data_receive_topic),
-                "ne301/%s/down/control", mac_hex);
+                "ne302/%s/down/control", mac_hex);
         changed = AICAM_TRUE;
     }
 
@@ -3575,7 +3575,7 @@ static aicam_bool_t mqtt_build_topics(const char *mac_str, mqtt_service_config_t
         strcmp(cfg->data_report_topic, "aicam/data/report") == 0)
     {
         snprintf(cfg->data_report_topic, sizeof(cfg->data_report_topic),
-                "ne301/%s/upload/report", mac_hex);
+                "ne302/%s/upload/report", mac_hex);
         changed = AICAM_TRUE;
     }
 
@@ -3602,7 +3602,7 @@ void mqtt_service_update_client_id_and_topic(void)
         return;
     }
     if (strcmp(mqtt_config->base_config.client_id, "AICAM-000000") == 0) {
-        snprintf(mqtt_config->base_config.client_id, sizeof(mqtt_config->base_config.client_id), "NE301-%06X", (unsigned int)rtc_get_timeStamp());
+        snprintf(mqtt_config->base_config.client_id, sizeof(mqtt_config->base_config.client_id), "NE302-%06X", (unsigned int)rtc_get_timeStamp());
         changed = AICAM_TRUE;
     }
 

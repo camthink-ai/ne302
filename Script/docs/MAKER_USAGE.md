@@ -71,13 +71,13 @@ Flash firmware to device using ST-LINK debugger (SWD) with external loader suppo
 ./maker.sh flash firmware.hex
 
 # Flash FSBL
-./maker.sh flash ../bin/ne301_FSBL_signed_v1.0.0.1_ota.bin 0x70000000
+./maker.sh flash ../bin/ne302_FSBL_signed_v1.0.0.1_ota.bin 0x70000000
 
 # Flash APP to Slot A
-./maker.sh flash ../bin/ne301_Appli_signed_v1.0.0.1_ota.bin 0x70100000
+./maker.sh flash ../bin/ne302_Appli_signed_v1.0.0.1_ota.bin 0x70100000
 
 # Flash APP to Slot B
-./maker.sh flash ../bin/ne301_Appli_signed_v1.0.0.1_ota.bin 0x70500000
+./maker.sh flash ../bin/ne302_Appli_signed_v1.0.0.1_ota.bin 0x70500000
 
 # Flash Web Assets
 ./maker.sh flash ../Web/firmware_assets/web-assets_v1.5.0.88_ota.bin 0x70400000
@@ -128,12 +128,12 @@ Creates `<filename>_signed.bin` in the same directory.
 
 ```bash
 # Sign application binary
-./maker.sh sign ../Appli/Debug/ne301_Appli.bin
-# Output: ../Appli/Debug/ne301_Appli_signed.bin
+./maker.sh sign ../Appli/Debug/ne302_Appli.bin
+# Output: ../Appli/Debug/ne302_Appli_signed.bin
 
 # Sign FSBL
-./maker.sh sign ../FSBL/Debug/ne301_FSBL.bin
-# Output: ../FSBL/Debug/ne301_FSBL_signed.bin
+./maker.sh sign ../FSBL/Debug/ne302_FSBL.bin
+# Output: ../FSBL/Debug/ne302_FSBL_signed.bin
 ```
 
 **Typical Workflow:**
@@ -142,18 +142,18 @@ Creates `<filename>_signed.bin` in the same directory.
 make -C ../Appli clean all
 
 # 2. Sign
-./maker.sh sign ../Appli/Debug/ne301_Appli.bin
+./maker.sh sign ../Appli/Debug/ne302_Appli.bin
 
 # 3. Create OTA package
-python ota_packer.py ../Appli/Debug/ne301_Appli_signed.bin \
-    -o ../Appli/Debug/ne301_Appli_signed_v1.0.0.1_ota.bin \
+python ota_packer.py ../Appli/Debug/ne302_Appli_signed.bin \
+    -o ../Appli/Debug/ne302_Appli_signed_v1.0.0.1_ota.bin \
     -t app \
     -n "APP" \
     -d "Main Application" \
     -v 1.0.0.1
 
 # 4. Flash
-./maker.sh flash ../Appli/Debug/ne301_Appli_signed_v1.0.0.1_ota.bin 0x70100000
+./maker.sh flash ../Appli/Debug/ne302_Appli_signed_v1.0.0.1_ota.bin 0x70100000
 ```
 
 ---
@@ -183,12 +183,12 @@ Creates `<filename>.hex` in the same directory.
 
 ```bash
 # Convert application binary
-./maker.sh hex ../Appli/Debug/ne301_Appli.bin 0x70100000
-# Output: ../Appli/Debug/ne301_Appli.hex
+./maker.sh hex ../Appli/Debug/ne302_Appli.bin 0x70100000
+# Output: ../Appli/Debug/ne302_Appli.hex
 
 # Convert FSBL binary
-./maker.sh hex ../FSBL/Debug/ne301_FSBL.bin 0x70000000
-# Output: ../FSBL/Debug/ne301_FSBL.hex
+./maker.sh hex ../FSBL/Debug/ne302_FSBL.bin 0x70000000
+# Output: ../FSBL/Debug/ne302_FSBL.hex
 
 # Convert Web assets
 ./maker.sh hex ../bin/web-assets.bin 0x70400000

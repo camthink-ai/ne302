@@ -1,6 +1,6 @@
 # Model Directory
 
-This directory contains AI model files, configuration files, and build scripts for the NE301 project.
+This directory contains AI model files, configuration files, and build scripts for the NE302 project.
 
 ## Directory Structure
 
@@ -35,7 +35,7 @@ Neural Art relocation configuration file that defines compilation profiles for d
 Build system that automates:
 1. Model relocation (converting TFLite to relocatable binary)
 2. Model packaging (combining binary with JSON metadata)
-3. Output generation (`ne301_Model.bin`)
+3. Output generation (`ne302_Model.bin`)
 
 **Usage:**
 ```bash
@@ -50,7 +50,7 @@ make clean
 ```
 
 ### `docs/how_to_train_quant_deploy_yolov8n.md`
-Complete guide for training, quantizing, and deploying YOLOv8 models to NE301 devices.
+Complete guide for training, quantizing, and deploying YOLOv8 models to NE302 devices.
 
 ## Supported Model Types
 
@@ -132,7 +132,7 @@ cd Model
 make pkg-model
 ```
 
-The output will be in `build/ne301_Model_xxx_pkg.bin`
+The output will be in `build/ne302_Model_xxx_pkg.bin`
 
 ### 3. Deploy to Device
 

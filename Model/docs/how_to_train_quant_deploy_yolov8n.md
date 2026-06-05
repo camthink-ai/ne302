@@ -1,6 +1,6 @@
 # YOLOv8 Model Training, Quantization, and Deployment Guide
 
-This document introduces two methods to complete YOLOv8 model training, quantization, and deployment to NE301 devices:
+This document introduces two methods to complete YOLOv8 model training, quantization, and deployment to NE302 devices:
 
 - **Method 1: Using AI Tool Stack (Recommended)** - Use graphical tools to complete the full workflow from data collection, annotation, training, quantization to deployment
 - **Method 2: Manual Command Line Method** - Manually complete each step using command line tools
@@ -9,15 +9,15 @@ This document introduces two methods to complete YOLOv8 model training, quantiza
 
 ## Method 1: Using AI Tool Stack (Recommended)
 
-[AI Tool Stack](https://github.com/camthink-ai/AIToolStack) is an end-to-end edge AI toolkit dedicated to NeoEyes NE301, covering the complete workflow of data collection, annotation, training, quantization, and deployment.
+[AI Tool Stack](https://github.com/camthink-ai/AIToolStack) is an end-to-end edge AI toolkit dedicated to NeoEyes NE302, covering the complete workflow of data collection, annotation, training, quantization, and deployment.
 
 ### 1.1 Environment Setup
 
 **Prerequisites:**
 - Docker & docker-compose (required)
-- If you need to generate NE301 quantized model packages, pull the image in advance:
+- If you need to generate NE302 quantized model packages, pull the image in advance:
   ```sh
-  docker pull camthink/ne301-dev:latest
+  docker pull camthink/ne302-dev:latest
   ```
 
 ### 1.2 Deploy AI Tool Stack
@@ -34,12 +34,12 @@ docker-compose up
 
 > **Note:** Configuration parameters are now defined in the configuration file.  
 > To modify parameters such as `MQTT_BROKER_HOST`, please edit the environment variables in `docker-compose.yml`.  
-> Ensure the address is accessible by NE301 devices (usually use the host machine's actual IP address, not `localhost`).
+> Ensure the address is accessible by NE302 devices (usually use the host machine's actual IP address, not `localhost`).
 
 ### 1.3 Data Collection
 
 1. **Configure MQTT Connection**
-   - Configure MQTT connection on NE301 device, pointing to AI Tool Stack's MQTT broker
+   - Configure MQTT connection on NE302 device, pointing to AI Tool Stack's MQTT broker
    - Device will automatically upload collected image data via MQTT
 
 2. **Create AI Model Project**
@@ -83,11 +83,11 @@ docker-compose up
 ### 1.6 Model Quantization and Deployment
 
 1. **Model Quantization**
-   - Integrated NE301 quantization tools
-   - Automatically completes model quantization, generating quantized models suitable for NE301 devices
+   - Integrated NE302 quantization tools
+   - Automatically completes model quantization, generating quantized models suitable for NE302 devices
 
 2. **Model Packaging**
-   - One-click export of model file packages suitable for NE301 devices
+   - One-click export of model file packages suitable for NE302 devices
    - Automatic compatibility checking and inference speed evaluation
 
 3. **Deploy to Device**
@@ -98,7 +98,7 @@ docker-compose up
 
 - **Version Management**: Each trained and quantized model is automatically saved as an independent version, can be rolled back or exported at any time
 - **Model Testing**: Supports result testing of different model versions to help select the best model for deployment to devices
-- **External Model Quantization**: Supports importing existing YOLO models and quantizing them into NE301 model resources without retraining
+- **External Model Quantization**: Supports importing existing YOLO models and quantizing them into NE302 model resources without retraining
 
 ### 1.8 Complete Workflow
 
@@ -107,14 +107,14 @@ AI Tool Stack works with devices to complete the following full cycle:
 1. **Device Raw Image Data Collection** → Automatically upload via MQTT
 2. **Data Annotation** → Complete in annotation workbench
 3. **Model Training** → Use built-in training tools
-4. **Model Quantization** → Automatically complete NE301 optimization
+4. **Model Quantization** → Automatically complete NE302 optimization
 5. **Edge Deployment** → One-click deployment to device
 6. **Image Collection** → Continue collecting new data
 7. **Dataset Enrichment** → Add newly annotated data
 8. **Retraining** → Use enhanced dataset
 9. **Redeployment** → Update device model
 
-> **Detailed Documentation:** To understand the complete workflow of AI Tool Stack with NE301, please read the detailed documentation: [NE301 and AI Tool Stack Guide](https://github.com/camthink-ai/AIToolStack)
+> **Detailed Documentation:** To understand the complete workflow of AI Tool Stack with NE302, please read the detailed documentation: [NE302 and AI Tool Stack Guide](https://github.com/camthink-ai/AIToolStack)
 
 ---
 
@@ -155,9 +155,9 @@ Results saved to /ultralytics/runs/detect/predict
 💡 Learn more at https://docs.ultralytics.com/modes/predict
 ```
 
-#### 2.1.4 Install NE301 Project Deployment Environment
+#### 2.1.4 Install NE302 Project Deployment Environment
 
-To deploy models to NE301 devices, you need to set up the project development environment. Please refer to the [SETUP.md](../../SETUP.md) document in the project root directory for environment setup.
+To deploy models to NE302 devices, you need to set up the project development environment. Please refer to the [SETUP.md](../../SETUP.md) document in the project root directory for environment setup.
 
 ### 2.2 Model Training and Export
 
@@ -250,7 +250,7 @@ Quantized model generated: yolov8n_256_quant_pc_ui_od_coco.tflite
 yolo val model=./quantized_models/yolov8n_256_quant_pc_ui_od_coco.tflite data=coco.yaml imgsz=256
 ```
 
-### 2.4 Deploy Model to NE301 Device
+### 2.4 Deploy Model to NE302 Device
 
 #### 2.4.1 Prepare Model Files
 
@@ -258,7 +258,7 @@ Copy the quantized model file to the project `Model/weights/` directory and crea
 
 ```sh
 # Navigate to project root directory
-cd /path/to/ne301
+cd /path/to/ne302
 
 # Copy model file
 cp /your/path/quantized_models/yolov8n_256_quant_pc_ui_od_coco.tflite Model/weights/
@@ -319,7 +319,7 @@ MODEL_JSON = $(WEIGHTS_DIR)/$(MODEL_NAME).json
 make model
 make pkg-model
 
-# Build result is in build/ne301_Model_{vresion}_pkg.bin
+# Build result is in build/ne302_Model_{vresion}_pkg.bin
 ```
 
 **Step 3: Flash to Device**

@@ -1,9 +1,9 @@
 ######################################
-# Root Makefile - NE301 Project Build System
+# Root Makefile - NE302 Project Build System
 ######################################
 
 # Project configuration
-PROJECT_NAME = ne301
+PROJECT_NAME = ne302
 
 # ==============================================
 # Version Management (from version.mk)
@@ -102,7 +102,7 @@ OPT = -g3
 COMMON_CFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections -fstack-usage -std=gnu11
 COMMON_ASFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 COMMON_LDFLAGS = $(MCU_FLAGS) -specs=nano.specs -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--print-memory-usage -u _printf_float
-COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=64
+COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=32
 
 # Export to sub-Makefiles
 export CC AS CP SZ READELF HEX BIN MCU_FLAGS OPT
@@ -207,7 +207,7 @@ sign: $(foreach proj,fsbl app,sign-$(proj))
 #   $(2) = dependency target
 #   $(3) = target binary name (without .bin)
 #   $(4) = package type (fsbl, app, web, ai_model)
-#   $(5) = component name (NE301_FSBL, NE301_APP, etc.)
+#   $(5) = component name (NE302_FSBL, NE302_APP, etc.)
 #   $(6) = version number (without suffix, for -v parameter)
 #   $(7) = full version string (with suffix, for output filename)
 #   $(8) = suffix value (empty if no suffix)
@@ -221,10 +221,10 @@ pkg-$(1): $(2)
 endef
 
 # Generate package targets using unified version strings
-$(eval $(call pkg_project,fsbl,sign-fsbl,$(FSBL_NAME)_signed,fsbl,NE301_FSBL,$(FSBL_VERSION),$(FSBL_VERSION_STR),$(FSBL_EFFECTIVE_SUFFIX),"NE301 First Stage Boot Loader"))
-$(eval $(call pkg_project,app,sign-app,$(APP_NAME)_signed,app,NE301_APP,$(APP_VERSION),$(APP_VERSION_STR),$(APP_EFFECTIVE_SUFFIX),"NE301 Main Application"))
-$(eval $(call pkg_project,web,web,$(WEB_NAME),web,NE301_WEB,$(WEB_VERSION),$(WEB_VERSION_STR),$(WEB_EFFECTIVE_SUFFIX),"NE301 Web User Interface"))
-$(eval $(call pkg_project,model,model,$(MODEL_NAME),ai_model,NE301_MODEL,$(MODEL_VERSION),$(MODEL_VERSION_STR),$(MODEL_EFFECTIVE_SUFFIX),"NE301 AI Model"))
+$(eval $(call pkg_project,fsbl,sign-fsbl,$(FSBL_NAME)_signed,fsbl,NE302_FSBL,$(FSBL_VERSION),$(FSBL_VERSION_STR),$(FSBL_EFFECTIVE_SUFFIX),"NE302 First Stage Boot Loader"))
+$(eval $(call pkg_project,app,sign-app,$(APP_NAME)_signed,app,NE302_APP,$(APP_VERSION),$(APP_VERSION_STR),$(APP_EFFECTIVE_SUFFIX),"NE302 Main Application"))
+$(eval $(call pkg_project,web,web,$(WEB_NAME),web,NE302_WEB,$(WEB_VERSION),$(WEB_VERSION_STR),$(WEB_EFFECTIVE_SUFFIX),"NE302 Web User Interface"))
+$(eval $(call pkg_project,model,model,$(MODEL_NAME),ai_model,NE302_MODEL,$(MODEL_VERSION),$(MODEL_VERSION_STR),$(MODEL_EFFECTIVE_SUFFIX),"NE302 AI Model"))
 
 .PHONY: pkg
 pkg: $(foreach proj, fsbl app web model,pkg-$(proj))
@@ -246,9 +246,9 @@ pack-hex: wakecore
 	@python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wakecore || echo "Warning: WakeCore not found, skipping..."
 	@echo "========================================="
 	@echo "HEX files created:"
-	@echo "  - $(BUILD_DIR)/ne301_Main.hex (Main firmware, without WiFi)"
-	@echo "  - $(BUILD_DIR)/ne301_Main_WiFi.hex (Main firmware, with WiFi)"
-	@echo "  - $(BUILD_DIR)/ne301_WakeCore.hex (WakeCore)"
+	@echo "  - $(BUILD_DIR)/ne302_Main.hex (Main firmware, without WiFi)"
+	@echo "  - $(BUILD_DIR)/ne302_Main_WiFi.hex (Main firmware, with WiFi)"
+	@echo "  - $(BUILD_DIR)/ne302_WakeCore.hex (WakeCore)"
 	@echo "========================================="
 
 .PHONY: pack-hex-wakecore
@@ -258,7 +258,7 @@ pack-hex-wakecore: wakecore
 	@echo "========================================="
 	@python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wakecore
 	@echo "========================================="
-	@echo "HEX file created: $(BUILD_DIR)/ne301_WakeCore.hex"
+	@echo "HEX file created: $(BUILD_DIR)/ne302_WakeCore.hex"
 	@echo "========================================="
 
 ######################################
@@ -394,7 +394,7 @@ rebuild-model: clean-model model
 .PHONY: info
 info:
 	@echo "========================================="
-	@echo "NE301 Build Configuration"
+	@echo "NE302 Build Configuration"
 	@echo "========================================="
 	@echo "Project:         $(PROJECT_NAME)"
 	@echo "MCU:             Cortex-M55 (FPv5-D16 hard)"
@@ -432,7 +432,7 @@ info:
 .PHONY: help
 help:
 	@echo "========================================="
-	@echo "NE301 Build System"
+	@echo "NE302 Build System"
 	@echo "========================================="
 	@echo ""
 	@echo "Build:    make [fsbl|app|web|model|all]"

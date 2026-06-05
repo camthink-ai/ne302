@@ -26,7 +26,7 @@ export default function ActionButtons() {
   return (
     <>
       {isValidateToken && (
-        <Link to="https://wiki.camthink.ai/docs/neoeyes-ne301-series/overview" className="mx-2" target="_blank">
+        <Link to="https://wiki.camthink.ai/docs/neoeyes-ne302-series/overview" className="mx-2" target="_blank">
           <Button variant="outline" size="icon" className="w-9 h-9">
             <SvgIcon icon="hint" />
           </Button>

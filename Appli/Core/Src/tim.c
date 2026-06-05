@@ -38,13 +38,13 @@ void MX_TIM3_Init(void)
   TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
-
+  uint32_t tim_clk_hz = HAL_RCCEx_GetTIMGFreq();
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 15;
+  htim3.Init.Prescaler = 199;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 1599;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.Period = 4999;
+  htim3.Init.ClockDivision = (tim_clk_hz > 200000000U) ? TIM_CLOCKDIVISION_DIV2 : TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
@@ -142,6 +142,6 @@ void MX_TIM3_DeInit(void)
 void TIM_set_duty(uint32_t duty)
 {
   if(duty > 100) duty = 100;
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1599 * duty / 100);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 4999 * duty / 100);
 }
 /* USER CODE END 1 */

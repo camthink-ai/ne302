@@ -1,6 +1,6 @@
 /**
  * @file factory_test.h
- * @brief NE301 Factory Test Module
+ * @brief NE302 Factory Test Module
  * @details Hardware self-test and factory configuration interface
  */
 

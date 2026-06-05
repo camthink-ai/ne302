@@ -1,4 +1,4 @@
-name: Build NE301 STM32 Firmware
+name: Build NE302 STM32 Firmware
 
 on:
   push:
@@ -18,7 +18,7 @@ on:
         default: ''
 
 env:
-  ARTIFACT_NAME: ne301-firmware
+  ARTIFACT_NAME: ne302-firmware
 
 jobs:
   build:
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 60
     
     container:
-      image: camthink/ne301-dev:v1.1
+      image: camthink/ne302-dev:v1.1
       volumes:
         - ${{ github.workspace }}:/workspace
     defaults:
@@ -206,7 +206,7 @@ jobs:
           tag_name: ${{ needs.build.outputs.version }}
           name: Release ${{ needs.build.outputs.version }}
           body: |
-            ## NE301 Firmware Release ${{ needs.build.outputs.version }}
+            ## NE302 Firmware Release ${{ needs.build.outputs.version }}
 
             ### 📦 Build Information
             - **Version**: `${{ needs.build.outputs.version }}`

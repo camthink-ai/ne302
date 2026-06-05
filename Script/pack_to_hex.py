@@ -17,7 +17,7 @@ from typing import Optional, Tuple, List
 # Address mapping configuration
 ADDRESS_MAP = {
     'FSBL': {
-        'pattern': 'ne301_FSBL_signed.bin',
+        'pattern': 'ne302_FSBL_signed.bin',
         'address': 0x70000000,
         'required': True
     },
@@ -34,17 +34,17 @@ ADDRESS_MAP = {
         'required': False
     },
     'APP': {
-        'pattern': 'ne301_App_signed_v*_pkg.bin',
+        'pattern': 'ne302_App_signed_v*_pkg.bin',
         'address': 0x70100000,
         'required': True
     },
     'WEB': {
-        'pattern': 'ne301_Web_v*_pkg.bin',
+        'pattern': 'ne302_Web_v*_pkg.bin',
         'address': 0x70400000,
         'required': True
     },
     'MODEL': {
-        'pattern': 'ne301_Model_v*_pkg.bin',
+        'pattern': 'ne302_Model_v*_pkg.bin',
         'address': 0x70900000,
         'required': True
     }
@@ -54,7 +54,7 @@ ADDRESS_MAP = {
 def parse_version(filename: str) -> Optional[Tuple[int, int, int, int]]:
     """
     Parse version number from file name.
-    Example: ne301_App_signed_v1.0.1.1234_pkg.bin -> (1, 0, 1, 1234)
+    Example: ne302_App_signed_v1.0.1.1234_pkg.bin -> (1, 0, 1, 1234)
     """
     match = re.search(r'v(\d+)\.(\d+)\.(\d+)\.(\d+)', filename)
     if match:
@@ -400,7 +400,7 @@ def pack_wakecore_to_hex(build_dir: Path, output_file: Path) -> bool:
     print("=" * 60)
     
     # WakeCore configuration
-    WAKECORE_PATTERN = 'ne301_WakeCore.bin'
+    WAKECORE_PATTERN = 'ne302_WakeCore.bin'
     WAKECORE_ADDRESS = 0x8000000
     
     # Find WakeCore file
@@ -478,7 +478,7 @@ def main():
     # Check whether WakeCore should be packed
     if len(sys.argv) > 1 and sys.argv[1] == '--wakecore':
         # Pack WakeCore into a separate HEX file
-        output_file = build_dir / f'ne301_WakeCore{out_suffix}.hex'
+        output_file = build_dir / f'ne302_WakeCore{out_suffix}.hex'
         if len(sys.argv) > 2:
             output_file = Path(sys.argv[2])
             if not output_file.is_absolute():
@@ -493,10 +493,10 @@ def main():
         project_root = script_dir.parent
         
         # Output file for main firmware (without WiFi)
-        output_file_main = build_dir / f'ne301_Main{out_suffix}.hex'
+        output_file_main = build_dir / f'ne302_Main{out_suffix}.hex'
         
         # Output file for main firmware (with WiFi)
-        output_file_main_wifi = build_dir / f'ne301_Main_WiFi{out_suffix}.hex'
+        output_file_main_wifi = build_dir / f'ne302_Main_WiFi{out_suffix}.hex'
         
         # If an output file argument is provided, pack only one file
         if len(sys.argv) > 1:

@@ -174,8 +174,8 @@ static inline void ota_version_to_string(const uint8_t *ver, char *buf, size_t b
  * @details
  * Extracts version from fw_ver array and suffix from fw_desc field.
  * fw_desc format: "Description (VERSION_WITH_SUFFIX)"
- * Example: "NE301 App (1.0.0.913_beta)" -> "1.0.0.913_beta"
- *          "NE301 App (1.0.0.0)" -> "1.0.0.0"
+ * Example: "NE302 App (1.0.0.913_beta)" -> "1.0.0.913_beta"
+ *          "NE302 App (1.0.0.0)" -> "1.0.0.0"
  */
 static inline int ota_header_get_full_version(const ota_header_t *header, char *buf, size_t buf_size)
 {

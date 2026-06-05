@@ -1449,7 +1449,7 @@ sl_status_t sl_net_wifi_ap_up(sl_net_interface_t interface, sl_net_profile_id_t 
     }
 
     if (wifi_ap_profile.config.ssid.length < 1) {
-        snprintf((char *)wifi_ap_profile.config.ssid.value, sizeof(wifi_ap_profile.config.ssid.value), "NE301_%02X%02X%02X", ap_netif.hwaddr[3], ap_netif.hwaddr[4], ap_netif.hwaddr[5]);
+        snprintf((char *)wifi_ap_profile.config.ssid.value, sizeof(wifi_ap_profile.config.ssid.value), "NE302_%02X%02X%02X", ap_netif.hwaddr[3], ap_netif.hwaddr[4], ap_netif.hwaddr[5]);
         wifi_ap_profile.config.ssid.length = strlen((char *)wifi_ap_profile.config.ssid.value);
         LOG_DRV_INFO("Use default ap name: %s\r\n", wifi_ap_profile.config.ssid.value);
     }
@@ -1816,7 +1816,7 @@ int sl_net_ap_netif_up(void)
     } else {
 #if LWIP_MDNS_RESPONDER
         /* Set mDNS host name */
-        mdns_resp_add_netif(&ap_netif, "ne301");
+        mdns_resp_add_netif(&ap_netif, "ne302");
         mdns_resp_add_service(&ap_netif, "Web Server", "_http", 
                             DNSSD_PROTO_TCP, 80, NULL, NULL);
         mdns_resp_add_service(&ap_netif, "WebSocket Server", "_ws", 

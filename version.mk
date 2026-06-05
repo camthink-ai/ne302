@@ -1,5 +1,5 @@
 # =============================================================================
-# version.mk - NE301 Firmware Version Management
+# version.mk - NE302 Firmware Version Management
 # =============================================================================
 # Version Format: MAJOR.MINOR.PATCH.BUILD
 #   MAJOR: Incompatible architecture/protocol changes (manual update)
@@ -123,7 +123,7 @@ BUILD_TIME  := $(shell date +%H:%M:%S)
 .PHONY: version
 version:
 	@echo "================================================"
-	@echo "NE301 Version Information"
+	@echo "NE302 Version Information"
 	@echo "================================================"
 	@echo "Version:      $(VERSION)"
 	@echo "  MAJOR:      $(VERSION_MAJOR)"

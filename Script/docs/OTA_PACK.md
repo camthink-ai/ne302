@@ -7,7 +7,7 @@
 | `input` | Input bin file path | `firmware.bin` |
 | `-o, --output` | Output file path | `firmware_v1.0.0.1_ota.bin` |
 | `-t, --type` | Firmware type | `app`, `fsbl`, `web`, `ai_model` |
-| `-n, --name` | Firmware name | `"NE301_APP"` |
+| `-n, --name` | Firmware name | `"NE302_APP"` |
 | `-d, --desc` | Firmware description | `"Main Application"` |
 | `-v, --version` | Version (format: major.minor.patch.build) | `1.0.0.1` |
 
@@ -29,25 +29,25 @@
 
 ```bash
 # FSBL
-python ota_packer.py ne301_FSBL_signed.bin \
+python ota_packer.py ne302_FSBL_signed.bin \
     -t fsbl \
-    -n "NE301_FSBL" \
+    -n "NE302_FSBL" \
     -d "First Stage Boot Loader" \
     -v 1.0.0.1 \
-    -o ne301_FSBL_signed_v1.0.0.1_ota.bin
+    -o ne302_FSBL_signed_v1.0.0.1_ota.bin
 
 # APP
-python ota_packer.py ne301_Appli_signed.bin \
+python ota_packer.py ne302_Appli_signed.bin \
     -t app \
-    -n "NE301_APP" \
+    -n "NE302_APP" \
     -d "Main Application" \
     -v 2.3.1.125 \
-    -o ne301_Appli_signed_v2.3.1.125_ota.bin
+    -o ne302_Appli_signed_v2.3.1.125_ota.bin
 
 # Web Assets
 python ota_packer.py web-assets.bin \
     -t web \
-    -n "NE301_WEB" \
+    -n "NE302_WEB" \
     -d "Web User Interface" \
     -v 1.5.0.88 \
     -o web-assets_v1.5.0.88_ota.bin
@@ -121,7 +121,7 @@ AI_MODEL_VERSION="3.0.2.45"
 
 **Examples:**
 ```
-ne301_Appli_signed.bin → ne301_Appli_signed_v2.3.1.125_ota.bin
+ne302_Appli_signed.bin → ne302_Appli_signed_v2.3.1.125_ota.bin
 web-assets.bin → web-assets_v1.5.0.88_ota.bin
 model_yolov8.bin → model_yolov8_v3.0.2.45_ota.bin
 ```
@@ -204,13 +204,13 @@ Error: Input file does not exist: nonexistent.bin
 
 ```makefile
 VERSION := 1.0.0.1
-APP_NAME := "NE301_APP"
+APP_NAME := "NE302_APP"
 APP_DESC := "Main Application"
 
 .PHONY: ota
 ota: all
 	cd Script && python ota_packer.py \
-		../bin/ne301_Appli_signed.bin \
+		../bin/ne302_Appli_signed.bin \
 		-t app \
 		-n $(APP_NAME) \
 		-d $(APP_DESC) \
@@ -316,7 +316,7 @@ python ota_packer.py --batch
 
 ```bash
 # Use descriptive names
--n "NE301_APP_v2.3"     # Include version in name
+-n "NE302_APP_v2.3"     # Include version in name
 -n "YOLOv8_COCO_OD"     # Include model details
 -n "WebUI_Material"     # Include UI framework
 
@@ -333,8 +333,8 @@ python ota_packer.py --batch
 bin/
 ├── releases/
 │   ├── v1.0.0/
-│   │   ├── ne301_FSBL_v1.0.0.1_ota.bin
-│   │   ├── ne301_Appli_v1.0.0.1_ota.bin
+│   │   ├── ne302_FSBL_v1.0.0.1_ota.bin
+│   │   ├── ne302_Appli_v1.0.0.1_ota.bin
 │   │   └── web-assets_v1.0.0.1_ota.bin
 │   └── v2.0.0/
 │       └── ...
@@ -354,10 +354,10 @@ python ota_packer.py <input_file> \
     -v <major.minor.patch.build> 
 
 # Real example
-python ota_packer.py ne301_Appli_signed.bin \
-    -o ne301_Appli_signed_v2.3.1.125_ota.bin \
+python ota_packer.py ne302_Appli_signed.bin \
+    -o ne302_Appli_signed_v2.3.1.125_ota.bin \
     -t app \
-    -n "NE301_APP" \
+    -n "NE302_APP" \
     -d "Main Application" \
     -v 2.3.1.125
 ```

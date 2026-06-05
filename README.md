@@ -1,4 +1,4 @@
-# NE301 - STM32N6570 AI Vision Camera
+# NE302 - STM32N6570 AI Vision Camera
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Platform](https://img.shields.io/badge/platform-STM32N6570-blue)]()
@@ -18,24 +18,24 @@
 
 ## 🎬 Preview
 
-### Take a Closer Look at CamThink NeoEyes NE301  
-[![Watch the video](https://resources.camthink.ai/video/product.jpg)](https://resources.camthink.ai/video/NE301_product_introduction.mp4)
+### Take a Closer Look at CamThink NeoEyes NE302  
+[![Watch the video](https://resources.camthink.ai/video/product.jpg)](https://resources.camthink.ai/video/NE302_product_introduction.mp4)
 
-### Deploy NeoEyes NE301 Anywhere Outdoors  
-[![Watch the video](https://resources.camthink.ai/video/deploy.jpg)](https://resources.camthink.ai/video/NE301_deploy_everywhere.mp4)
+### Deploy NeoEyes NE302 Anywhere Outdoors  
+[![Watch the video](https://resources.camthink.ai/video/deploy.jpg)](https://resources.camthink.ai/video/NE302_deploy_everywhere.mp4)
 
 ### Always Awake. Always Ready for Action  
-[![Watch the video](https://resources.camthink.ai/video/ready%20for%20action.jpg)](https://resources.camthink.ai/video/NE301_IO_and_MQTT_Wake-up.mp4)  
+[![Watch the video](https://resources.camthink.ai/video/ready%20for%20action.jpg)](https://resources.camthink.ai/video/NE302_IO_and_MQTT_Wake-up.mp4)  
 
 ### Detecting Every Critical Moment  
-[![Watch the video](https://resources.camthink.ai/video/aipreview.jpg)](https://resources.camthink.ai/video/NE301_reasoning_preview.mp4) 
+[![Watch the video](https://resources.camthink.ai/video/aipreview.jpg)](https://resources.camthink.ai/video/NE302_reasoning_preview.mp4) 
 
 [**Learn More**](https://www.camthink.ai/)
 
 ## 🏗️ Project Structure
 Low Power, Performance, and Edge AI
-![img](https://wiki.camthink.ai/img/ne301/overview/U0.png)
-NE301 is an AI vision camera system based on STM32N6570, featuring a multi-core architecture:
+![img](https://wiki.camthink.ai/img/ne302/overview/U0.png)
+NE302 is an AI vision camera system based on STM32N6570, featuring a multi-core architecture:
 
 - **STM32N6 (Main MCU)**: Cortex-M55, handles video processing, AI inference, and network communication
 - **STM32U0 (WakeCore)**: Power control unit, manages low-power operation and wake-up
@@ -68,7 +68,7 @@ NE301 is an AI vision camera system based on STM32N6570, featuring a multi-core 
 └─────────────────────────────────────┘
 ```
 ```
-ne301/
+ne302/
 ├── Appli/                  # Stm32n6 Main application
 ├── FSBL/                   # Stm32n6 First stage bootloader
 ├── WakeCore/               # Power Ctrl Unit
@@ -80,7 +80,7 @@ ne301/
 
 ## 🚀 Quick Start
 
-Go to [WIKI](https://wiki.camthink.ai/docs/neoeyes-ne301-series/quick-start)
+Go to [WIKI](https://wiki.camthink.ai/docs/neoeyes-ne302-series/quick-start)
 
 ## 🛠️ Development Guide 
 
@@ -92,14 +92,14 @@ Go to [WIKI](https://wiki.camthink.ai/docs/neoeyes-ne301-series/quick-start)
 
 ```bash
 # 1. Build (Or pull)Docker image
-docker build -t ne301-dev:latest .
+docker build -t ne302-dev:latest .
 # or pull (faster)
-docker pull camthink/ne301-dev:latest
+docker pull camthink/ne302-dev:latest
 # 2. Run container
 docker run -it --rm --privileged \
   -v $(pwd):/workspace \
   -v /dev/bus/usb:/dev/bus/usb \
-  camthink/ne301-dev:latest
+  camthink/ne302-dev:latest
 # 3. Inside container
 make                        # Build all
 ```
@@ -131,7 +131,7 @@ See [SETUP.md](SETUP.md) for detailed installation instructions.
 ### Hardware Connect
 
 **Prerequisites:**
-- NE301 Board * 1
+- NE302 Board * 1
 - ST-Link V2 * 1
 - 4P 1.25mm pitch male to 2.54mm dupont female adapter (Used for flash N6 chips)
 - 3P 2.54mm pitch dual female header dupont wires (Used for flash U0 chips)
@@ -141,24 +141,24 @@ The mainboard contains two MCUs： **stm32n6** and **stm32u0**
 #### Ready for Flashing `apps`, `web`, or `models` to **stm32n6**
 1. Turn on the dip switch 2 on the board to enter the flash mode.***(After the flash is completed, please turn it off and power it back on or reset it to enter the running mode)*** 
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/flash-mode.png)
+![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/flash-mode.png)
 
 2. Connect ST Link to the DEBUG port on the board using a 4P adapter cable and connect ST Link to the computer.
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/st-link.png)
+![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/st-link.png)
 
 3. Connect the board to a computer or adapter using a type-c USB cable, and the onboard DEBUG indicator light will remain on, indicating that it has entered the flash mode.
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/type-c.png)
+![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/type-c.png)
 
 #### Ready for Flashing `wakecore` to **stm32u0**
 1. Connect ST-LINK to STM32U0 chip using 3P DuPont wire and connect ST-LINK to computer.
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/u0.png)
+![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/u0.png)
 
 2. Connect the board to a computer or adapter using a type-c USB cable.
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/connect.png)
+![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/connect.png)
 
 ### Build
 
@@ -176,12 +176,12 @@ make info                   # help
 
 1. Firmwares List
 ```bash
-  ne301_FSBL_signed.bin       --> use for stm32n6 FSBL        --> flash addr 0x70000000
-  ne301_App_signed_pkg.bin    --> use for stm32n6 App         --> flash addr 0x70100000
-  ne301_Web_pkg.bin           --> use for web gui             --> flash addr 0x70400000
-  ne301_Model_pkg.bin         --> use for AI model            --> flash addr 0x70900000
+  ne302_FSBL_signed.bin       --> use for stm32n6 FSBL        --> flash addr 0x70000000
+  ne302_App_signed_pkg.bin    --> use for stm32n6 App         --> flash addr 0x70100000
+  ne302_Web_pkg.bin           --> use for web gui             --> flash addr 0x70400000
+  ne302_Model_pkg.bin         --> use for AI model            --> flash addr 0x70900000
   # Connect ST Link to U0 first, then execute
-  ne301_WakeCore.bin          --> use for stm32u0 wakecore    --> flash addr 0x08000000 
+  ne302_WakeCore.bin          --> use for stm32u0 wakecore    --> flash addr 0x08000000 
 ```
 2. Flash tools supported
 
