@@ -3622,7 +3622,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
         uint32_t current_flags = service_get_ready_flags();
         LOG_SVC_INFO("[TIMING] Step 3.1: Current service flags: 0x%08X, MQTT_NET_CONNECTED: %s",
                      current_flags, (current_flags & MQTT_NET_CONNECTED) ? "YES" : "NO");
-        aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 15000);
+        aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 20000);
         if (result != AICAM_OK) {
             LOG_SVC_INFO("[TIMING] Step 3.1 FAILED: MQTT network not ready: %d — skip MQTT, try webhook/SD", result);
             LOG_SVC_INFO("[TIMING] Step 3.1: Final service flags: 0x%08X", service_get_ready_flags());

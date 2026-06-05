@@ -676,8 +676,9 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     /** Initializes the peripherals clock
     */
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI6;
-    PeriphClkInitStruct.Spi6ClockSelection = RCC_SPI6CLKSOURCE_CLKP;
+    // PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI6;
+    // PeriphClkInitStruct.Spi6ClockSelection = RCC_SPI6CLKSOURCE_CLKP;
+    RCC_IC_FillSPI6_PLL_IC9(&PeriphClkInitStruct);
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();
