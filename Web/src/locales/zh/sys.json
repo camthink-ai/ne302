@@ -270,6 +270,7 @@
       "light_brightness": "光照亮度",
       "time_range": "时间范围",
       "fill_light_desc": "工作时自动补光",
+      "fill_light_test": "补光灯测试",
       "fill_light_type_open": "常开",
       "fill_light_type_close": "常关",
       "fill_light_type_custom": "自定义",

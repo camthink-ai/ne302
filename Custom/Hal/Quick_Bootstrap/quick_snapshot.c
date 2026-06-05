@@ -140,7 +140,7 @@ static void qs_light_set(aicam_bool_t enable, uint32_t brightness_percent)
         return;
     }
     if (brightness_percent > 100U) brightness_percent = 100U;
-    uint8_t duty = (uint8_t)((brightness_percent * 255U) / 100U);
+    uint8_t duty = brightness_percent;
     (void)device_ioctl(s_light_dev, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
     (void)device_ioctl(s_light_dev, MISC_CMD_PWM_ON, 0, 0);
 }

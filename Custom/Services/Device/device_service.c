@@ -661,8 +661,8 @@ static void apply_light_control(const light_config_t *config)
     
     // Control fill light hardware through HAL layer interface
     if (should_enable) {
-        // Set brightness level (0-100 converted to 0-255)
-        uint8_t duty = (uint8_t)((config->brightness_level * 255) / 100);
+        // Set brightness level
+        uint8_t duty = config->brightness_level;
         device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
         device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
         LOG_SVC_DEBUG("Light turned ON with brightness: %u%% (duty: %u)", config->brightness_level, duty);
@@ -1229,7 +1229,7 @@ aicam_result_t device_service_light_control(aicam_bool_t enable)
     // Manual control - temporarily override automatic control
     if (enable) {
         // Set current configured brightness level
-        uint8_t duty = (uint8_t)((g_device_service.light_config.brightness_level * 255) / 100);
+        uint8_t duty = g_device_service.light_config.brightness_level;
         device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
         device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
         LOG_SVC_INFO("Light manually controlled: ON (brightness: %u%%)", g_device_service.light_config.brightness_level);
@@ -1258,8 +1258,8 @@ aicam_result_t device_service_light_set_brightness(uint32_t brightness_level)
     // Update brightness level in configuration
     g_device_service.light_config.brightness_level = brightness_level;
     
-    // Set PWM duty cycle (0-100 converted to 0-255)
-    uint8_t duty = (uint8_t)((brightness_level * 255) / 100);
+    // Set PWM duty cycle
+    uint8_t duty = brightness_level;
     device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
     
     LOG_SVC_INFO("Light brightness set to: %u%% (duty: %u)", brightness_level, duty);

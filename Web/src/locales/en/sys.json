@@ -271,6 +271,7 @@
       "light_brightness": "Light Brightness",
       "time_range": "Time Range",
       "fill_light_desc": "Auto Fill Light",
+      "fill_light_test": "Fill light test switch",
       "fill_light_type_open": "Always On",
       "fill_light_type_close": "Always Off",
       "fill_light_type_custom": "Custom",

@@ -26,6 +26,10 @@ export interface SetLightConfigReq {
     }
 }
 
+export interface ControlLightReq {
+    enable: boolean;
+}
+
 /** FSBL persisted profile ids (see fsbl_app_common.h) */
 export type SysClkProfileId = 1 | 2 | 3 | 4;
 
@@ -47,6 +51,7 @@ const hardwareManagement = {
     postIspProfileImportReq: (body: Record<string, unknown>) => request.post('/api/v1/isp/config/import', body),
     getLightConfigReq: () => request.get('/api/v1/device/light/config'),
     setLightConfigReq: (data: SetLightConfigReq) => request.post('/api/v1/device/light/config', data),
+    controlLightReq: (data: ControlLightReq) => request.post('/api/v1/device/light/control', data),
 }
 
 export default hardwareManagement;
