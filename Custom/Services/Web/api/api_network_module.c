@@ -995,54 +995,55 @@ aicam_result_t network_delete_known_handler(http_handler_context_t *ctx) {
 #if NETIF_WIFI_HALOW_IS_ENABLE
 /* ==================== HaLow APIs ==================== */
 
-static void halow_region_to_cc(const char *region, char out_cc[3])
+static void halow_region_to_cc(const char *region, char *out_cc, size_t out_len)
 {
-    out_cc[0] = 'U';
-    out_cc[1] = 'S';
-    out_cc[2] = '\0';
+    size_t i;
+
+    if (out_cc == NULL || out_len == 0U) {
+        return;
+    }
+    strncpy(out_cc, NETIF_WIFI_HALOW_DEFAULT_COUNTRY, out_len - 1U);
+    out_cc[out_len - 1U] = '\0';
     if (region == NULL || region[0] == '\0') {
         return;
     }
-    /* Accept any 2-letter region code from UI (validated via mm_halow_regdomain_is_supported). */
-    if (strlen(region) >= 2U) {
-        out_cc[0] = (char)toupper((unsigned char)region[0]);
-        out_cc[1] = (char)toupper((unsigned char)region[1]);
-        out_cc[2] = '\0';
+    for (i = 0; region[i] != '\0' && i < out_len - 1U; i++) {
+        out_cc[i] = (char)toupper((unsigned char)region[i]);
     }
+    out_cc[i] = '\0';
 }
 
 static int halow_country_code_same(const char *a, const char *b)
 {
-    char ca[3];
-    char cb[3];
     size_t i;
 
     if (a == NULL || b == NULL || a[0] == '\0' || b[0] == '\0') {
         return 0;
     }
 
-    for (i = 0; i < 2U; i++) {
-        ca[i] = (char)toupper((unsigned char)a[i]);
-        cb[i] = (char)toupper((unsigned char)b[i]);
-        if (ca[i] != cb[i]) {
+    for (i = 0; a[i] != '\0' && b[i] != '\0'; i++) {
+        if (toupper((unsigned char)a[i]) != toupper((unsigned char)b[i])) {
             return 0;
         }
     }
-    return 1;
+    return (a[i] == '\0' && b[i] == '\0');
 }
 
 static void halow_cc_to_api_region(const char *cc, char *out, size_t out_len)
 {
-    if (out == NULL || out_len < 3U) {
+    size_t i;
+
+    if (out == NULL || out_len == 0U) {
         return;
     }
     out[0] = '\0';
     if (cc == NULL || cc[0] == '\0') {
         return;
     }
-    out[0] = (char)tolower((unsigned char)cc[0]);
-    out[1] = (char)tolower((unsigned char)cc[1]);
-    out[2] = '\0';
+    for (i = 0; cc[i] != '\0' && i < out_len - 1U; i++) {
+        out[i] = (char)tolower((unsigned char)cc[i]);
+    }
+    out[i] = '\0';
 }
 
 static void halow_fill_supported_regions(cJSON *arr)
@@ -1050,7 +1051,7 @@ static void halow_fill_supported_regions(cJSON *arr)
     unsigned count;
     unsigned i;
     char cc[MM_HALOW_REGDOMAIN_CC_LEN];
-    char region[4];
+    char region[MM_HALOW_REGDOMAIN_CC_LEN];
 
     if (arr == NULL) {
         return;
@@ -1095,14 +1096,14 @@ static wireless_security_t halow_parse_security_string(const char *str, wireless
 
 static aicam_result_t halow_apply_region_to_netif(const char *region, network_service_config_t *sys_net)
 {
-    char cc[3];
+    char cc[MM_HALOW_REGDOMAIN_CC_LEN];
     netif_config_t cfg;
 
     if (region == NULL || region[0] == '\0') {
         return AICAM_ERROR_INVALID_PARAM;
     }
 
-    halow_region_to_cc(region, cc);
+    halow_region_to_cc(region, cc, sizeof(cc));
     if (!mm_halow_regdomain_is_supported(cc)) {
         return AICAM_ERROR_INVALID_PARAM;
     }
@@ -1155,8 +1156,8 @@ aicam_result_t network_halow_sta_handler(http_handler_context_t *ctx)
     aicam_bool_t connected;
     const char *ssid_out;
     const char *region;
-    char region_buf[4];
-    char query_region[16];
+    char region_buf[MM_HALOW_REGDOMAIN_CC_LEN];
+    char query_region[MM_HALOW_REGDOMAIN_CC_LEN];
     cJSON *scan_json;
     cJSON *known;
     cJSON *unknown;
@@ -1345,7 +1346,7 @@ aicam_result_t network_halow_region_get_handler(http_handler_context_t *ctx)
 {
     network_service_config_t sys_net = {0};
     const char *region;
-    char region_buf[4];
+    char region_buf[MM_HALOW_REGDOMAIN_CC_LEN];
     cJSON *response_json;
     cJSON *supported;
     char *json_string;
@@ -1561,8 +1562,8 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx)
     }
 
     if (region != NULL && region[0] != '\0') {
-        char cc[3];
-        halow_region_to_cc(region, cc);
+        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
+        halow_region_to_cc(region, cc, sizeof(cc));
         if (!mm_halow_regdomain_is_supported(cc)) {
             cJSON_Delete(request_json);
             return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid or unsupported region");

@@ -173,13 +173,13 @@ struct mmwlan_s1g_channel
     uint32_t airtime_max_us;
 };
 
-/** Length of the two character country code string (null-terminated). */
-#define MMWLAN_COUNTRY_CODE_LEN 3
+/** Length of the country code string (null-terminated). */
+#define MMWLAN_COUNTRY_CODE_LEN 16
 
 /** A list of S1G channels supported by a given regulatory domain. */
 struct mmwlan_s1g_channel_list
 {
-    /** Two character country code (null-terminated) used to identify the regulatory domain. */
+    /** Country code (null-terminated) used to identify the regulatory domain. */
     uint8_t country_code[MMWLAN_COUNTRY_CODE_LEN];
     /** The number of channels in the list. */
     unsigned num_channels;
@@ -220,11 +220,16 @@ static inline const struct mmwlan_s1g_channel_list *mmwlan_lookup_regulatory_dom
         return NULL;
     }
 
+    if (country_code == NULL || country_code[0] == '\0')
+    {
+        return NULL;
+    }
+
     for (ii = 0; ii < db->num_domains; ii++)
     {
         const struct mmwlan_s1g_channel_list *channel_list = db->domains[ii];
-        if (channel_list->country_code[0] == country_code[0] &&
-            channel_list->country_code[1] == country_code[1])
+        if (channel_list != NULL &&
+            strcmp((const char *)channel_list->country_code, country_code) == 0)
         {
             return channel_list;
         }

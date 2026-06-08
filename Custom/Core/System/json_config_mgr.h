@@ -237,7 +237,7 @@ typedef struct {
     char halow_ssid[32];
     char halow_password[64];
     uint32_t halow_security;
-    char halow_country_code[8];
+    char halow_country_code[NETIF_HALOW_COUNTRY_CODE_LEN];
     char halow_bssid[18];
     /** @ref POE_IP_MODE_DHCP or @ref POE_IP_MODE_STATIC */
     uint32_t halow_ip_mode;

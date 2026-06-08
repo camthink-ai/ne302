@@ -49,7 +49,7 @@ enum mmwlan_status mmwlan_sta_set_mac_addr(const uint8_t *mac_addr);
 #define HALOW_INIT_RETRY_DELAY_MS       10U
 #define HALOW_INIT_POWER_CYCLE_MS       50U
 #define HALOW_STACK_INIT_MAX_ATTEMPTS   3U
-#define HALOW_LINK_WAIT_MS              (15000U)
+#define HALOW_LINK_WAIT_MS              (30000U)
 #define HALOW_DPP_DEFAULT_TIMEOUT_MS    (120000U)
 
 static netif_config_t halow_netif_cfg = {
@@ -303,25 +303,37 @@ static int halow_mmwlan_boot_locked(void);
 /** Last regdomain successfully applied to mmwlan (empty after teardown/deinit). */
 static char halow_active_country_code[MM_HALOW_REGDOMAIN_CC_LEN] = "";
 
+static void halow_normalize_country_code(const char *in, char *out, size_t out_len)
+{
+    size_t i;
+
+    if (out == NULL || out_len == 0U) {
+        return;
+    }
+    out[0] = '\0';
+    if (in == NULL || in[0] == '\0') {
+        return;
+    }
+    for (i = 0; in[i] != '\0' && i < out_len - 1U; i++) {
+        out[i] = (char)toupper((unsigned char)in[i]);
+    }
+    out[i] = '\0';
+}
+
 static int halow_country_code_same(const char *a, const char *b)
 {
-    char ca[3];
-    char cb[3];
     size_t i;
 
     if (a == NULL || b == NULL || a[0] == '\0' || b[0] == '\0') {
         return 0;
     }
 
-    for (i = 0; i < 2U; i++) {
-        ca[i] = (char)toupper((unsigned char)a[i]);
-        cb[i] = (char)toupper((unsigned char)b[i]);
-        if (ca[i] != cb[i]) {
+    for (i = 0; a[i] != '\0' && b[i] != '\0'; i++) {
+        if (toupper((unsigned char)a[i]) != toupper((unsigned char)b[i])) {
             return 0;
         }
     }
-    ca[2] = cb[2] = '\0';
-    return 1;
+    return (a[i] == '\0' && b[i] == '\0');
 }
 
 static void halow_clear_active_country(void)
@@ -927,11 +939,13 @@ static int halow_bcf_has_regdom(const char *country_code)
 static int halow_regdomain_supported(const char *country_code)
 {
     const struct mmwlan_regulatory_db *db = get_regulatory_db();
+    char normalized[MM_HALOW_REGDOMAIN_CC_LEN];
 
     if (db == NULL || country_code == NULL || country_code[0] == '\0') {
         return 0;
     }
-    if (mmwlan_lookup_regulatory_domain(db, country_code) == NULL) {
+    halow_normalize_country_code(country_code, normalized, sizeof(normalized));
+    if (mmwlan_lookup_regulatory_domain(db, normalized) == NULL) {
         return 0;
     }
     return 1;
@@ -952,15 +966,11 @@ static int halow_pick_fallback_regdomain(char *out, size_t out_len)
     }
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
-        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
 
         if (domain == NULL) {
             continue;
         }
-        cc[0] = (char)domain->country_code[0];
-        cc[1] = (char)domain->country_code[1];
-        cc[2] = '\0';
-        strncpy(out, cc, out_len - 1U);
+        strncpy(out, (const char *)domain->country_code, out_len - 1U);
         out[out_len - 1U] = '\0';
         return 0;
     }
@@ -994,44 +1004,50 @@ static int halow_apply_regdomain_locked(const char *country_code)
 {
     const struct mmwlan_regulatory_db *db = get_regulatory_db();
     const struct mmwlan_s1g_channel_list *list;
+    char normalized[MM_HALOW_REGDOMAIN_CC_LEN];
     uint8_t restart_radio = 0;
 
     if (country_code == NULL || country_code[0] == '\0') {
         return -1;
     }
 
+    halow_normalize_country_code(country_code, normalized, sizeof(normalized));
+    if (normalized[0] == '\0') {
+        return -1;
+    }
+
     if (halow_mmwlan_booted &&
         halow_active_country_code[0] != '\0' &&
-        halow_country_code_same(country_code, halow_active_country_code)) {
-        strncpy(halow_netif_cfg.halow_cfg.country_code, country_code,
+        halow_country_code_same(normalized, halow_active_country_code)) {
+        strncpy(halow_netif_cfg.halow_cfg.country_code, normalized,
                 sizeof(halow_netif_cfg.halow_cfg.country_code) - 1);
         halow_netif_cfg.halow_cfg.country_code[sizeof(halow_netif_cfg.halow_cfg.country_code) - 1] = '\0';
         return 0;
     }
 
-    list = mmwlan_lookup_regulatory_domain(db, country_code);
+    list = mmwlan_lookup_regulatory_domain(db, normalized);
     if (list == NULL) {
-        LOG_DRV_ERROR("HaLow regdomain not found: %s", country_code);
+        LOG_DRV_ERROR("HaLow regdomain not found: %s", normalized);
         return -1;
     }
 
     if (halow_mmwlan_booted) {
         restart_radio = 1;
-        LOG_DRV_INFO("HaLow restarting radio for regdomain %s", country_code);
+        LOG_DRV_INFO("HaLow restarting radio for regdomain %s", normalized);
         if (halow_mmwlan_teardown_locked() != 0) {
             return -1;
         }
     }
 
     if (mmwlan_set_channel_list(list) != MMWLAN_SUCCESS) {
-        LOG_DRV_ERROR("HaLow set_channel_list failed for %s", country_code);
+        LOG_DRV_ERROR("HaLow set_channel_list failed for %s", normalized);
         if (restart_radio) {
             (void)halow_mmwlan_boot_locked();
         }
         return -1;
     }
 
-    strncpy(halow_netif_cfg.halow_cfg.country_code, country_code, sizeof(halow_netif_cfg.halow_cfg.country_code) - 1);
+    strncpy(halow_netif_cfg.halow_cfg.country_code, normalized, sizeof(halow_netif_cfg.halow_cfg.country_code) - 1);
     halow_netif_cfg.halow_cfg.country_code[sizeof(halow_netif_cfg.halow_cfg.country_code) - 1] = '\0';
 
     if (restart_radio) {
@@ -1042,7 +1058,7 @@ static int halow_apply_regdomain_locked(const char *country_code)
 
     halow_storage_scan_result.scan_count = 0;
 
-    strncpy(halow_active_country_code, country_code, sizeof(halow_active_country_code) - 1);
+    strncpy(halow_active_country_code, normalized, sizeof(halow_active_country_code) - 1);
     halow_active_country_code[sizeof(halow_active_country_code) - 1] = '\0';
 
     return 0;
@@ -2128,8 +2144,8 @@ int mm_halow_regdomain_get_code(unsigned index, char *country_code, size_t len)
         return -1;
     }
 
-    memcpy(country_code, domain->country_code, MM_HALOW_REGDOMAIN_CC_LEN);
-    country_code[MM_HALOW_REGDOMAIN_CC_LEN - 1U] = '\0';
+    strncpy(country_code, (const char *)domain->country_code, len - 1U);
+    country_code[len - 1U] = '\0';
     return 0;
 }
 
@@ -2148,18 +2164,14 @@ int mm_halow_list_regdomains(void)
     printf("HaLow regdomains (regulatory_db_domains, %u):\r\n", mm_halow_regdomain_count());
     for (i = 0; i < db->num_domains; i++) {
         const struct mmwlan_s1g_channel_list *domain = db->domains[i];
-        char cc[MM_HALOW_REGDOMAIN_CC_LEN];
 
         if (domain == NULL) {
             continue;
         }
-        cc[0] = (char)domain->country_code[0];
-        cc[1] = (char)domain->country_code[1];
-        cc[2] = '\0';
 
-        printf("  %s (%u ch)", cc, domain->num_channels);
+        printf("  %s (%u ch)", (const char *)domain->country_code, domain->num_channels);
         listed++;
-        if (current[0] != '\0' && strncmp(current, cc, 2) == 0) {
+        if (current[0] != '\0' && halow_country_code_same(current, (const char *)domain->country_code)) {
             printf(" *");
         }
         printf("\r\n");

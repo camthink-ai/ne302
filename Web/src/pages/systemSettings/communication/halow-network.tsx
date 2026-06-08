@@ -19,6 +19,8 @@ import { sleep, retryFetch } from '@/utils';
 import { isValidPoeIp } from '@/utils/verify';
 import { toast } from 'sonner';
 import systemSettings from '@/services/api/systemSettings';
+import { useLanguage } from '@/hooks/useLanguageProvider';
+import { getHalowRegionLabel, normalizeHalowRegionCode } from './halow-region';
 
 type HalowData = {
     ssid: string;
@@ -47,6 +49,7 @@ const filterOtherNetworks = (list: HalowData[], connected: HalowData | null) => 
 
 export default function HalowNetworkPage() {
     const { i18n } = useLingui();
+    const { locale } = useLanguage();
     const isMobile = useIsMobile();
     const {
         getHalowStaReq,
@@ -86,19 +89,12 @@ export default function HalowNetworkPage() {
         gateway: '',
     });
 
-    const getRegionLabel = useCallback((code: string) => {
-        const key = `sys.system_management.halow_region_${code.toLowerCase()}`;
-        const label = i18n._(key);
-        if (label && label !== key) return label;
-        return code.toUpperCase();
-    }, [i18n]);
-
     const applyStaResponse = useCallback((data: any) => {
         if (data.region) {
-            setRegion(String(data.region).toLowerCase());
+            setRegion(normalizeHalowRegionCode(String(data.region)));
         }
         if (Array.isArray(data.supported_regions) && data.supported_regions.length > 0) {
-            setSupportedRegions(data.supported_regions.map((r: string) => String(r).toLowerCase()));
+            setSupportedRegions(data.supported_regions.map((r: string) => normalizeHalowRegionCode(String(r))));
         }
 
         const connected: HalowData | null = data.connected
@@ -471,12 +467,14 @@ export default function HalowNetworkPage() {
                   disabled={!!currentHalowData?.connected}
                 >
                     <SelectTrigger className="w-[180px]">
-                        <SelectValue placeholder={i18n._('sys.system_management.halow_region')} />
+                        <SelectValue placeholder={i18n._('sys.system_management.halow_region')}>
+                            {region ? getHalowRegionLabel(region, locale) : null}
+                        </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                         {supportedRegions.map((code) => (
                             <SelectItem key={code} value={code}>
-                                {getRegionLabel(code)}
+                                {getHalowRegionLabel(code, locale)}
                             </SelectItem>
                         ))}
                     </SelectContent>

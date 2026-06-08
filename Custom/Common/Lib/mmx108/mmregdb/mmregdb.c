@@ -90,21 +90,21 @@ const struct mmwlan_s1g_channel s1g_channels_AU[] = {
 
 /** Channel list structure for Australia IEEE 802.11-2020. */
 const struct mmwlan_s1g_channel_list s1g_channel_list_au_80211_2020 = {
-    .country_code = "AU",
+    .country_code = "AU_2020",
     .num_channels = 23,
     .channels = &s1g_channels_AU[0],
 };
 
 /** Channel list structure for Australia IEEE 802.11-2024. */
 const struct mmwlan_s1g_channel_list s1g_channel_list_au_80211_2024 = {
-    .country_code = "AU",
+    .country_code = "AU_2024",
     .num_channels = 23,
     .channels = &s1g_channels_AU[23],
 };
 
 /** Channel list structure for Australia IEEE 802.11-REVMF. */
 const struct mmwlan_s1g_channel_list s1g_channel_list_au_80211_revmf = {
-    .country_code = "AU",
+    .country_code = "AU_REVMF",
     .num_channels = 26,
     .channels = &s1g_channels_AU[23],
 };
@@ -378,10 +378,13 @@ const struct mmwlan_s1g_channel_list s1g_channel_list_US = {
 /** Array of all channel list structs used for the regulatory database. */
 
 const struct mmwlan_s1g_channel_list *regulatory_db_domains[] = {
-    &MM_REGDB_DEFAULT_S1G_CHANNEL_LIST_AU,
+    // &MM_REGDB_DEFAULT_S1G_CHANNEL_LIST_AU,
+    &s1g_channel_list_au_80211_2020,
+    &s1g_channel_list_au_80211_2024,
+    &s1g_channel_list_au_80211_revmf,
     &s1g_channel_list_CA,
     &s1g_channel_list_EU,
-    &s1g_channel_list_GB,
+    // &s1g_channel_list_GB,
     &s1g_channel_list_IN,
     &s1g_channel_list_JP,
     &s1g_channel_list_KR,

@@ -195,9 +195,12 @@ typedef struct
 } wireless_config_t;
 
 #if NETIF_WIFI_HALOW_IS_ENABLE
+/** HaLow regdomain code buffer size (matches @ref MMWLAN_COUNTRY_CODE_LEN). */
+#define NETIF_HALOW_COUNTRY_CODE_LEN        (16U)
+
 /// @brief HaLow (mmx108) extended wireless configuration
 typedef struct {
-    char country_code[4];                   ///< Two-letter regdomain code (e.g. "US")
+    char country_code[NETIF_HALOW_COUNTRY_CODE_LEN];  ///< Regdomain code (e.g. "US", "AU_2020")
     uint16_t tx_power_dbm;                  ///< TX power cap (0 = use regdomain max only)
     uint8_t ps_mode;                        ///< MMWLAN_PS_DISABLED / MMWLAN_PS_ENABLED
     uint8_t pmf_mode;                       ///< MMWLAN_PMF_REQUIRED / MMWLAN_PMF_DISABLED

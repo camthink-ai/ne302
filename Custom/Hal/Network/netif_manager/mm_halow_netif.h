@@ -26,8 +26,8 @@ int mm_halow_set_preconnect_target(const uint8_t bssid[6]);
 
 int mm_halow_set_regdomain(const char *country_code);
 
-/** Country code buffer size (2 letters + null), matches @ref MMWLAN_COUNTRY_CODE_LEN. */
-#define MM_HALOW_REGDOMAIN_CC_LEN           (3U)
+/** Country code buffer size, matches @ref NETIF_HALOW_COUNTRY_CODE_LEN. */
+#define MM_HALOW_REGDOMAIN_CC_LEN           NETIF_HALOW_COUNTRY_CODE_LEN
 
 unsigned mm_halow_regdomain_count(void);
 /** 1 if @p country_code is in mmregdb and the embedded firmware BCF. */
@@ -42,7 +42,7 @@ int mm_halow_print_version(void);
 /**
  * Print current BCF metadata.
  *
- * @param country_code Optional 2-letter country code. If provided, selects the matching BCF first
+ * @param country_code Optional regdomain code. If provided, selects the matching BCF first
  *                     and then prints metadata. If NULL, uses the current HaLow config country code.
  */
 int mm_halow_print_bcf_info(const char *country_code);
