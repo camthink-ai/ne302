@@ -18,6 +18,7 @@
 #include "cmsis_os2.h"
 #include "cli_cmd.h"
 #include "json_config_internal.h"
+#include "usb_cdc_console.h"
 
 /* ==================== Missing Macro Definitions ==================== */
 
@@ -51,6 +52,8 @@
 /* ==================== Private Variables ==================== */
 
 static debug_context_t g_debug_ctx = {0};
+static volatile aicam_bool_t g_debug_use_usb_cdc = AICAM_FALSE;
+static volatile aicam_bool_t g_debug_uart_rx_running = AICAM_FALSE;
 
 static uint8_t debug_tread_stack[1024 * 32] ALIGN_32 IN_PSRAM;
 // RTOS task attributes
@@ -79,6 +82,8 @@ static aicam_result_t debug_init_cmdline(void);
 static aicam_result_t debug_init_ymodem(void);
 static void debug_uart_output(char c);
 static void debug_uart_output_str(const char* str);
+static aicam_bool_t debug_console_usb_ready(void);
+static void debug_console_update_input_route(void);
 static void debug_lock(void);
 static void debug_unlock(void);
 static void debug_log_lock(void);
@@ -510,14 +515,18 @@ void debug_IRQHandler(UART_HandleTypeDef *huart)
                 }
             }
             
-            // continue receive next char
-            HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
+            if (debug_console_usb_ready() == AICAM_FALSE) {
+                HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
+                g_debug_uart_rx_running = AICAM_TRUE;
+            }
         }
         // if ymodem mode, add ymodem processing logic here
         else if (g_debug_ctx.current_mode == DEBUG_MODE_YMODEM) {
             // TODO: Handle YModem data reception
-            // continue receive
-            HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
+            if (debug_console_usb_ready() == AICAM_FALSE) {
+                HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
+                g_debug_uart_rx_running = AICAM_TRUE;
+            }
         }
     }
 }
@@ -562,10 +571,12 @@ static aicam_result_t debug_uart_mode_switch(debug_mode_e mode)
     // Stop current mode
     if (g_debug_ctx.current_mode == DEBUG_MODE_COMMAND) {
         HAL_UART_AbortReceive_IT(&H_UART);
+        g_debug_uart_rx_running = AICAM_FALSE;
         printf("[DEBUG] Command mode stopped\r\n");
     }
     else if (g_debug_ctx.current_mode == DEBUG_MODE_YMODEM) {
         HAL_UART_AbortReceive_IT(&H_UART);
+        g_debug_uart_rx_running = AICAM_FALSE;
         printf("[DEBUG] YModem mode stopped\r\n");
     }
     
@@ -573,13 +584,9 @@ static aicam_result_t debug_uart_mode_switch(debug_mode_e mode)
     g_debug_ctx.current_mode = mode;
     
     if (mode == DEBUG_MODE_COMMAND) {
-        // start command mode uart receive
-        HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
         printf("[DEBUG] Command mode started\r\n");
     }
     else if (mode == DEBUG_MODE_YMODEM) {
-        // start ymodem mode uart receive
-        HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
         printf("[DEBUG] YModem mode started\r\n");
         // notify ymodem task to start work
         osSemaphoreRelease(g_debug_ctx.semaphore);
@@ -587,7 +594,8 @@ static aicam_result_t debug_uart_mode_switch(debug_mode_e mode)
     else if (mode == DEBUG_MODE_DISABLED) {
         printf("[DEBUG] Debug mode disabled\r\n");
     }
-    
+
+    debug_console_update_input_route();
     osMutexRelease(g_debug_ctx.mutex);
     return AICAM_OK;
 }
@@ -596,12 +604,7 @@ static void debug_task_function(void *argument)
 {
     // printf("[DEBUG] Debug task started\r\n");
     
-    // ensure uart receive interrupt is started
-    if (g_debug_ctx.current_mode == DEBUG_MODE_COMMAND) {
-        HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
-        // printf("[DEBUG] UART interrupt initialized\r\n");
-    }
-    
+    debug_console_update_input_route();
 
     osDelay(100);
     
@@ -610,20 +613,20 @@ static void debug_task_function(void *argument)
     // printf("[DEBUG] Initial prompt displayed\r\n");
     
     while (1) {
+        debug_console_update_input_route();
+
         if (!queue_empty(&g_debug_ctx.cmd_queue)) {
             cmdline_process(&g_debug_ctx.cmdline);
         } else {
             osDelay(10);
         }
-        
-  
+
         if (g_debug_ctx.current_mode != DEBUG_MODE_COMMAND) {
             // printf("[DEBUG] Switching mode, debug task paused\r\n");
             while (g_debug_ctx.current_mode != DEBUG_MODE_COMMAND) {
                 osDelay(100);
             }
-            HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
-            // printf("[DEBUG] Back to command mode\r\n");
+            debug_console_update_input_route();
             debug_uart_output_str("\r\n");
             debug_uart_output_str(g_debug_ctx.cmdline.prompt);
         }
@@ -735,19 +738,62 @@ static aicam_result_t debug_init_ymodem(void)
     return AICAM_OK;
 }
 
+static aicam_bool_t debug_console_usb_ready(void)
+{
+    return (g_debug_use_usb_cdc == AICAM_TRUE && usb_cdc_console_is_host_ready()) ?
+           AICAM_TRUE : AICAM_FALSE;
+}
+
+static void debug_console_update_input_route(void)
+{
+    aicam_bool_t use_usb = debug_console_usb_ready();
+
+    if (g_debug_ctx.current_mode != DEBUG_MODE_COMMAND &&
+        g_debug_ctx.current_mode != DEBUG_MODE_YMODEM) {
+        return;
+    }
+
+    if (use_usb == AICAM_TRUE) {
+        if (g_debug_uart_rx_running == AICAM_TRUE) {
+            HAL_UART_AbortReceive_IT(&H_UART);
+            g_debug_uart_rx_running = AICAM_FALSE;
+        }
+        return;
+    }
+
+    if (g_debug_uart_rx_running == AICAM_FALSE) {
+        HAL_UART_Receive_IT(&H_UART, &g_debug_ctx.uart_rx_byte, 1);
+        g_debug_uart_rx_running = AICAM_TRUE;
+    }
+}
+
+static void debug_console_output(const uint8_t *data, uint32_t len)
+{
+    if (data == NULL || len == 0) {
+        return;
+    }
+
+    if (debug_console_usb_ready() == AICAM_TRUE) {
+        if (usb_cdc_console_write(data, len) > 0) {
+            return;
+        }
+    }
+
+    HAL_UART_Transmit(&H_UART, (uint8_t *)data, len, HAL_MAX_DELAY);
+}
+
 static void debug_uart_output(char c)
 {
-    HAL_UART_Transmit(&H_UART, (uint8_t*)&c, 1, HAL_MAX_DELAY);
+    debug_console_output((const uint8_t *)&c, 1);
 }
 
 static void debug_uart_output_str(const char* str)
 {
-    if (str) {
-        while (*str) {
-            HAL_UART_Transmit(&H_UART, (uint8_t*)str, 1, HAL_MAX_DELAY);
-            str++;
-        }
+    if (str == NULL) {
+        return;
     }
+
+    debug_console_output((const uint8_t *)str, (uint32_t)strlen(str));
 }
 
 
@@ -852,8 +898,31 @@ static uint64_t debug_log_get_time(void)
 
 static void debug_uart_log_output(const char *msg, int len)
 {
-    // Output log message to UART
-    HAL_UART_Transmit(&H_UART, (uint8_t*)msg, len, HAL_MAX_DELAY);
+    if (msg == NULL || len <= 0) {
+        return;
+    }
+
+    debug_console_output((const uint8_t *)msg, (uint32_t)len);
+}
+
+aicam_result_t debug_switch_to_usb_cdc(void)
+{
+    if (g_debug_use_usb_cdc == AICAM_TRUE) {
+        return AICAM_OK;
+    }
+
+    if (usb_cdc_console_init() != 0) {
+        return AICAM_ERROR;
+    }
+
+    usb_cdc_console_activate();
+    g_debug_use_usb_cdc = AICAM_TRUE;
+    debug_console_update_input_route();
+
+    debug_uart_output_str("\r\n[DEBUG] USB1 CDC console enabled (USB preferred, UART fallback)\r\n");
+    debug_uart_output_str(g_debug_ctx.cmdline.prompt);
+
+    return AICAM_OK;
 }
 
 

@@ -295,6 +295,12 @@ typedef struct {
 aicam_result_t debug_system_init(void);
 
 /**
+ * @brief Enable USB1 CDC console (USB preferred when host ready, else UART)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t debug_switch_to_usb_cdc(void);
+
+/**
  * @brief Deinitialize debug system
  * @return aicam_result_t Operation result
  */

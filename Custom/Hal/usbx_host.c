@@ -1,4 +1,5 @@
 #include "usbx_host.h"
+#include "usbx_platform.h"
 #include "common_utils.h"
 #include "debug.h"
 #include "usb_otg.h"
@@ -10,16 +11,13 @@ extern HCD_HandleTypeDef hhcd_USB_OTG_HS1;
 #else
 extern HCD_HandleTypeDef hhcd_USB_OTG_HS2;
 #endif
-static uint8_t usbx_mem_pool[H_USBX_MEM_SIZE] IN_PSRAM ALIGN_32;
-static uint8_t usbx_mem_pool_uncached[H_USBX_MEM_SIZE_UNCACHED] UNCACHED ALIGN_32;
-static uint8_t usbx_is_init = 0;
+static uint8_t usbx_host_is_init = 0;
 
 int USBX_Host_Init(ux_host_config_t *config)
 {
     int ret = 0;
     if (config == NULL) return UX_INVALID_PARAMETER;
-    if (usbx_is_init) return UX_SUCCESS;
-    // if (usbx_is_init) return UX_INVALID_STATE;
+    if (usbx_host_is_init) return UX_SUCCESS;
 
     /* Initialize the USB OTG HS2 */
 #ifdef UX_HCD_ECM_USE_USB_OTG_HS1
@@ -29,8 +27,7 @@ int USBX_Host_Init(ux_host_config_t *config)
 #endif
 
     if (!config->is_uninit_memory) {
-        /* Initialize USBX Memory */
-        ret = ux_system_initialize(usbx_mem_pool, H_USBX_MEM_SIZE, usbx_mem_pool_uncached, H_USBX_MEM_SIZE_UNCACHED);
+        ret = usbx_platform_system_init();
         if (ret != UX_SUCCESS) {
             LOG_DRV_ERROR("USBX Memory Initialization Failed: 0x%X", ret);
             goto USBX_Host_Init_Exit;
@@ -75,7 +72,7 @@ int USBX_Host_Init(ux_host_config_t *config)
         goto USBX_Host_Init_Exit;
     }
     
-    usbx_is_init = 1;
+    usbx_host_is_init = 1;
     return ret;
 USBX_Host_Init_Exit:
     USBX_Host_Deinit(config);

@@ -21,7 +21,7 @@
 #define FLASH_DEVICE_NAME   "flash_led"
 #define KEY_DEVICE_NAME     "key"
 #define IND_DEVICE_NAME     "ind"
-#define IND_EXT_DEVICE_NAME "ind_ext"
+#define IND_EXT_DEVICE_NAME IND_DEVICE_NAME // "ind_ext"
 #define LIGHT_DEVICE_NAME   "light"
 #define BATTERY_DEVICE_NAME "battery"
 #define PWR_DEVICE_NAME     "pwr"

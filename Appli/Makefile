@@ -115,6 +115,9 @@ C_SOURCES += ../Custom/Hal/storage.c
 C_SOURCES += ../Custom/Hal/system_top.c
 C_SOURCES += ../Custom/Hal/u0_module.c
 C_SOURCES += ../Custom/Hal/usbx_host.c
+C_SOURCES += ../Custom/Hal/usbx_platform.c
+C_SOURCES += ../Custom/Hal/usb_cdc_console.c
+C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/usbx/Src/usb_desc.c
 C_SOURCES += ../Custom/Hal/usb_host_video.c
 C_SOURCES += ../Custom/Hal/usb_host_ecm.c
 C_SOURCES += ../Custom/Hal/wdg.c
@@ -706,7 +709,6 @@ ifneq ($(findstring -DISP_MW_TUNING_TOOL_SUPPORT,$(C_DEFS)),)
  C_DEFS += -DISP_ENABLE_UVC
  C_SOURCES += ../Custom/Hal/usbx/usbx_conf/usbx_conf.c
  C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/usbx/Src/usbx.c
- C_SOURCES += ../Middlewares/ST/STM32_ISP_Library/isp/usbx/Src/usb_desc.c
 endif
 
 ######################################
@@ -870,6 +872,8 @@ C_INCLUDES += -I../Middlewares/ST/STM32_ISP_Library/isp/Inc
 # USBX / ISP tuning include paths:
 # - Default: use project-specific USBX config under Custom/Hal/usbx
 # - When ISP_MW_TUNING_TOOL_SUPPORT is enabled: also add ISP's USBX headers and usbx_conf
+C_INCLUDES += -I../Middlewares/ST/STM32_ISP_Library/isp/usbx/Inc
+C_INCLUDES += -I../Custom/Hal/usbx/usbx_conf
 ifeq ($(findstring -DISP_MW_TUNING_TOOL_SUPPORT,$(C_DEFS)),)
  C_INCLUDES += -I../Custom/Hal/usbx
 else

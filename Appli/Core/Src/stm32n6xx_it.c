@@ -24,6 +24,7 @@
 #include "cmw_camera.h"
 #include "debug.h"
 #include "usb_otg.h"
+#include "usb_cdc_console.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "spi.h"
@@ -777,6 +778,13 @@ void USB1_OTG_HS_IRQHandler(void)
 #else
 #ifdef UX_HCD_ECM_USE_USB_OTG_HS1
   HAL_HCD_IRQHandler(&hhcd_USB_OTG_HS1);
+#else
+  {
+    PCD_HandleTypeDef *hpcd = usb_cdc_console_get_pcd();
+    if (hpcd != NULL && hpcd->State != HAL_PCD_STATE_RESET) {
+      HAL_PCD_IRQHandler(hpcd);
+    }
+  }
 #endif
 #endif
   /* USER CODE END USB2_OTG_HS_IRQn 1 */

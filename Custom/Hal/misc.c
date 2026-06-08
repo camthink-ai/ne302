@@ -601,7 +601,7 @@ static int ind_ext_deinit(void *priv)
     return 0;
 }
 
-static void ind_ext_register(void)
+static __attribute__((unused)) void ind_ext_register(void)
 {
     static dev_ops_t ind_ext_ops = {
         .init = ind_ext_init,
@@ -861,7 +861,7 @@ int misc_register(void)
     key_register();
     flash_register();
     ind_register();
-    ind_ext_register();
+    // ind_ext_register();
     light_register();
     battery_register();
     io_register();

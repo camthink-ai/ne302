@@ -393,9 +393,8 @@ int usb_get_product_string_desc(void *p_dst, int dst_len)
   uId[1] = HAL_GetUIDw1();
   uId[2] = HAL_GetUIDw2();
 
-  /* Build: "STM32 IQTUNE Camera " + 3x32-bit UID in hex */
   (void)snprintf(dev_prod, sizeof(dev_prod),
-                     "STM32 IQTune Camera %08lX%08lX%08lX",
+                     "NE302 CDC Console %08lX%08lX%08lX",
                      (unsigned long)uId[0], (unsigned long)uId[1], (unsigned long)uId[2]);
 
   return usb_get_string_desc(p_dst, dst_len, dev_prod);
