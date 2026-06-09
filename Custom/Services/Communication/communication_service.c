@@ -9,6 +9,9 @@
 #include "debug.h"
 #include "system_service.h"
 #include "netif_manager.h"
+#if NETIF_WIFI_HALOW_IS_ENABLE
+#include "mm_halow_netif.h"
+#endif
 #include "netif_init_manager.h"
 #include "sl_net_netif.h"
 #include "buffer_mgr.h"
@@ -2541,12 +2544,47 @@ static aicam_result_t apply_halow_config_from_json(void)
     memcpy(if_cfg.netmask, net_cfg.halow_netmask, sizeof(if_cfg.netmask));
     memcpy(if_cfg.gw, net_cfg.halow_gateway, sizeof(if_cfg.gw));
 
+    if_cfg.halow_cfg.tx_power_dbm = net_cfg.halow_tx_power_dbm;
+    if_cfg.halow_cfg.scan_dwell_ms = net_cfg.halow_scan_dwell_ms;
+    if_cfg.halow_cfg.rc_mcs = (int8_t)net_cfg.halow_rc_mcs;
+    if_cfg.halow_cfg.rc_bw_mhz = (int8_t)net_cfg.halow_rc_bw_mhz;
+    if_cfg.halow_cfg.rc_gi = (int8_t)net_cfg.halow_rc_gi;
+
     int cfg_ret = nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg);
     if (cfg_ret != 0) {
         LOG_SVC_ERROR("Failed to set HaLow netif config: %d", cfg_ret);
         return AICAM_ERROR;
     }
+
+    (void)mm_halow_set_tx_power(net_cfg.halow_tx_power_dbm);
+    (void)mm_halow_set_rate_override((int8_t)net_cfg.halow_rc_mcs,
+                                     (int8_t)net_cfg.halow_rc_bw_mhz,
+                                     (int8_t)net_cfg.halow_rc_gi);
+    (void)mm_halow_set_scan_config(net_cfg.halow_scan_dwell_ms, if_cfg.halow_cfg.ndp_probe_enabled);
+
     return AICAM_OK;
+}
+
+static uint32_t halow_sync_scan_timeout_ms(void)
+{
+    netif_config_t cfg;
+    uint32_t dwell = NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL;
+    const uint32_t est_channels = 16U;
+    uint32_t timeout_ms;
+
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) == 0 &&
+        cfg.halow_cfg.scan_dwell_ms >= 15U) {
+        dwell = cfg.halow_cfg.scan_dwell_ms;
+    }
+
+    timeout_ms = dwell * est_channels + 200U;
+    if (timeout_ms < 5000U) {
+        timeout_ms = 5000U;
+    }
+    if (timeout_ms > 30000U) {
+        timeout_ms = 30000U;
+    }
+    return timeout_ms;
 }
 
 static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_timeout_ms)
@@ -2554,6 +2592,12 @@ static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_tim
     if (ssid == NULL || ssid[0] == '\0') {
         return AICAM_TRUE;
     }
+
+    if (scan_timeout_ms == 0U) {
+        scan_timeout_ms = halow_sync_scan_timeout_ms();
+    }
+
+    (void)mm_halow_ensure_scan_idle(scan_timeout_ms);
 
     if (nm_wireless_update_scan_result_ex(NETIF_NAME_WIFI_HALOW, scan_timeout_ms) != 0) {
         LOG_SVC_WARN("HaLow scan failed or timed out");
@@ -2624,8 +2668,10 @@ static void on_halow_ready(const char *if_name, aicam_result_t result)
         g_communication_service.halow_initialized = AICAM_TRUE;
         g_communication_service.halow_available = AICAM_TRUE;
 
-        if (apply_halow_config_from_json() != AICAM_OK) {
-            LOG_SVC_WARN("Failed to apply HaLow config from json");
+        if (!g_communication_service.switch_in_progress) {
+            if (apply_halow_config_from_json() != AICAM_OK) {
+                LOG_SVC_WARN("Failed to apply HaLow config from json");
+            }
         }
 
 #if NETIF_4G_CAT1_IS_ENABLE
@@ -3104,7 +3150,7 @@ aicam_result_t communication_switch_type(communication_type_t type,
     
     // Store callback and start switch
     g_communication_service.switch_callback = callback;
-    g_communication_service.switch_in_progress = AICAM_TRUE;
+    communication_switch_session_begin();
     
     // Initialize result
     memset(&g_communication_service.switch_result, 0, sizeof(communication_switch_result_t));
@@ -3113,14 +3159,20 @@ aicam_result_t communication_switch_type(communication_type_t type,
     
     uint32_t start_time = rtc_get_uptime_ms();
     
-    // Perform the switch
-    aicam_result_t result = communication_switch_type_sync(type, 
+    // Perform the switch (HaLow: scan for saved SSID before attempting UP)
+    aicam_bool_t scan_before_connect = AICAM_FALSE;
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (type == COMM_TYPE_HALOW) {
+        scan_before_connect = AICAM_TRUE;
+    }
+#endif
+    aicam_result_t result = communication_switch_type_sync(type,
                                                           &g_communication_service.switch_result,
                                                           g_communication_service.config.connection_timeout_ms,
-                                                          AICAM_FALSE);
+                                                          scan_before_connect);
     
     g_communication_service.switch_result.switch_time_ms = rtc_get_uptime_ms() - start_time;
-    g_communication_service.switch_in_progress = AICAM_FALSE;
+    communication_switch_session_end();
     
     // Call callback if provided
     if (callback) {
@@ -3128,6 +3180,16 @@ aicam_result_t communication_switch_type(communication_type_t type,
     }
     
     return result;
+}
+
+void communication_switch_session_begin(void)
+{
+    g_communication_service.switch_in_progress = AICAM_TRUE;
+}
+
+void communication_switch_session_end(void)
+{
+    g_communication_service.switch_in_progress = AICAM_FALSE;
 }
 
 aicam_result_t communication_switch_type_sync(communication_type_t type,
@@ -3229,7 +3291,7 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
                     if (scan_before_connect &&
                         json_config_get_network_service_config(&net_cfg) == AICAM_OK &&
                         net_cfg.halow_ssid[0] != '\0') {
-                        if (!halow_scan_contains_ssid(net_cfg.halow_ssid, 3000U)) {
+                        if (!halow_scan_contains_ssid(net_cfg.halow_ssid, 0U)) {
                             snprintf(result->error_message, sizeof(result->error_message),
                                      "HaLow SSID \"%s\" not found in scan", net_cfg.halow_ssid);
                             connect_result = AICAM_ERROR;

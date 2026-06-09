@@ -488,6 +488,10 @@ aicam_result_t communication_switch_type_sync(communication_type_t type,
                                               uint32_t timeout_ms,
                                               aicam_bool_t scan_before_connect);
 
+/** Mark an external switch session (e.g. Web API) so init callbacks do not duplicate work. */
+void communication_switch_session_begin(void);
+void communication_switch_session_end(void);
+
 /**
  * @brief Set preferred communication type
  * @param type Preferred communication type

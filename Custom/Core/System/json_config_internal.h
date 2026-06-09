@@ -188,6 +188,11 @@
 #define NVS_KEY_HALOW_IP_ADDR            "hw_ip"
 #define NVS_KEY_HALOW_NETMASK            "hw_mask"
 #define NVS_KEY_HALOW_GATEWAY            "hw_gw"
+#define NVS_KEY_HALOW_TX_POWER           "hw_txpwr"
+#define NVS_KEY_HALOW_SCAN_DWELL         "hw_scan_dw"
+#define NVS_KEY_HALOW_RC_MCS             "hw_rc_mcs"
+#define NVS_KEY_HALOW_RC_BW              "hw_rc_bw"
+#define NVS_KEY_HALOW_RC_GI              "hw_rc_gi"
 
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"

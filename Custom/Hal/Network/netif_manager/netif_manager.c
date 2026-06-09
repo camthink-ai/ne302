@@ -138,6 +138,100 @@ static void netif_cli_halow_dpp_cb(const mm_halow_dpp_evt_info_t *info, void *us
 }
 #endif
 
+#if NETIF_WIFI_HALOW_IS_ENABLE
+static int halow_cli_parse_mcs(const char *s, int8_t *out)
+{
+    if (s == NULL || out == NULL) {
+        return -1;
+    }
+    if (strcmp(s, "none") == 0 || strcmp(s, "auto") == 0 || strcmp(s, "off") == 0) {
+        *out = -1;
+        return 0;
+    }
+    {
+        int v = atoi(s);
+        if (v < 0 || v > 9) {
+            return -1;
+        }
+        *out = (int8_t)v;
+    }
+    return 0;
+}
+
+static int halow_cli_parse_bw(const char *s, int8_t *out)
+{
+    if (s == NULL || out == NULL) {
+        return -1;
+    }
+    if (strcmp(s, "none") == 0 || strcmp(s, "auto") == 0 || strcmp(s, "off") == 0) {
+        *out = -1;
+        return 0;
+    }
+    {
+        int v = atoi(s);
+        if (v != 1 && v != 2 && v != 4 && v != 8) {
+            return -1;
+        }
+        *out = (int8_t)v;
+    }
+    return 0;
+}
+
+static int halow_cli_parse_gi(const char *s, int8_t *out)
+{
+    if (s == NULL || out == NULL) {
+        return -1;
+    }
+    if (strcmp(s, "none") == 0 || strcmp(s, "auto") == 0 || strcmp(s, "off") == 0) {
+        *out = -1;
+        return 0;
+    }
+    if (strcmp(s, "short") == 0 || strcmp(s, "0") == 0) {
+        *out = 0;
+        return 0;
+    }
+    if (strcmp(s, "long") == 0 || strcmp(s, "1") == 0) {
+        *out = 1;
+        return 0;
+    }
+    return -1;
+}
+
+static void halow_print_rate_info_lines(const halow_wireless_config_t *hc)
+{
+    char mcs[12];
+    char bw[16];
+    char gi[12];
+
+    if (hc == NULL) {
+        return;
+    }
+
+    if (hc->rc_mcs < 0) {
+        strncpy(mcs, "auto", sizeof(mcs));
+    } else {
+        snprintf(mcs, sizeof(mcs), "%d", (int)hc->rc_mcs);
+    }
+    if (hc->rc_bw_mhz < 0) {
+        strncpy(bw, "auto", sizeof(bw));
+    } else {
+        snprintf(bw, sizeof(bw), "%d MHz", (int)hc->rc_bw_mhz);
+    }
+    if (hc->rc_gi < 0) {
+        strncpy(gi, "auto", sizeof(gi));
+    } else if (hc->rc_gi == 0) {
+        strncpy(gi, "short", sizeof(gi));
+    } else {
+        strncpy(gi, "long", sizeof(gi));
+    }
+    mcs[sizeof(mcs) - 1] = '\0';
+    bw[sizeof(bw) - 1] = '\0';
+    gi[sizeof(gi) - 1] = '\0';
+
+    printf("HALOW_RATE_MCS: %s\r\nHALOW_RATE_BW: %s\r\nHALOW_RATE_GI: %s\r\n", mcs, bw, gi);
+}
+#endif
+
 static int netif_manager_cmd(int argc, char* argv[]) 
 {
     int ret = 0;
@@ -409,6 +503,40 @@ static int netif_manager_cmd(int argc, char* argv[])
             return -1;
         }
         ret = mm_halow_set_tx_power((uint16_t)atoi(argv[3]));
+    } else if (strcmp(argv[2], "rate") == 0) {
+        int8_t mcs = -1;
+        int8_t bw = -1;
+        int8_t gi = -1;
+
+        if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0) {
+            LOG_SIMPLE("Only hw supports rate cmd\r\n");
+            return -1;
+        }
+        if (argc < 4) {
+            ret = mm_halow_print_rate_override();
+        } else if (strcmp(argv[3], "off") == 0 || strcmp(argv[3], "none") == 0) {
+            ret = mm_halow_set_rate_override(-1, -1, -1);
+        } else {
+            if (halow_cli_parse_mcs(argv[3], &mcs) != 0) {
+                LOG_SIMPLE("Usage: ifconfig hw rate [mcs|none] [bw|none] [gi|none]\r\n");
+                LOG_SIMPLE("  mcs: 0-9 or none; bw: 1/2/4/8 or none; gi: short/long/none\r\n");
+                LOG_SIMPLE("  e.g. rate 7 | rate 7 8 short | rate off\r\n");
+                return -1;
+            }
+            if (argc > 4) {
+                if (halow_cli_parse_bw(argv[4], &bw) != 0) {
+                    LOG_SIMPLE("Invalid bw: %s (use 1/2/4/8 or none)\r\n", argv[4]);
+                    return -1;
+                }
+            }
+            if (argc > 5) {
+                if (halow_cli_parse_gi(argv[5], &gi) != 0) {
+                    LOG_SIMPLE("Invalid gi: %s (use short/long/none)\r\n", argv[5]);
+                    return -1;
+                }
+            }
+            ret = mm_halow_set_rate_override(mcs, bw, gi);
+        }
     } else if (strcmp(argv[2], "ps") == 0) {
         if (strcmp(if_name, NETIF_NAME_WIFI_HALOW) != 0 || argc < 4) {
             LOG_SIMPLE("Usage: ifconfig hw ps <0|1>\r\n");
@@ -858,6 +986,7 @@ void nm_print_netif_info(const char *if_name, netif_info_t *netif_info)
             printf("HALOW_TX_PWR: %u dBm (0=reg max)\r\n", netif_info->halow_cfg.tx_power_dbm);
             printf("HALOW_PS: %u\r\n", netif_info->halow_cfg.ps_mode);
             printf("HALOW_SCAN_DWELL: %lu ms\r\n", (unsigned long)netif_info->halow_cfg.scan_dwell_ms);
+            halow_print_rate_info_lines(&netif_info->halow_cfg);
         }
 #endif
         if (print_if != NULL && strcmp(print_if, NETIF_NAME_WIFI_AP) == 0) {

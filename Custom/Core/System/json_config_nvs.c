@@ -764,6 +764,26 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
         result = json_config_nvs_write_uint32(NVS_KEY_HALOW_GATEWAY, gw_val);
     }
 
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_TX_POWER, config->halow_tx_power_dbm);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow TX power to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_SCAN_DWELL, config->halow_scan_dwell_ms);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow scan dwell to NVS");
+
+    result = json_config_nvs_write_int32(NVS_KEY_HALOW_RC_MCS, config->halow_rc_mcs);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow rate MCS to NVS");
+
+    result = json_config_nvs_write_int32(NVS_KEY_HALOW_RC_BW, config->halow_rc_bw_mhz);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow rate BW to NVS");
+
+    result = json_config_nvs_write_int32(NVS_KEY_HALOW_RC_GI, config->halow_rc_gi);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow rate GI to NVS");
+
     // Save known_network_count
     result = json_config_nvs_write_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, config->known_network_count);
     if (result != AICAM_OK)
@@ -1966,6 +1986,41 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->network_service.halow_gateway[1] = (temp_uint32 >> 16) & 0xFF;
         config->network_service.halow_gateway[2] = (temp_uint32 >> 8) & 0xFF;
         config->network_service.halow_gateway[3] = temp_uint32 & 0xFF;
+    }
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_TX_POWER, &temp_uint32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_tx_power_dbm = (uint16_t)temp_uint32;
+    } else {
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_TX_POWER, config->network_service.halow_tx_power_dbm);
+    }
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_SCAN_DWELL, &temp_uint32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_scan_dwell_ms = temp_uint32;
+    } else {
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_SCAN_DWELL, config->network_service.halow_scan_dwell_ms);
+    }
+
+    result = json_config_nvs_read_int32(NVS_KEY_HALOW_RC_MCS, &temp_int32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_rc_mcs = temp_int32;
+    } else {
+        json_config_nvs_write_int32(NVS_KEY_HALOW_RC_MCS, config->network_service.halow_rc_mcs);
+    }
+
+    result = json_config_nvs_read_int32(NVS_KEY_HALOW_RC_BW, &temp_int32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_rc_bw_mhz = temp_int32;
+    } else {
+        json_config_nvs_write_int32(NVS_KEY_HALOW_RC_BW, config->network_service.halow_rc_bw_mhz);
+    }
+
+    result = json_config_nvs_read_int32(NVS_KEY_HALOW_RC_GI, &temp_int32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_rc_gi = temp_int32;
+    } else {
+        json_config_nvs_write_int32(NVS_KEY_HALOW_RC_GI, config->network_service.halow_rc_gi);
     }
 
     // Load known_network_count

@@ -434,6 +434,13 @@ static void parse_network_service(cJSON *json, network_service_config_t *cfg)
                     cfg->halow_gateway[i] = (uint8_t)cJSON_GetArrayItem(ip_arr, i)->valueint;
                 }
             }
+
+            json_get_uint32(halow, "tx_power_dbm", &temp);
+            cfg->halow_tx_power_dbm = (uint16_t)temp;
+            json_get_uint32(halow, "scan_dwell_ms", &cfg->halow_scan_dwell_ms);
+            json_get_int32(halow, "rc_mcs", &cfg->halow_rc_mcs);
+            json_get_int32(halow, "rc_bw_mhz", &cfg->halow_rc_bw_mhz);
+            json_get_int32(halow, "rc_gi", &cfg->halow_rc_gi);
         }
     }
 }
@@ -985,6 +992,12 @@ static cJSON *serialize_network_service(const network_service_config_t *cfg)
             cJSON_AddItemToArray(ip_arr, cJSON_CreateNumber(cfg->halow_gateway[i]));
         }
         cJSON_AddItemToObject(halow, "gateway", ip_arr);
+
+        cJSON_AddNumberToObject(halow, "tx_power_dbm", cfg->halow_tx_power_dbm);
+        cJSON_AddNumberToObject(halow, "scan_dwell_ms", cfg->halow_scan_dwell_ms);
+        cJSON_AddNumberToObject(halow, "rc_mcs", cfg->halow_rc_mcs);
+        cJSON_AddNumberToObject(halow, "rc_bw_mhz", cfg->halow_rc_bw_mhz);
+        cJSON_AddNumberToObject(halow, "rc_gi", cfg->halow_rc_gi);
 
         cJSON_AddItemToObject(json, "halow", halow);
     }

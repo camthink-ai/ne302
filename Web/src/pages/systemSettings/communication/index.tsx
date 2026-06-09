@@ -57,7 +57,8 @@ export default function Communication({ setCurrentPage }: { setCurrentPage: (pag
         setCommunicationMode(communicationModeDialogValue.current);
         try {
             setIsLoading(true);
-            await switchNetworkTypeReq({ type: communicationModeDialogValue.current, timeout_ms: 3000 });
+            const switchTimeoutMs = communicationModeDialogValue.current === 'halow' ? 30000 : 3000;
+            await switchNetworkTypeReq({ type: communicationModeDialogValue.current, timeout_ms: switchTimeoutMs });
             await getNetworkStatus();
         } catch (error) {
             // eslint-disable-next-line no-console

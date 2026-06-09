@@ -17,6 +17,7 @@
 #include "json_config_mgr.h"
 #if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mm_halow_netif.h"
+#include "mmwlan.h"
 #endif
 #include <ctype.h>
 #include <strings.h>
@@ -1094,6 +1095,37 @@ static wireless_security_t halow_parse_security_string(const char *str, wireless
     return default_sec;
 }
 
+static aicam_bool_t halow_scan_matches_saved(const network_service_config_t *sys_net,
+                                              const char *scan_ssid,
+                                              const char *scan_bssid)
+{
+    if (sys_net == NULL || scan_ssid == NULL || sys_net->halow_ssid[0] == '\0') {
+        return AICAM_FALSE;
+    }
+    if (strcmp(scan_ssid, sys_net->halow_ssid) != 0) {
+        return AICAM_FALSE;
+    }
+    if (sys_net->halow_bssid[0] != '\0' && scan_bssid != NULL && scan_bssid[0] != '\0' &&
+        strcmp(scan_bssid, sys_net->halow_bssid) != 0) {
+        return AICAM_FALSE;
+    }
+    return AICAM_TRUE;
+}
+
+static aicam_bool_t halow_scan_quick_connect_allowed(const network_service_config_t *sys_net,
+                                                     const char *scan_ssid,
+                                                     const char *scan_bssid,
+                                                     wireless_security_t scan_sec)
+{
+    if (!halow_scan_matches_saved(sys_net, scan_ssid, scan_bssid)) {
+        return AICAM_FALSE;
+    }
+    if (scan_sec == WIRELESS_OPEN || (wireless_security_t)sys_net->halow_security == WIRELESS_OPEN) {
+        return AICAM_TRUE;
+    }
+    return (sys_net->halow_password[0] != '\0') ? AICAM_TRUE : AICAM_FALSE;
+}
+
 static aicam_result_t halow_apply_region_to_netif(const char *region, network_service_config_t *sys_net)
 {
     char cc[MM_HALOW_REGDOMAIN_CC_LEN];
@@ -1318,7 +1350,16 @@ aicam_result_t network_halow_sta_handler(http_handler_context_t *ctx)
             cJSON_AddNumberToObject(n, "channel", (int)si->channel);
             cJSON_AddStringToObject(n, "security", get_security_type_string((wireless_security_t)si->security));
             cJSON_AddBoolToObject(n, "connected", 0);
-            cJSON_AddBoolToObject(n, "is_known", 0);
+            if (sys_net_ok) {
+                aicam_bool_t is_saved = halow_scan_matches_saved(&sys_net, si->ssid, bssid_str);
+                aicam_bool_t quick_connect = halow_scan_quick_connect_allowed(
+                    &sys_net, si->ssid, bssid_str, (wireless_security_t)si->security);
+                cJSON_AddBoolToObject(n, "is_known", is_saved);
+                cJSON_AddBoolToObject(n, "quick_connect", quick_connect);
+            } else {
+                cJSON_AddBoolToObject(n, "is_known", 0);
+                cJSON_AddBoolToObject(n, "quick_connect", 0);
+            }
             cJSON_AddNumberToObject(n, "last_connected_time", 0);
             cJSON_AddItemToArray(unknown, n);
             unknown_count++;
@@ -1329,7 +1370,9 @@ aicam_result_t network_halow_sta_handler(http_handler_context_t *ctx)
     cJSON_AddItemToObject(scan_json, "unknown_networks", unknown);
     cJSON_AddNumberToObject(scan_json, "known_count", (sys_net_ok && sys_net.halow_ssid[0] != '\0') ? 1 : 0);
     cJSON_AddNumberToObject(scan_json, "unknown_count", unknown_count);
+    cJSON_AddBoolToObject(scan_json, "scan_in_progress", mm_halow_is_scan_in_progress() ? 1 : 0);
     cJSON_AddItemToObject(response_json, "scan_results", scan_json);
+    cJSON_AddBoolToObject(response_json, "scan_in_progress", mm_halow_is_scan_in_progress() ? 1 : 0);
 
     json_string = cJSON_Print(response_json);
     cJSON_Delete(response_json);
@@ -1496,6 +1539,9 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx)
     communication_switch_result_t sw;
     cJSON *response_json;
     char *json_string;
+    cJSON *use_saved_json;
+    aicam_bool_t use_saved_password = AICAM_FALSE;
+    const char *saved_password = "";
 
     if (!ctx) {
         return AICAM_ERROR_INVALID_PARAM;
@@ -1517,25 +1563,42 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx)
     region = cJSON_GetStringValue(cJSON_GetObjectItem(request_json, "region"));
     security_str = cJSON_GetStringValue(cJSON_GetObjectItem(request_json, "security"));
     bssid = cJSON_GetStringValue(cJSON_GetObjectItem(request_json, "bssid"));
+    use_saved_json = cJSON_GetObjectItem(request_json, "use_saved_password");
+    use_saved_password = (use_saved_json != NULL && cJSON_IsTrue(use_saved_json)) ? AICAM_TRUE : AICAM_FALSE;
 
     if (ssid == NULL || ssid[0] == '\0' || strlen(ssid) >= 32) {
         cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Missing or invalid 'ssid'");
     }
-    if (password == NULL) {
-        password = "";
-    }
-    if (password[0] != '\0' && (strlen(password) < 8 || strlen(password) >= 64)) {
-        cJSON_Delete(request_json);
-        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Password must be 8-63 characters");
-    }
-
-    security = halow_parse_security_string(security_str,
-        (password[0] == '\0') ? WIRELESS_OPEN : WIRELESS_SAE);
 
     if (json_config_get_network_service_config(&sys_net) != AICAM_OK) {
         cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get network service configuration");
+    }
+
+    if (use_saved_password) {
+        if (!halow_scan_matches_saved(&sys_net, ssid, bssid)) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Saved credentials not available for this network");
+        }
+        saved_password = sys_net.halow_password;
+        if (saved_password[0] == '\0' &&
+            (wireless_security_t)sys_net.halow_security != WIRELESS_OPEN) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "No saved password for this network");
+        }
+        password = saved_password;
+        security = (wireless_security_t)sys_net.halow_security;
+    } else {
+        if (password == NULL) {
+            password = "";
+        }
+        if (password[0] != '\0' && (strlen(password) < 8 || strlen(password) >= 64)) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Password must be 8-63 characters");
+        }
+        security = halow_parse_security_string(security_str,
+            (password[0] == '\0') ? WIRELESS_OPEN : WIRELESS_SAE);
     }
 
     memset(&cfg, 0, sizeof(cfg));
@@ -1667,6 +1730,7 @@ aicam_result_t network_halow_disconnect_handler(http_handler_context_t *ctx)
 aicam_result_t network_halow_delete_handler(http_handler_context_t *ctx)
 {
     network_service_config_t sys_net = {0};
+    netif_config_t cfg;
     cJSON *response_json;
     char *json_string;
 
@@ -1679,6 +1743,17 @@ aicam_result_t network_halow_delete_handler(http_handler_context_t *ctx)
 
     if (json_config_get_network_service_config(&sys_net) != AICAM_OK) {
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get network service configuration");
+    }
+
+    (void)nm_ctrl_netif_down(NETIF_NAME_WIFI_HALOW);
+
+    memset(&cfg, 0, sizeof(cfg));
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) == 0) {
+        memset(cfg.wireless_cfg.ssid, 0, sizeof(cfg.wireless_cfg.ssid));
+        memset(cfg.wireless_cfg.pw, 0, sizeof(cfg.wireless_cfg.pw));
+        memset(cfg.wireless_cfg.bssid, 0, sizeof(cfg.wireless_cfg.bssid));
+        cfg.wireless_cfg.security = WIRELESS_OPEN;
+        (void)nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg);
     }
 
     sys_net.halow_ssid[0] = '\0';
@@ -1862,7 +1937,11 @@ aicam_result_t network_halow_ip_handler(http_handler_context_t *ctx)
         }
         cJSON_Delete(request_json);
 
-        if (apply_live && mm_halow_apply_ip_config() != 0) {
+        /*
+         * When disconnected but mmipal is still alive from a prior session, push the
+         * new IP into the stack now so the next UP does not reuse stale settings.
+         */
+        if (mm_halow_apply_ip_config() != 0 && apply_live) {
             cJSON_Delete(response_json);
             return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to apply HaLow IP configuration");
         }
@@ -1886,6 +1965,229 @@ aicam_result_t network_halow_ip_handler(http_handler_context_t *ctx)
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
     }
     return api_response_success(ctx, json_string, "HaLow IP configuration");
+}
+
+static void halow_fill_radio_limits_json(cJSON *limits, const char *country_code)
+{
+    cJSON *tx_limits;
+    cJSON *scan_limits;
+    int tx_max;
+
+    if (limits == NULL) {
+        return;
+    }
+
+    tx_limits = cJSON_CreateObject();
+    cJSON_AddNumberToObject(tx_limits, "min", 0);
+    tx_max = mm_halow_get_regdomain_max_tx_dbm(country_code);
+    cJSON_AddNumberToObject(tx_limits, "max", (tx_max > 0) ? tx_max : 30);
+    cJSON_AddItemToObject(limits, "tx_power_dbm", tx_limits);
+
+    scan_limits = cJSON_CreateObject();
+    cJSON_AddNumberToObject(scan_limits, "min", MMWLAN_SCAN_MIN_DWELL_TIME_MS);
+    cJSON_AddNumberToObject(scan_limits, "max", NETIF_WIFI_HALOW_MAX_SCAN_DWELL);
+    cJSON_AddNumberToObject(scan_limits, "default", MMWLAN_SCAN_DEFAULT_DWELL_TIME_MS);
+    cJSON_AddItemToObject(limits, "scan_dwell_ms", scan_limits);
+}
+
+static void halow_fill_radio_json(cJSON *obj, const network_service_config_t *sys_net)
+{
+    netif_config_t cfg;
+    uint16_t tx_pwr = sys_net->halow_tx_power_dbm;
+    uint32_t dwell = sys_net->halow_scan_dwell_ms;
+    int32_t mcs = sys_net->halow_rc_mcs;
+    int32_t bw = sys_net->halow_rc_bw_mhz;
+    int32_t gi = sys_net->halow_rc_gi;
+    const char *country_code = sys_net->halow_country_code;
+    cJSON *limits;
+
+    if (obj == NULL || sys_net == NULL) {
+        return;
+    }
+
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) == 0) {
+        tx_pwr = cfg.halow_cfg.tx_power_dbm;
+        dwell = cfg.halow_cfg.scan_dwell_ms;
+        mcs = (int32_t)cfg.halow_cfg.rc_mcs;
+        bw = (int32_t)cfg.halow_cfg.rc_bw_mhz;
+        gi = (int32_t)cfg.halow_cfg.rc_gi;
+        if (cfg.halow_cfg.country_code[0] != '\0') {
+            country_code = cfg.halow_cfg.country_code;
+        }
+    }
+
+    cJSON_AddNumberToObject(obj, "tx_power_dbm", tx_pwr);
+    cJSON_AddNumberToObject(obj, "scan_dwell_ms", dwell);
+    cJSON_AddNumberToObject(obj, "rate_mcs", mcs);
+    cJSON_AddNumberToObject(obj, "rate_bw_mhz", bw);
+    cJSON_AddNumberToObject(obj, "rate_gi", gi);
+
+    limits = cJSON_CreateObject();
+    halow_fill_radio_limits_json(limits, country_code);
+    cJSON_AddItemToObject(obj, "limits", limits);
+}
+
+static aicam_result_t halow_validate_radio_fields(uint16_t tx_power_dbm, uint32_t scan_dwell_ms,
+                                                  int32_t rate_mcs, int32_t rate_bw_mhz, int32_t rate_gi,
+                                                  const char *country_code)
+{
+    int tx_max = mm_halow_get_regdomain_max_tx_dbm(country_code);
+
+    if (tx_max <= 0) {
+        tx_max = 30;
+    }
+    if (tx_power_dbm > (uint16_t)tx_max) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (scan_dwell_ms < MMWLAN_SCAN_MIN_DWELL_TIME_MS ||
+        scan_dwell_ms > NETIF_WIFI_HALOW_MAX_SCAN_DWELL) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (rate_mcs < -1 || rate_mcs > 9) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (rate_bw_mhz != -1 && rate_bw_mhz != 1 && rate_bw_mhz != 2 &&
+        rate_bw_mhz != 4 && rate_bw_mhz != 8) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (rate_gi < -1 || rate_gi > 1) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    return AICAM_OK;
+}
+
+static aicam_result_t halow_apply_radio_to_netif(network_service_config_t *sys_net)
+{
+    netif_config_t cfg;
+
+    if (sys_net == NULL) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    if (nm_get_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
+        return AICAM_ERROR;
+    }
+
+    cfg.halow_cfg.tx_power_dbm = sys_net->halow_tx_power_dbm;
+    cfg.halow_cfg.scan_dwell_ms = sys_net->halow_scan_dwell_ms;
+    cfg.halow_cfg.rc_mcs = (int8_t)sys_net->halow_rc_mcs;
+    cfg.halow_cfg.rc_bw_mhz = (int8_t)sys_net->halow_rc_bw_mhz;
+    cfg.halow_cfg.rc_gi = (int8_t)sys_net->halow_rc_gi;
+
+    if (nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
+        return AICAM_ERROR;
+    }
+
+    /*
+     * Push radio settings into the running stack immediately. nm_set_netif_cfg()
+     * may down/up when connected; these calls match the dedicated CLI paths
+     * (ifconfig hw txpwr / rate / scan_cfg) and avoid stale runtime state.
+     */
+    (void)mm_halow_set_tx_power(sys_net->halow_tx_power_dbm);
+    (void)mm_halow_set_rate_override((int8_t)sys_net->halow_rc_mcs,
+                                     (int8_t)sys_net->halow_rc_bw_mhz,
+                                     (int8_t)sys_net->halow_rc_gi);
+    (void)mm_halow_set_scan_config(sys_net->halow_scan_dwell_ms, cfg.halow_cfg.ndp_probe_enabled);
+
+    if (json_config_set_network_service_config(sys_net) != AICAM_OK) {
+        return AICAM_ERROR;
+    }
+    return AICAM_OK;
+}
+
+/**
+ * @brief GET/PUT /api/v1/system/network/halow/radio
+ */
+aicam_result_t network_halow_radio_handler(http_handler_context_t *ctx)
+{
+    network_service_config_t sys_net = {0};
+    cJSON *response_json;
+    char *json_string;
+
+    if (!ctx) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (!communication_is_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Communication service is not running");
+    }
+    if (json_config_get_network_service_config(&sys_net) != AICAM_OK) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get network service configuration");
+    }
+
+    response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+
+    if (strcmp(ctx->request.method, "GET") == 0) {
+        halow_fill_radio_json(response_json, &sys_net);
+    } else if (strcmp(ctx->request.method, "PUT") == 0) {
+        cJSON *request_json;
+        cJSON *item;
+        uint16_t tx_power_dbm = sys_net.halow_tx_power_dbm;
+        uint32_t scan_dwell_ms = sys_net.halow_scan_dwell_ms;
+        int32_t rate_mcs = sys_net.halow_rc_mcs;
+        int32_t rate_bw_mhz = sys_net.halow_rc_bw_mhz;
+        int32_t rate_gi = sys_net.halow_rc_gi;
+
+        request_json = web_api_parse_body(ctx);
+        if (!request_json) {
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON request body");
+        }
+
+        item = cJSON_GetObjectItem(request_json, "tx_power_dbm");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            tx_power_dbm = (uint16_t)item->valueint;
+        }
+        item = cJSON_GetObjectItem(request_json, "scan_dwell_ms");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            scan_dwell_ms = (uint32_t)item->valueint;
+        }
+        item = cJSON_GetObjectItem(request_json, "rate_mcs");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            rate_mcs = (int32_t)item->valueint;
+        }
+        item = cJSON_GetObjectItem(request_json, "rate_bw_mhz");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            rate_bw_mhz = (int32_t)item->valueint;
+        }
+        item = cJSON_GetObjectItem(request_json, "rate_gi");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            rate_gi = (int32_t)item->valueint;
+        }
+        cJSON_Delete(request_json);
+
+        if (halow_validate_radio_fields(tx_power_dbm, scan_dwell_ms, rate_mcs, rate_bw_mhz, rate_gi,
+                                        sys_net.halow_country_code) != AICAM_OK) {
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid HaLow radio parameters");
+        }
+
+        sys_net.halow_tx_power_dbm = tx_power_dbm;
+        sys_net.halow_scan_dwell_ms = scan_dwell_ms;
+        sys_net.halow_rc_mcs = rate_mcs;
+        sys_net.halow_rc_bw_mhz = rate_bw_mhz;
+        sys_net.halow_rc_gi = rate_gi;
+
+        if (halow_apply_radio_to_netif(&sys_net) != AICAM_OK) {
+            cJSON_Delete(response_json);
+            return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to apply HaLow radio configuration");
+        }
+
+        halow_fill_radio_json(response_json, &sys_net);
+        cJSON_AddStringToObject(response_json, "message", "HaLow radio configuration updated");
+    } else {
+        cJSON_Delete(response_json);
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET or PUT method is allowed");
+    }
+
+    json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+    return api_response_success(ctx, json_string, "HaLow radio configuration");
 }
 #endif /* NETIF_WIFI_HALOW_IS_ENABLE */
 
@@ -2142,10 +2444,18 @@ aicam_result_t network_comm_switch_handler(http_handler_context_t *ctx) {
         return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Communication type is not available");
     }
     
-    // Perform synchronous switch
+    // Perform synchronous switch (HaLow: scan for saved SSID before attempting UP)
     communication_switch_result_t switch_result = {0};
+    aicam_bool_t scan_before_connect = AICAM_FALSE;
+#if NETIF_WIFI_HALOW_IS_ENABLE
+    if (target_type == COMM_TYPE_HALOW) {
+        scan_before_connect = AICAM_TRUE;
+    }
+#endif
+    communication_switch_session_begin();
     aicam_result_t result = communication_switch_type_sync(target_type, &switch_result, timeout_ms,
-                                                           AICAM_FALSE);
+                                                           scan_before_connect);
+    communication_switch_session_end();
     
     // Create response
     cJSON* response_json = cJSON_CreateObject();
@@ -3585,6 +3895,20 @@ static const api_route_t network_module_routes[] = {
         .path = API_PATH_PREFIX"/system/network/halow/ip",
         .method = "POST",
         .handler = network_halow_ip_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/halow/radio",
+        .method = "GET",
+        .handler = network_halow_radio_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/halow/radio",
+        .method = "PUT",
+        .handler = network_halow_radio_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

@@ -16,6 +16,10 @@ netif_state_t mm_halow_netif_state(void);
 int mm_halow_start_scan(wireless_scan_callback_t callback);
 wireless_scan_result_t *mm_halow_get_storage_scan_result(void);
 int mm_halow_update_storage_scan_result(uint32_t timeout_ms);
+/** Abort any in-progress scan and wait for idle (up to @p wait_ms). */
+int mm_halow_ensure_scan_idle(uint32_t wait_ms);
+/** Return 1 if a foreground @c mmwlan_scan_request scan is in progress. */
+int mm_halow_is_scan_in_progress(void);
 
 /**
  * Select a scanned AP for quick join (sets @c wireless_cfg.bssid).
@@ -36,6 +40,16 @@ int mm_halow_regdomain_get_code(unsigned index, char *country_code, size_t len);
 /** Print regdomains present in firmware BCF (no HaLow init required). */
 int mm_halow_list_regdomains(void);
 int mm_halow_set_tx_power(uint16_t tx_power_dbm);
+/** Max EIRP (dBm) for @p country_code in mmregdb; 0 if lookup fails. */
+int mm_halow_get_regdomain_max_tx_dbm(const char *country_code);
+/**
+ * Override HaLow TX rate control (mmwlan_ate_override_rate_control).
+ * @param mcs MCS 0..9, or -1 to use rate control default.
+ * @param bw_mhz Bandwidth 1/2/4/8, or -1 for default.
+ * @param gi Guard interval: 0 short, 1 long, or -1 for default.
+ */
+int mm_halow_set_rate_override(int8_t mcs, int8_t bw_mhz, int8_t gi);
+int mm_halow_print_rate_override(void);
 int mm_halow_set_power_save(uint8_t enable);
 int mm_halow_set_scan_config(uint32_t dwell_ms, uint8_t ndp_probe_enabled);
 int mm_halow_print_version(void);

@@ -80,6 +80,7 @@ aicam_result_t network_halow_connect_handler(http_handler_context_t *ctx);
 aicam_result_t network_halow_disconnect_handler(http_handler_context_t *ctx);
 aicam_result_t network_halow_delete_handler(http_handler_context_t *ctx);
 aicam_result_t network_halow_ip_handler(http_handler_context_t *ctx);
+aicam_result_t network_halow_radio_handler(http_handler_context_t *ctx);
 #endif
 
 /* ==================== Communication Type APIs ==================== */

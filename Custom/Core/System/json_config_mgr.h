@@ -244,6 +244,16 @@ typedef struct {
     uint8_t halow_ip_addr[4];
     uint8_t halow_netmask[4];
     uint8_t halow_gateway[4];
+    /** HaLow TX power cap in dBm (0 = regulatory max). */
+    uint16_t halow_tx_power_dbm;
+    /** Foreground scan dwell time per channel (ms). */
+    uint32_t halow_scan_dwell_ms;
+    /** Fixed TX MCS 0..9, or -1 for automatic rate control. */
+    int32_t halow_rc_mcs;
+    /** TX bandwidth 1/2/4/8 MHz, or -1 for automatic. */
+    int32_t halow_rc_bw_mhz;
+    /** Guard interval: 0 short, 1 long, or -1 for automatic. */
+    int32_t halow_rc_gi;
 } network_service_config_t;
  
  // Power mode configuration structure

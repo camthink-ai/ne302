@@ -71,6 +71,9 @@ static netif_config_t halow_netif_cfg = {
         .bgscan_short_interval_s = 0,
         .bgscan_signal_threshold_dbm = 0,
         .bgscan_long_interval_s = 0,
+        .rc_mcs = -1,
+        .rc_bw_mhz = -1,
+        .rc_gi = -1,
     },
 #endif
     .ip_mode = NETIF_WIFI_HALOW_DEFAULT_IP_MODE,
@@ -296,6 +299,7 @@ static void halow_apply_sta_mac_policy(void)
 }
 
 static int halow_apply_halow_hw_config_locked(void);
+static int halow_apply_rate_override_locked(void);
 static int halow_apply_regdomain_locked(const char *country_code);
 static int halow_regdomain_supported(const char *country_code);
 static int halow_pick_fallback_regdomain(char *out, size_t out_len);
@@ -759,6 +763,7 @@ static int halow_mmwlan_boot_locked(void)
     (void)halow_apply_halow_hw_config_locked();
     halow_apply_sta_mac_policy();
     halow_mmwlan_booted = 1;
+    (void)halow_apply_rate_override_locked();
     return 0;
 }
 
@@ -1064,6 +1069,25 @@ static int halow_apply_regdomain_locked(const char *country_code)
     return 0;
 }
 
+static int halow_apply_rate_override_locked(void)
+{
+    const halow_wireless_config_t *hc = &halow_netif_cfg.halow_cfg;
+    enum mmwlan_status status;
+
+    if (!halow_mmwlan_booted) {
+        return 0;
+    }
+
+    status = mmwlan_ate_override_rate_control((enum mmwlan_mcs)hc->rc_mcs,
+                                            (enum mmwlan_bw)hc->rc_bw_mhz,
+                                            (enum mmwlan_gi)hc->rc_gi);
+    if (status != MMWLAN_SUCCESS) {
+        LOG_DRV_WARN("HaLow rate override failed: %d", (int)status);
+        return -1;
+    }
+    return 0;
+}
+
 static int halow_apply_halow_hw_config_locked(void)
 {
     struct mmwlan_scan_config scan_cfg = MMWLAN_SCAN_CONFIG_INIT;
@@ -1082,6 +1106,8 @@ static int halow_apply_halow_hw_config_locked(void)
     scan_cfg.ndp_probe_enabled = (halow_netif_cfg.halow_cfg.ndp_probe_enabled != 0);
     scan_cfg.home_channel_dwell_time_ms = MMWLAN_SCAN_DEFAULT_DWELL_ON_HOME_MS;
     (void)mmwlan_set_scan_config(&scan_cfg);
+
+    (void)halow_apply_rate_override_locked();
 
     return 0;
 }
@@ -1434,12 +1460,12 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
         }
         if (halow_scan_sem != NULL &&
             osSemaphoreAcquire(halow_scan_sem, wait_ms) != osOK) {
+            (void)mmwlan_scan_abort();
+            halow_scan_in_progress = 0;
             return -1;
         }
-        if (halow_last_scan_state != MMWLAN_SCAN_SUCCESSFUL) {
-            return -1;
-        }
-        /* Previous scan finished; start a fresh one below */
+        halow_scan_in_progress = 0;
+        /* Previous scan finished; sync caller always starts a fresh scan below */
     }
 
     if (halow_dpp_reject_if_active_locked()) {
@@ -1494,10 +1520,16 @@ static int halow_run_scan_locked(wireless_scan_result_t *storage, wireless_scan_
     halow_scan_in_progress = 1;
     halow_last_scan_state = MMWLAN_SCAN_SUCCESSFUL;
 
+    uint32_t dwell_ms = halow_netif_cfg.halow_cfg.scan_dwell_ms;
+
+    if (dwell_ms < MMWLAN_SCAN_MIN_DWELL_TIME_MS) {
+        dwell_ms = MMWLAN_SCAN_DEFAULT_DWELL_TIME_MS;
+    }
+
     scan_req.scan_rx_cb = halow_scan_rx_handler;
     scan_req.scan_complete_cb = halow_scan_complete_handler;
     scan_req.scan_cb_arg = scan_target;
-    scan_req.args.dwell_time_ms = halow_netif_cfg.halow_cfg.scan_dwell_ms;
+    scan_req.args.dwell_time_ms = dwell_ms;
     scan_req.args.dwell_on_home_ms = MMWLAN_SCAN_DEFAULT_DWELL_ON_HOME_MS;
 
     osSemaphoreAcquire(halow_scan_sem, 0);
@@ -1606,6 +1638,17 @@ int mm_halow_netif_up(void)
         ip_init_ret = halow_mmipal_init_from_cfg();
         if (ip_init_ret != 0) {
             LOG_DRV_ERROR("HaLow mmipal_init failed (ret=%d)", ip_init_ret);
+            osMutexRelease(halow_mutex);
+            return -1;
+        }
+    } else {
+        /*
+         * Stack already up from a prior session: mmipal keeps old IP until refreshed.
+         * Sync halow_netif_cfg (may have changed while disconnected) before STA enable.
+         */
+        ip_init_ret = mm_halow_apply_ip_config();
+        if (ip_init_ret != 0) {
+            LOG_DRV_ERROR("HaLow apply IP from cfg failed (ret=%d)", ip_init_ret);
             osMutexRelease(halow_mutex);
             return -1;
         }
@@ -1991,6 +2034,39 @@ int mm_halow_update_storage_scan_result(uint32_t timeout_ms)
     return ret;
 }
 
+int mm_halow_ensure_scan_idle(uint32_t wait_ms)
+{
+    if (halow_mutex == NULL) {
+        return -1;
+    }
+
+    osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_scan_in_progress) {
+        (void)mmwlan_scan_abort();
+        if (halow_scan_sem != NULL) {
+            (void)osSemaphoreAcquire(halow_scan_sem, wait_ms);
+        }
+        halow_scan_in_progress = 0;
+        halow_scan_user_cb = NULL;
+    }
+    osMutexRelease(halow_mutex);
+    return 0;
+}
+
+int mm_halow_is_scan_in_progress(void)
+{
+    int in_progress = 0;
+
+    if (halow_mutex == NULL) {
+        return 0;
+    }
+
+    osMutexAcquire(halow_mutex, osWaitForever);
+    in_progress = (halow_scan_in_progress != 0) ? 1 : 0;
+    osMutexRelease(halow_mutex);
+    return in_progress;
+}
+
 int mm_halow_set_preconnect_target(const uint8_t bssid[6])
 {
     halow_preconnect_entry_t *entry;
@@ -2041,6 +2117,37 @@ int mm_halow_set_regdomain(const char *country_code)
     return ret;
 }
 
+int mm_halow_get_regdomain_max_tx_dbm(const char *country_code)
+{
+    const struct mmwlan_regulatory_db *db = get_regulatory_db();
+    const struct mmwlan_s1g_channel_list *list;
+    char normalized[MM_HALOW_REGDOMAIN_CC_LEN];
+    unsigned i;
+    int8_t max_pwr = 0;
+
+    if (country_code == NULL || country_code[0] == '\0') {
+        country_code = halow_netif_cfg.halow_cfg.country_code;
+    }
+
+    halow_normalize_country_code(country_code, normalized, sizeof(normalized));
+    if (normalized[0] == '\0' || db == NULL) {
+        return 0;
+    }
+
+    list = mmwlan_lookup_regulatory_domain(db, normalized);
+    if (list == NULL || list->channels == NULL || list->num_channels == 0U) {
+        return 0;
+    }
+
+    for (i = 0; i < list->num_channels; i++) {
+        if (list->channels[i].max_tx_eirp_dbm > max_pwr) {
+            max_pwr = list->channels[i].max_tx_eirp_dbm;
+        }
+    }
+
+    return (int)max_pwr;
+}
+
 int mm_halow_set_tx_power(uint16_t tx_power_dbm)
 {
     enum mmwlan_status status;
@@ -2059,6 +2166,76 @@ int mm_halow_set_tx_power(uint16_t tx_power_dbm)
     osMutexRelease(halow_mutex);
 
     return (status == MMWLAN_SUCCESS) ? 0 : -1;
+}
+
+static const char *halow_rc_gi_str(int8_t gi)
+{
+    if (gi < 0) {
+        return "auto";
+    }
+    if (gi == (int8_t)MMWLAN_GI_SHORT) {
+        return "short";
+    }
+    if (gi == (int8_t)MMWLAN_GI_LONG) {
+        return "long";
+    }
+    return "?";
+}
+
+int mm_halow_print_rate_override(void)
+{
+    const halow_wireless_config_t *hc = &halow_netif_cfg.halow_cfg;
+
+    printf("HaLow rate override:\r\n");
+    if (hc->rc_mcs < 0) {
+        printf("  mcs: auto\r\n");
+    } else {
+        printf("  mcs: %d\r\n", (int)hc->rc_mcs);
+    }
+    if (hc->rc_bw_mhz < 0) {
+        printf("  bw:  auto\r\n");
+    } else {
+        printf("  bw:  %d MHz\r\n", (int)hc->rc_bw_mhz);
+    }
+    printf("  gi:  %s\r\n", halow_rc_gi_str(hc->rc_gi));
+    printf("  applied: %s\r\n", halow_mmwlan_booted ? "yes" : "pending (boot hw first)");
+    return 0;
+}
+
+int mm_halow_set_rate_override(int8_t mcs, int8_t bw_mhz, int8_t gi)
+{
+    int ret = 0;
+
+    if (mcs < -1 || mcs > (int8_t)MMWLAN_MCS_MAX) {
+        return -1;
+    }
+    if (bw_mhz != -1 && bw_mhz != 1 && bw_mhz != 2 && bw_mhz != 4 && bw_mhz != 8) {
+        return -1;
+    }
+    if (gi < -1 || gi > (int8_t)MMWLAN_GI_MAX) {
+        return -1;
+    }
+
+    if (halow_mutex == NULL) {
+        return -1;
+    }
+
+    osMutexAcquire(halow_mutex, osWaitForever);
+    if (halow_dpp_reject_if_active_locked()) {
+        osMutexRelease(halow_mutex);
+        return -1;
+    }
+
+    halow_netif_cfg.halow_cfg.rc_mcs = mcs;
+    halow_netif_cfg.halow_cfg.rc_bw_mhz = bw_mhz;
+    halow_netif_cfg.halow_cfg.rc_gi = gi;
+
+    if (halow_mmwlan_booted) {
+        ret = halow_apply_rate_override_locked();
+    }
+
+    osMutexRelease(halow_mutex);
+    return ret;
 }
 
 int mm_halow_set_power_save(uint8_t enable)

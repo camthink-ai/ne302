@@ -30,6 +30,7 @@ type HalowData = {
     security: string;
     connected: boolean;
     is_known: boolean;
+    quick_connect?: boolean;
     last_connected_time: number;
 };
 
@@ -39,6 +40,30 @@ type HalowIpConfig = {
     netmask: string;
     gateway: string;
 };
+
+type HalowRadioConfig = {
+    tx_power_dbm: number;
+    scan_dwell_ms: number;
+    rate_mcs: number;
+    rate_bw_mhz: number;
+    rate_gi: number;
+};
+
+type HalowRadioLimits = {
+    tx_power_dbm: { min: number; max: number };
+    scan_dwell_ms: { min: number; max: number; default: number };
+};
+
+const RADIO_AUTO = 'auto';
+
+const HALOW_RADIO_LIMITS_DEFAULT: HalowRadioLimits = {
+    tx_power_dbm: { min: 0, max: 30 },
+    scan_dwell_ms: { min: 15, max: 300, default: 30 },
+};
+
+/** HaLow save/connect may down/up the netif; allow long mask polling like comm switch. */
+const HALOW_MASK_POLL_MS = 3000;
+const HALOW_MASK_RETRIES = 10;
 
 const filterOtherNetworks = (list: HalowData[], connected: HalowData | null) => {
     if (!connected?.connected) return list;
@@ -57,8 +82,11 @@ export default function HalowNetworkPage() {
         scanHalow,
         setHalow,
         disconnectHalow,
+        deleteHalow,
         getHalowIpReq,
         setHalowIpReq,
+        getHalowRadioReq,
+        setHalowRadioReq,
     } = systemSettings;
 
     const [isLoading, setIsLoading] = useState(true);
@@ -74,8 +102,10 @@ export default function HalowNetworkPage() {
     const [loadingText, setLoadingText] = useState('');
     const [isReloading, setIsReloading] = useState(false);
     const [isErrorPassword, setIsErrorPassword] = useState(false);
-    const [isIpConfigDialogOpen, setIsIpConfigDialogOpen] = useState(false);
-    const [ipConfigLoading, setIpConfigLoading] = useState(false);
+    const [isForgetDialogOpen, setIsForgetDialogOpen] = useState(false);
+    const [forgetLoading, setForgetLoading] = useState(false);
+    const [ipSaving, setIpSaving] = useState(false);
+    const [ipRefreshing, setIpRefreshing] = useState(false);
     const [ipConfig, setIpConfig] = useState<HalowIpConfig>({
         ip_mode: 'dhcp',
         ip_address: '',
@@ -88,6 +118,16 @@ export default function HalowNetworkPage() {
         netmask: '',
         gateway: '',
     });
+    const [radioConfig, setRadioConfig] = useState<HalowRadioConfig>({
+        tx_power_dbm: 0,
+        scan_dwell_ms: 30,
+        rate_mcs: -1,
+        rate_bw_mhz: -1,
+        rate_gi: -1,
+    });
+    const [radioSaving, setRadioSaving] = useState(false);
+    const [radioRefreshing, setRadioRefreshing] = useState(false);
+    const [radioLimits, setRadioLimits] = useState<HalowRadioLimits>(HALOW_RADIO_LIMITS_DEFAULT);
 
     const applyStaResponse = useCallback((data: any) => {
         if (data.region) {
@@ -130,17 +170,106 @@ export default function HalowNetworkPage() {
             if (showSkeleton) setIsLoading(true);
             const res = await getHalowStaReq();
             applyStaResponse(res.data);
+            return res.data;
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error(error);
+            return null;
         } finally {
             if (showSkeleton) setIsLoading(false);
         }
     }, [applyStaResponse, getHalowStaReq]);
 
+    const isHalowScanInProgress = (data: any) => {
+        if (!data) return false;
+        if (typeof data.scan_in_progress === 'boolean') {
+            return data.scan_in_progress;
+        }
+        return data.scan_results?.scan_in_progress === true;
+    };
+
+    const pollHalowScanComplete = useCallback(async (maxWaitMs = 30000, intervalMs = 500) => {
+        const deadline = Date.now() + maxWaitMs;
+        const pollOnce = async (): Promise<boolean> => {
+            if (Date.now() >= deadline) {
+                await getHalowSta(false);
+                return false;
+            }
+            const res = await getHalowStaReq();
+            applyStaResponse(res.data);
+            if (!isHalowScanInProgress(res.data)) {
+                return true;
+            }
+            await sleep(intervalMs);
+            return pollOnce();
+        };
+        return pollOnce();
+    }, [applyStaResponse, getHalowStaReq]);
+
+    const loadHalowRadio = useCallback(async (showRefreshing = false) => {
+        try {
+            if (showRefreshing) setRadioRefreshing(true);
+            const res = await getHalowRadioReq();
+            const data = res.data ?? {};
+            const limits = data.limits ?? {};
+            setRadioLimits({
+                tx_power_dbm: {
+                    min: Number(limits.tx_power_dbm?.min ?? HALOW_RADIO_LIMITS_DEFAULT.tx_power_dbm.min),
+                    max: Number(limits.tx_power_dbm?.max ?? HALOW_RADIO_LIMITS_DEFAULT.tx_power_dbm.max),
+                },
+                scan_dwell_ms: {
+                    min: Number(limits.scan_dwell_ms?.min ?? HALOW_RADIO_LIMITS_DEFAULT.scan_dwell_ms.min),
+                    max: Number(limits.scan_dwell_ms?.max ?? HALOW_RADIO_LIMITS_DEFAULT.scan_dwell_ms.max),
+                    default: Number(limits.scan_dwell_ms?.default ?? HALOW_RADIO_LIMITS_DEFAULT.scan_dwell_ms.default),
+                },
+            });
+            setRadioConfig({
+                tx_power_dbm: Number(data.tx_power_dbm ?? 0),
+                scan_dwell_ms: Number(data.scan_dwell_ms ?? limits.scan_dwell_ms?.default ?? 30),
+                rate_mcs: Number(data.rate_mcs ?? -1),
+                rate_bw_mhz: Number(data.rate_bw_mhz ?? -1),
+                rate_gi: Number(data.rate_gi ?? -1),
+            });
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            if (showRefreshing) setRadioRefreshing(false);
+        }
+    }, [getHalowRadioReq]);
+
+    const handleRefreshRadio = () => loadHalowRadio(true);
+
+    const loadHalowIp = useCallback(async (showRefreshing = false) => {
+        try {
+            if (showRefreshing) setIpRefreshing(true);
+            const res = await getHalowIpReq();
+            const mode = res.data?.ip_mode === 'static' ? 'static' : 'dhcp';
+            const next: HalowIpConfig = {
+                ip_mode: mode,
+                ip_address: res.data?.ip_address ?? '',
+                netmask: res.data?.netmask ?? '',
+                gateway: res.data?.gateway ?? '',
+            };
+            setIpConfig(next);
+            if (mode === 'dhcp') {
+                setLiveIp(next);
+            }
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            if (showRefreshing) setIpRefreshing(false);
+        }
+    }, [getHalowIpReq]);
+
+    const handleRefreshIpConfig = () => loadHalowIp(true);
+
     useEffect(() => {
         getHalowSta();
-    }, [getHalowSta]);
+        loadHalowRadio();
+        loadHalowIp();
+    }, [getHalowSta, loadHalowRadio, loadHalowIp]);
 
     const reloadMask = async (
         fetchFn: () => Promise<any>,
@@ -213,6 +342,23 @@ export default function HalowNetworkPage() {
         }
     };
 
+    const handleQuickConnect = async (data: HalowData) => {
+        const connectFn = () => setHalow({
+            interface: 'halow',
+            ssid: data.ssid,
+            bssid: data.bssid,
+            password: '',
+            region,
+            use_saved_password: true,
+        });
+        try {
+            await reloadMask(connectFn, 3000, 3, i18n._('sys.system_management.connecting_network'));
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        }
+    };
+
     const handleDisconnect = async () => {
         try {
             await disconnectHalow({ interface: 'halow' });
@@ -220,30 +366,6 @@ export default function HalowNetworkPage() {
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error(error);
-        }
-    };
-
-    const openIpConfigDialog = async () => {
-        try {
-            setIpConfigLoading(true);
-            const res = await getHalowIpReq();
-            const mode = res.data?.ip_mode === 'static' ? 'static' : 'dhcp';
-            const next: HalowIpConfig = {
-                ip_mode: mode,
-                ip_address: res.data?.ip_address ?? '',
-                netmask: res.data?.netmask ?? '',
-                gateway: res.data?.gateway ?? '',
-            };
-            setIpConfig(next);
-            if (mode === 'dhcp') {
-                setLiveIp(next);
-            }
-            setIsIpConfigDialogOpen(true);
-        } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error(error);
-        } finally {
-            setIpConfigLoading(false);
         }
     };
 
@@ -273,20 +395,53 @@ export default function HalowNetworkPage() {
                 }
         );
         try {
-            await reloadMask(saveFn, 3000, 3, i18n._('sys.system_management.saving_network_config'));
-            setIsIpConfigDialogOpen(false);
+            setIpSaving(true);
+            await reloadMask(
+                saveFn,
+                HALOW_MASK_POLL_MS,
+                HALOW_MASK_RETRIES,
+                i18n._('sys.system_management.saving_network_config')
+            );
+            toast.success(i18n._('sys.system_management.save_success'));
+            await loadHalowIp();
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error(error);
+        } finally {
+            setIpSaving(false);
+        }
+    };
+
+    const handleForgetNetwork = async () => {
+        try {
+            setForgetLoading(true);
+            await deleteHalow();
+            setIsForgetDialogOpen(false);
+            setCurrentHalowData(null);
+            await getHalowSta(false);
+            await handleScan();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            setForgetLoading(false);
         }
     };
 
     const handleScan = async () => {
-        const waitScan = async () => {
+        setLoadingText(i18n._('sys.system_management.scanning_network'));
+        setIsReloading(true);
+        setShowReloadMask(true);
+        try {
             await scanHalow();
-            await sleep(3000);
-        };
-        await reloadMask(waitScan, 3000, 3, i18n._('sys.system_management.scanning_network'));
+            await pollHalowScanComplete();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            setShowReloadMask(false);
+            setIsReloading(false);
+        }
     };
 
     const handleRegionChange = async (value: string) => {
@@ -294,10 +449,47 @@ export default function HalowNetworkPage() {
         try {
             setRegion(value);
             await setHalowRegionReq({ region: value });
+            await loadHalowRadio();
             await handleScan();
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error(error);
+        }
+    };
+
+    const handleSaveRadioConfig = async () => {
+        if (radioConfig.scan_dwell_ms < radioLimits.scan_dwell_ms.min
+            || radioConfig.scan_dwell_ms > radioLimits.scan_dwell_ms.max) {
+            toast.error(i18n._('errors.poe.parameter_configuration_error'));
+            return;
+        }
+        if (radioConfig.tx_power_dbm < radioLimits.tx_power_dbm.min
+            || radioConfig.tx_power_dbm > radioLimits.tx_power_dbm.max) {
+            toast.error(i18n._('errors.poe.parameter_configuration_error'));
+            return;
+        }
+        try {
+            setRadioSaving(true);
+            const saveFn = () => setHalowRadioReq({
+                tx_power_dbm: radioConfig.tx_power_dbm,
+                scan_dwell_ms: radioConfig.scan_dwell_ms,
+                rate_mcs: radioConfig.rate_mcs,
+                rate_bw_mhz: radioConfig.rate_bw_mhz,
+                rate_gi: radioConfig.rate_gi,
+            });
+            await reloadMask(
+                saveFn,
+                HALOW_MASK_POLL_MS,
+                HALOW_MASK_RETRIES,
+                i18n._('sys.system_management.saving_radio_config')
+            );
+            toast.success(i18n._('sys.system_management.save_success'));
+            await loadHalowRadio();
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(error);
+        } finally {
+            setRadioSaving(false);
         }
     };
 
@@ -311,94 +503,240 @@ export default function HalowNetworkPage() {
 
     const displayIp = ipConfig.ip_mode === 'dhcp' ? liveIp : ipConfig;
 
-    const ipConfigDialog = () => (
-        <Dialog open={isIpConfigDialogOpen} onOpenChange={setIsIpConfigDialogOpen}>
-            <DialogContent className="mx-8" showCloseButton={false}>
-                <DialogClose asChild>
-                    <Button
-                      variant="ghost"
-                      onClick={() => setIsIpConfigDialogOpen(false)}
-                      className="absolute right-4 top-4 h-8 w-8 p-0 rounded-full opacity-70 hover:opacity-100 transition-opacity z-10"
+    const networkConfigSection = () => (
+        <div className="mt-4">
+            <div className="relative mb-2">
+                <p className="text-sm font-bold">{i18n._('sys.system_management.halow_network_config')}</p>
+                <Button
+                  variant="ghost"
+                  className="absolute -top-2 right-0"
+                  onClick={handleRefreshIpConfig}
+                  disabled={ipRefreshing}
+                  title={i18n._('sys.system_management.halow_refresh_network_config')}
+                >
+                    <SvgIcon icon="reload2" className={`w-6 h-6 ${ipRefreshing ? 'animate-spin' : ''}`} />
+                </Button>
+            </div>
+            <div className="flex flex-col bg-gray-100 px-4 py-2 rounded-lg gap-1">
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_ip_mode')}</Label>
+                    <Select
+                      value={ipConfig.ip_mode}
+                      onValueChange={(value: 'dhcp' | 'static') => {
+                            if (value === 'dhcp') {
+                                setIpConfig({
+                                    ip_mode: 'dhcp',
+                                    ip_address: liveIp.ip_address,
+                                    netmask: liveIp.netmask,
+                                    gateway: liveIp.gateway,
+                                });
+                            } else {
+                                setIpConfig((prev) => ({ ...prev, ip_mode: 'static' }));
+                            }
+                        }}
                     >
-                        <SvgIcon icon="close" className="w-4 h-4" />
-                    </Button>
-                </DialogClose>
-                <DialogHeader>
-                    <DialogTitle>{i18n._('sys.system_management.configure_network')}</DialogTitle>
-                </DialogHeader>
-                <div className="my-4 flex flex-col gap-3">
-                    <div className="flex justify-between items-center gap-2">
-                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_ip_mode')}</Label>
-                        <Select
-                          value={ipConfig.ip_mode}
-                          onValueChange={(value: 'dhcp' | 'static') => {
-                                if (value === 'dhcp') {
-                                    setIpConfig({
-                                        ip_mode: 'dhcp',
-                                        ip_address: liveIp.ip_address,
-                                        netmask: liveIp.netmask,
-                                        gateway: liveIp.gateway,
-                                    });
-                                } else {
-                                    setIpConfig((prev) => ({ ...prev, ip_mode: 'static' }));
-                                }
-                            }}
-                        >
-                            <SelectTrigger className="w-[140px]">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="dhcp">{i18n._('sys.system_management.dhcp')}</SelectItem>
-                                <SelectItem value="static">{i18n._('sys.system_management.static')}</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between items-center gap-2">
-                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.ip_address')}</Label>
-                        <Input
-                          type="text"
-                          variant="ghost"
-                          className="text-right"
-                          readOnly={ipConfig.ip_mode === 'dhcp'}
-                          value={displayIp.ip_address}
-                          onChange={(e) => setIpConfig({ ...ipConfig, ip_address: (e.target as HTMLInputElement).value })}
-                          placeholder={i18n._('sys.system_management.ip_address')}
-                        />
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between items-center gap-2">
-                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.netmask')}</Label>
-                        <Input
-                          type="text"
-                          variant="ghost"
-                          className="text-right"
-                          readOnly={ipConfig.ip_mode === 'dhcp'}
-                          value={displayIp.netmask}
-                          onChange={(e) => setIpConfig({ ...ipConfig, netmask: (e.target as HTMLInputElement).value })}
-                          placeholder={i18n._('sys.system_management.netmask')}
-                        />
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between items-center gap-2">
-                        <Label className="text-sm shrink-0">{i18n._('sys.system_management.gateway')}</Label>
-                        <Input
-                          type="text"
-                          variant="ghost"
-                          className="text-right"
-                          readOnly={ipConfig.ip_mode === 'dhcp'}
-                          value={displayIp.gateway}
-                          onChange={(e) => setIpConfig({ ...ipConfig, gateway: (e.target as HTMLInputElement).value })}
-                          placeholder={i18n._('sys.system_management.gateway')}
-                        />
-                    </div>
+                        <SelectTrigger className="w-[140px] bg-white">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="dhcp">{i18n._('sys.system_management.dhcp')}</SelectItem>
+                            <SelectItem value="static">{i18n._('sys.system_management.static')}</SelectItem>
+                        </SelectContent>
+                    </Select>
                 </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.ip_address')}</Label>
+                    <Input
+                      type="text"
+                      className="w-[160px] text-right bg-white"
+                      readOnly={ipConfig.ip_mode === 'dhcp'}
+                      value={displayIp.ip_address}
+                      onChange={(e) => setIpConfig({ ...ipConfig, ip_address: (e.target as HTMLInputElement).value })}
+                      placeholder={i18n._('sys.system_management.ip_address')}
+                    />
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.netmask')}</Label>
+                    <Input
+                      type="text"
+                      className="w-[160px] text-right bg-white"
+                      readOnly={ipConfig.ip_mode === 'dhcp'}
+                      value={displayIp.netmask}
+                      onChange={(e) => setIpConfig({ ...ipConfig, netmask: (e.target as HTMLInputElement).value })}
+                      placeholder={i18n._('sys.system_management.netmask')}
+                    />
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.gateway')}</Label>
+                    <Input
+                      type="text"
+                      className="w-[160px] text-right bg-white"
+                      readOnly={ipConfig.ip_mode === 'dhcp'}
+                      value={displayIp.gateway}
+                      onChange={(e) => setIpConfig({ ...ipConfig, gateway: (e.target as HTMLInputElement).value })}
+                      placeholder={i18n._('sys.system_management.gateway')}
+                    />
+                </div>
+                <div className="flex justify-end py-2">
+                    <Button size="sm" variant="primary" disabled={ipSaving || showReloadMask} onClick={handleSaveIpConfig}>
+                        {i18n._('common.save')}
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+
+    const forgetNetworkDialog = () => (
+        <Dialog open={isForgetDialogOpen} onOpenChange={setIsForgetDialogOpen}>
+            <DialogContent className="mx-8">
+                <DialogHeader>
+                    <DialogTitle>{i18n._('common.confirm')}</DialogTitle>
+                    <div className="text-sm text-text-primary my-4">
+                        {i18n._('sys.system_management.halow_forget_network_confirm')}
+                    </div>
+                </DialogHeader>
                 <DialogFooter>
-                    <Button size="sm" className="w-1/2 md:w-auto" variant="outline" onClick={() => setIsIpConfigDialogOpen(false)}>{i18n._('common.cancel')}</Button>
-                    <Button size="sm" className="w-1/2 md:w-auto" variant="primary" disabled={ipConfigLoading} onClick={() => handleSaveIpConfig()}>{i18n._('common.confirm')}</Button>
+                    <Button className="md:w-auto w-1/2" variant="outline" onClick={() => setIsForgetDialogOpen(false)}>
+                        {i18n._('common.cancel')}
+                    </Button>
+                    <Button className="md:w-auto w-1/2" variant="primary" disabled={forgetLoading} onClick={handleForgetNetwork}>
+                        {i18n._('common.confirm')}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
+    );
+
+    const radioSettingsSection = () => (
+        <div className="mt-4">
+            <div className="relative mb-2">
+                <p className="text-sm font-bold">{i18n._('sys.system_management.halow_radio_settings')}</p>
+                <Button
+                  variant="ghost"
+                  className="absolute -top-2 right-0"
+                  onClick={handleRefreshRadio}
+                  disabled={radioRefreshing}
+                  title={i18n._('sys.system_management.halow_refresh_radio')}
+                >
+                    <SvgIcon icon="reload2" className={`w-6 h-6 ${radioRefreshing ? 'animate-spin' : ''}`} />
+                </Button>
+            </div>
+            <div className="flex flex-col bg-gray-100 px-4 py-2 rounded-lg gap-1">
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <div className="shrink-0">
+                        <Label className="text-sm">{i18n._('sys.system_management.halow_tx_power')}</Label>
+                        <p className="text-xs text-text-secondary">
+                            {i18n._('sys.system_management.halow_tx_power_hint')}
+                            {' '}
+                            ({radioLimits.tx_power_dbm.min}–{radioLimits.tx_power_dbm.max} dBm)
+                        </p>
+                    </div>
+                    <Input
+                      type="number"
+                      className="w-[120px] text-right bg-white"
+                      min={radioLimits.tx_power_dbm.min}
+                      max={radioLimits.tx_power_dbm.max}
+                      value={radioConfig.tx_power_dbm}
+                      onChange={(e) => setRadioConfig({
+                          ...radioConfig,
+                          tx_power_dbm: Number((e.target as HTMLInputElement).value),
+                      })}
+                    />
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <div className="shrink-0">
+                        <Label className="text-sm">{i18n._('sys.system_management.halow_scan_dwell')}</Label>
+                        <p className="text-xs text-text-secondary">
+                            {i18n._('sys.system_management.halow_scan_dwell_hint')}
+                            {' '}
+                            ({radioLimits.scan_dwell_ms.min}–{radioLimits.scan_dwell_ms.max} ms)
+                        </p>
+                    </div>
+                    <Input
+                      type="number"
+                      className="w-[120px] text-right bg-white"
+                      min={radioLimits.scan_dwell_ms.min}
+                      max={radioLimits.scan_dwell_ms.max}
+                      value={radioConfig.scan_dwell_ms}
+                      onChange={(e) => setRadioConfig({
+                          ...radioConfig,
+                          scan_dwell_ms: Number((e.target as HTMLInputElement).value),
+                      })}
+                    />
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_mcs')}</Label>
+                    <Select
+                      value={radioConfig.rate_mcs < 0 ? RADIO_AUTO : String(radioConfig.rate_mcs)}
+                      onValueChange={(value) => setRadioConfig({
+                          ...radioConfig,
+                          rate_mcs: value === RADIO_AUTO ? -1 : Number(value),
+                      })}
+                    >
+                        <SelectTrigger className="w-[120px] bg-white">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={RADIO_AUTO}>{i18n._('sys.system_management.halow_rate_auto')}</SelectItem>
+                            {Array.from({ length: 10 }, (_, i) => (
+                                <SelectItem key={i} value={String(i)}>{i}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_bw')}</Label>
+                    <Select
+                      value={radioConfig.rate_bw_mhz < 0 ? RADIO_AUTO : String(radioConfig.rate_bw_mhz)}
+                      onValueChange={(value) => setRadioConfig({
+                          ...radioConfig,
+                          rate_bw_mhz: value === RADIO_AUTO ? -1 : Number(value),
+                      })}
+                    >
+                        <SelectTrigger className="w-[120px] bg-white">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={RADIO_AUTO}>{i18n._('sys.system_management.halow_rate_auto')}</SelectItem>
+                            {[1, 2, 4, 8].map((bw) => (
+                                <SelectItem key={bw} value={String(bw)}>{`${bw} MHz`}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_gi')}</Label>
+                    <Select
+                      value={radioConfig.rate_gi < 0 ? RADIO_AUTO : String(radioConfig.rate_gi)}
+                      onValueChange={(value) => setRadioConfig({
+                          ...radioConfig,
+                          rate_gi: value === RADIO_AUTO ? -1 : Number(value),
+                      })}
+                    >
+                        <SelectTrigger className="w-[120px] bg-white">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={RADIO_AUTO}>{i18n._('sys.system_management.halow_rate_auto')}</SelectItem>
+                            <SelectItem value="0">{i18n._('sys.system_management.halow_rate_gi_short')}</SelectItem>
+                            <SelectItem value="1">{i18n._('sys.system_management.halow_rate_gi_long')}</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex justify-end py-2">
+                    <Button size="sm" variant="primary" disabled={radioSaving || showReloadMask} onClick={handleSaveRadioConfig}>
+                        {i18n._('common.save')}
+                    </Button>
+                </div>
+            </div>
+        </div>
     );
 
     const connectDialog = () => (
@@ -502,7 +840,7 @@ export default function HalowNetworkPage() {
 
                     {currentHalowData?.connected && (
                         <>
-                            <p className="text-sm font-bold mb-2">{i18n._('sys.system_management.communication_mode')}</p>
+                            <p className="text-sm font-bold mb-2">{i18n._('sys.system_management.current_network')}</p>
                             <div className="flex flex-col gap-2 bg-gray-100 p-4 rounded-lg">
                                 <div className="flex justify-between">
                                     <div className="flex items-center gap-2">
@@ -529,7 +867,7 @@ export default function HalowNetworkPage() {
                                                 <div className="flex flex-col m-1">
                                                     <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleDisconnect()}>{i18n._('sys.system_management.disconnect')}</div>
                                                     <Separator className="my-1" />
-                                                    <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => openIpConfigDialog()}>{i18n._('sys.system_management.configure_network')}</div>
+                                                    <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => setIsForgetDialogOpen(true)}>{i18n._('sys.system_management.halow_forget_network')}</div>
                                                 </div>
                                             </PopoverContent>
                                         </Popover>
@@ -544,11 +882,32 @@ export default function HalowNetworkPage() {
                             <p className="text-sm font-bold mb-2">{i18n._('sys.system_management.other_network')}</p>
                             <div className="flex flex-col bg-gray-100 px-4 rounded-lg">
                                 {otherHalowDataList.map((item, index) => (
-                                    <div onClick={() => { if (isMobile) openConnectDialog(item); }} key={`${item.ssid}-${item.bssid}-${index}`} className="group">
+                                    <div
+                                      key={`${item.ssid}-${item.bssid}-${index}`}
+                                      className="group"
+                                      onClick={() => {
+                                            if (!isMobile) return;
+                                            if (item.quick_connect && item.security !== 'open') {
+                                                handleQuickConnect(item);
+                                            } else {
+                                                openConnectDialog(item);
+                                            }
+                                        }}
+                                    >
                                         <div className="flex justify-between py-2">
                                             <Label className="text-sm">{item.ssid}</Label>
                                             <div className="flex items-center gap-1">
-                                                <Button size="sm" variant="outline" onClick={() => openConnectDialog(item)} className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">{i18n._('common.connect')}</Button>
+                                                {item.quick_connect && item.security !== 'open' && (
+                                                    <Button
+                                                      size="sm"
+                                                      variant="primary"
+                                                      onClick={(e) => { e.stopPropagation(); handleQuickConnect(item); }}
+                                                      className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    >
+                                                        {i18n._('sys.system_management.halow_quick_connect')}
+                                                    </Button>
+                                                )}
+                                                <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); openConnectDialog(item); }} className="mr-2 opacity-0 group-hover:opacity-100 transition-opacity">{i18n._('common.connect')}</Button>
                                                 {item.security !== 'open' && <SvgIcon icon="lock" className="w-4 h-4 mr-1" />}
                                                 <SvgIcon icon={item.rssi >= -55 ? 'wifi' : item.rssi >= -75 ? 'wifi_middle' : 'wifi_low'} className="w-4 h-4 text-[#272E3B]" />
                                             </div>
@@ -559,10 +918,13 @@ export default function HalowNetworkPage() {
                             </div>
                         </div>
                     )}
+
+                    {networkConfigSection()}
+                    {radioSettingsSection()}
                 </div>
             )}
             {connectDialog()}
-            {ipConfigDialog()}
+            {forgetNetworkDialog()}
             {showReloadMask && <WifiReloadMask loadingText={loadingText} isLoading={isReloading} />}
         </div>
     );

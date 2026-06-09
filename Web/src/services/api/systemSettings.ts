@@ -112,9 +112,25 @@ const systemSettings = {
     getHalowRegionReq: () => request.get('/api/v1/system/network/halow/region'),
     setHalowRegionReq: (data: { region: string }) => request.put('/api/v1/system/network/halow/region', data),
     scanHalow: () => request.post('/api/v1/system/network/halow/scan', {}),
-    setHalow: (data: { interface: string; ssid: string; bssid: string; password: string; region?: string }) => request.post('/api/v1/system/network/halow', data),
+    setHalow: (data: {
+        interface: string;
+        ssid: string;
+        bssid: string;
+        password: string;
+        region?: string;
+        use_saved_password?: boolean;
+    }) => request.post('/api/v1/system/network/halow', data),
     disconnectHalow: (data: { interface?: string }) => request.post('/api/v1/system/network/halow/disconnect', data),
+    deleteHalow: () => request.post('/api/v1/system/network/halow/delete', {}),
     getHalowIpReq: () => request.get('/api/v1/system/network/halow/ip'),
+    getHalowRadioReq: () => request.get('/api/v1/system/network/halow/radio'),
+    setHalowRadioReq: (data: {
+        tx_power_dbm?: number;
+        scan_dwell_ms?: number;
+        rate_mcs?: number;
+        rate_bw_mhz?: number;
+        rate_gi?: number;
+    }) => request.put('/api/v1/system/network/halow/radio', data),
     setHalowIpReq: (data: {
         ip_mode: 'dhcp' | 'static';
         ip_address?: string;

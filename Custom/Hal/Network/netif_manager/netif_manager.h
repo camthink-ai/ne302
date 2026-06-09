@@ -82,6 +82,7 @@
 #define NETIF_WIFI_HALOW_DEFAULT_GW           {192, 168, 12, 1}
 #define NETIF_WIFI_HALOW_DEFAULT_IP_MODE      (NETIF_IP_MODE_DHCP)
 #define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (30)
+#define NETIF_WIFI_HALOW_MAX_SCAN_DWELL       (300)
 /** 1: scan de-dup by BSSID+SSID+freq+bw; 0 (default): BSSID+SSID only */
 #ifndef NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW
 #define NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW  (0)
@@ -209,6 +210,9 @@ typedef struct {
     uint16_t bgscan_short_interval_s;
     int8_t bgscan_signal_threshold_dbm;
     uint16_t bgscan_long_interval_s;
+    int8_t rc_mcs;                          ///< TX MCS 0..9, or -1 (rate control default)
+    int8_t rc_bw_mhz;                       ///< TX BW 1/2/4/8 MHz, or -1 (default)
+    int8_t rc_gi;                           ///< GI: 0 short, 1 long, or -1 (default)
 } halow_wireless_config_t;
 #endif
 

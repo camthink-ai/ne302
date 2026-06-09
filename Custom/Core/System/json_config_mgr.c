@@ -7,6 +7,7 @@
  */
 
  #include "json_config_internal.h" // Includes all necessary headers
+ #include "netif_manager.h"
  #include "buffer_mgr.h"
  #include "version.h"              // Centralized version info
  #include "fsbl_app_common.h"
@@ -168,6 +169,11 @@
         .halow_ip_addr = {192, 168, 12, 199},
         .halow_netmask = {255, 255, 255, 0},
         .halow_gateway = {192, 168, 12, 1},
+        .halow_tx_power_dbm = NETIF_WIFI_HALOW_DEFAULT_TX_PWR,
+        .halow_scan_dwell_ms = NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL,
+        .halow_rc_mcs = -1,
+        .halow_rc_bw_mhz = -1,
+        .halow_rc_gi = -1,
 
          // PoE/Ethernet default configuration
          .poe = {
