@@ -2143,7 +2143,7 @@ aicam_result_t network_comm_switch_handler(http_handler_context_t *ctx) {
     }
     
     // Perform synchronous switch
-    communication_switch_result_t switch_result;
+    communication_switch_result_t switch_result = {0};
     aicam_result_t result = communication_switch_type_sync(target_type, &switch_result, timeout_ms,
                                                            AICAM_FALSE);
     
