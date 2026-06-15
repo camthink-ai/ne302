@@ -50,3 +50,6 @@ build/
 
 # Auto-generated files
 Custom/Common/Inc/version.h
+
+# Silicon Labs SDK
+Custom/Common/Lib/SiliconLabs_SDK/**/*.slcc
