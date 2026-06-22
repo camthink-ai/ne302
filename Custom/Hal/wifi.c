@@ -365,7 +365,8 @@ static int32_t sl_si91x_app_task_fw_update_via_xmodem(uint8_t *rx_data, uint32_t
             uint32_t secs = xfer_time / 1000;
             LOG_SIMPLE("\r\nFirmware upgrade time: %d seconds\r\n", (int)secs);
             LOG_SIMPLE("\r\nDEMO COMPLETED\r\n");
-            
+
+            sl_net_deinit(SL_NET_WIFI_CLIENT_INTERFACE);
             break;
         }
         default:
@@ -682,9 +683,10 @@ static void wifi_update_process(void)
         device_ioctl(misc, MISC_CMD_LED_SET_BLINK, (uint8_t *)&blink_params, 0);
     }
     status = sl_net_init(SL_NET_WIFI_CLIENT_INTERFACE, &firmware_update_configuration, NULL, NULL);
-    if (status == SL_STATUS_OK) {
-        printf("wifi_update sl_net_init ok \r\n");
-        return;   
+    if (status != SL_STATUS_OK) {
+        printf("wifi_update sl_net_init failed(0x%lx) \r\n", status);
+        sl_net_deinit(SL_NET_WIFI_CLIENT_INTERFACE);
+        return;
     }
     
     status = firmware_upgrade_from_file(WIFI_FIR_NAME);

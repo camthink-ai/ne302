@@ -325,7 +325,7 @@ int sl_si91x_send_large_data(int socket, const uint8_t *buffer, size_t buffer_le
   size_t max_len                         = 0;
 
   SLI_SET_ERRNO_AND_RETURN_IF_TRUE(si91x_socket == NULL, EBADF);
-  SLI_SET_ERRNO_AND_RETURN_IF_TRUE(si91x_socket->state == RESET || si91x_socket->state == INITIALIZED, EBADF);
+  SLI_SET_ERRNO_AND_RETURN_IF_TRUE(si91x_socket->state == S_RESET || si91x_socket->state == INITIALIZED, EBADF);
   SLI_SET_ERRNO_AND_RETURN_IF_TRUE(buffer == NULL, EFAULT);
 
   // Find maximum limit based on the protocol

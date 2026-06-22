@@ -22,12 +22,13 @@
 #include "cmsis_os2.h"
 #include "sl_si91x_status.h"
 #include "sl_rsi_utility.h"
+#include "sli_wifi_utility.h"
 #include "sl_constants.h"
 #include "sl_status.h"
 #include "stm32n6xx_hal.h"
 #include "stm32n6xx_hal_spi.h"
 #include "cmsis_gcc.h" 
-#include "em_core.h"
+#include "sl_core.h"
 #include "pwr.h"
 #include "spi.h"
 #include "exti.h"
@@ -352,7 +353,7 @@ static void si91x_gpio_interrupt(void)
 {
     // Trigger SiWx91x BUS Event
     if (current_performance_profile != HIGH_PERFORMANCE) printf("#\r\n");
-    sli_si91x_set_event(SL_SI91X_NCP_HOST_BUS_RX_EVENT);
+    sli_wifi_set_event(SL_SI91X_NCP_HOST_BUS_RX_EVENT);
 }
 
 static void si91x_sta_interrupt(void)

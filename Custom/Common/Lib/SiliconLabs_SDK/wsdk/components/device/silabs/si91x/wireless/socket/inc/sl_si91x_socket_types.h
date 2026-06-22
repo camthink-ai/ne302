@@ -210,7 +210,7 @@ typedef void (*sl_si91x_socket_remote_termination_callback_t)(int socket, uint16
 
 /// Internal  si91x BSD socket status
 typedef enum {
-  RESET = 0,   // State of unallocated socket.
+  S_RESET = 0,   // State of unallocated socket.
   INITIALIZED, // Socket attains this state when socket() has been executed successfully.
   BOUND,       // Socket attains this state when bind() has been executed successfully.
   LISTEN,      // (TCP ONLY STATE) Socket attains this state when listen() has been executed successfully.

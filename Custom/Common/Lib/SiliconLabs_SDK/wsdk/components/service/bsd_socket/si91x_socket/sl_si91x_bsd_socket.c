@@ -217,7 +217,7 @@ sl_status_t sl_si91x_get_socket_info(sl_si91x_socket_info_response_t *socket_inf
     const sli_si91x_socket_t *socket = sli_get_si91x_socket(socket_index);
 
     // Skip if socket is not allocated or not in use
-    if (socket == NULL || socket->state == RESET) {
+    if (socket == NULL || socket->state == S_RESET) {
       continue;
     }
 

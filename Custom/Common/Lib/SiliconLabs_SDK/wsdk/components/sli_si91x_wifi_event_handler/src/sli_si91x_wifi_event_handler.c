@@ -507,7 +507,7 @@ static sli_si91x_socket_t *get_socket_from_packet(sl_wifi_system_packet_t *socke
       ((sli_si91x_socket_create_response_t *)socket_packet->data);
     return sli_si91x_get_socket_from_id(
       -1,
-      RESET,
+      S_RESET,
       (int16_t)(socket_create_response->socket_type[0] | (socket_create_response->socket_type[1] << 8)));
   } else if (socket_packet->command == SLI_WLAN_RSP_SOCKET_ACCEPT) {
     const uint16_t port = ((sli_si91x_rsp_ltcp_est_t *)socket_packet->data)->src_port_num;
@@ -529,7 +529,7 @@ static sli_si91x_socket_t *get_socket_from_packet(sl_wifi_system_packet_t *socke
       }
       return NULL;
     }
-    return sli_si91x_get_socket_from_id(socket_id, RESET, -1);
+    return sli_si91x_get_socket_from_id(socket_id, S_RESET, -1);
   } else {
     return sli_si91x_get_socket_from_id(socket_id, LISTEN, -1);
   }
@@ -863,7 +863,7 @@ static inline void sli_si91x_wifi_handle_rx_events(uint32_t *event)
             if ((SLI_WIFI_RSP_JOIN == frame_type) && (frame_status != SL_STATUS_OK)) {
               // Reset current performance profile and set it to high performance
               sli_reset_coex_current_performance_profile();
-              current_performance_profile = SL_WIFI_SYSTEM_ASSOCIATED_POWER_SAVE_LOW_LATENCY;
+              current_performance_profile = SL_WIFI_SYSTEM_HIGH_PERFORMANCE;
             } else if (SLI_WIFI_RSP_DISCONNECT == frame_type) {
               // Reset current performance profile and set it to high performance
               sli_reset_coex_current_performance_profile();
