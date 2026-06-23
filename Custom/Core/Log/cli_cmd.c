@@ -1045,10 +1045,10 @@ static int fw_version_cmd(int argc, char* argv[])
 #endif
     
     // MODEL (check if AI_1 is active)
-    FirmwareType model_type = json_config_get_ai_1_active() ? FIRMWARE_AI_1 : FIRMWARE_DEFAULT_AI;
+    FirmwareType model_type = json_config_get_ai_1_active() ? FIRMWARE_AI_2 : FIRMWARE_AI_1;
     get_fw_version_str(model_type, version_str, sizeof(version_str));
     LOG_SIMPLE("MODEL:    %s (%s)\r\n", version_str, 
-               model_type == FIRMWARE_AI_1 ? "AI_1" : "AI_DEFAULT");
+               model_type == FIRMWARE_AI_2 ? "AI_2" : "AI_1");
     
     LOG_SIMPLE("\r\n====================================\r\n");
     

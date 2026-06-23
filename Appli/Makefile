@@ -574,7 +574,6 @@ ASM_SOURCES_S += ../Middlewares/ST/threadx/ports/cortex_M55/gnu/src/tx_timer_int
 # C Compiler Defines (Organized by Category)
 ######################################
 C_DEFS = $(COMMON_DEFS)
-C_DEFS += -DBOOT_IN_PSRAM
 C_DEFS += -DXSPI_SKIP_XSPIM_CONFIG
 # C_DEFS += -DSTM32N6_DK_BOARD
 

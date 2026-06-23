@@ -251,10 +251,10 @@ ota_validation_result_t ota_validate_partition_availability(FirmwareType fw_type
         case FIRMWARE_WEB:
             partition_size = 0x200000;  // 2MB
             break;
-        case FIRMWARE_DEFAULT_AI:
+        case FIRMWARE_AI_1:
             partition_size = 0x1000000; // 16MB
             break;
-        case FIRMWARE_AI_1:
+        case FIRMWARE_AI_2:
             partition_size = 0x1000000; // 16MB
             break;
         default:
@@ -594,7 +594,7 @@ int ota_upgrade_from_file(int fw_type, const char *filename, const ota_validatio
 
 
     // update json config
-    if(fw_type == FIRMWARE_AI_1) {
+    if(fw_type == FIRMWARE_AI_2) {
         json_config_set_ai_1_active(AICAM_TRUE);
     }
     
@@ -813,7 +813,7 @@ int ota_upgrade_from_memory(int fw_type, const void *firmware_data, size_t firmw
     }
 
     // Step 11: Update json config if needed
-    if (fw_type == FIRMWARE_AI_1) {
+    if (fw_type == FIRMWARE_AI_2) {
         json_config_set_ai_1_active(AICAM_TRUE);
     }
     

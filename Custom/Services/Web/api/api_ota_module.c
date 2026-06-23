@@ -120,9 +120,9 @@ static FirmwareType parse_firmware_type(const char* type_str) {
     } else if (strcmp(type_str, "web") == 0) {
         return FIRMWARE_WEB;
     } else if (strcmp(type_str, "ai_default") == 0) {
-        return FIRMWARE_DEFAULT_AI;
-    } else if (strcmp(type_str, "ai") == 0) {
         return FIRMWARE_AI_1;
+    } else if (strcmp(type_str, "ai") == 0) {
+        return FIRMWARE_AI_2;
     } else if (strcmp(type_str, "reserved1") == 0) {
         return FIRMWARE_RESERVED1;
     } else if (strcmp(type_str, "reserved2") == 0) {
@@ -232,8 +232,8 @@ static int process_ota_header(ota_upload_ctx_t *ctx) {
         case 0x01: fw_type_from_header = FIRMWARE_FSBL; break;
         case 0x02: fw_type_from_header = FIRMWARE_APP; break;
         case 0x03: fw_type_from_header = FIRMWARE_WEB; break;
-        case 0x04: fw_type_from_header = FIRMWARE_AI_1; break;
-        case 0x05: fw_type_from_header = FIRMWARE_AI_1; break;
+        case 0x04: fw_type_from_header = FIRMWARE_AI_2; break;
+        case 0x05: fw_type_from_header = FIRMWARE_AI_2; break;
         default: fw_type_from_header = FIRMWARE_APP; break;
     }
 
@@ -308,7 +308,7 @@ static aicam_result_t ota_precheck_header(const uint8_t *header_data, size_t dat
                                           size_t expected_content_length)
 {
     // Determine required data size based on firmware type
-    aicam_bool_t is_ai_model = (fw_type_param == FIRMWARE_AI_1 || fw_type_param == FIRMWARE_DEFAULT_AI);
+    aicam_bool_t is_ai_model = (fw_type_param == FIRMWARE_AI_2 || fw_type_param == FIRMWARE_AI_1);
     size_t required_size = is_ai_model ? OTA_PRECHECK_DATA_SIZE : sizeof(ota_header_t);
     
     if (!header_data || data_len < required_size) {
@@ -332,8 +332,8 @@ static aicam_result_t ota_precheck_header(const uint8_t *header_data, size_t dat
         case 0x01: fw_type_from_header = FIRMWARE_FSBL; break;
         case 0x02: fw_type_from_header = FIRMWARE_APP; break;
         case 0x03: fw_type_from_header = FIRMWARE_WEB; break;
-        case 0x04: fw_type_from_header = FIRMWARE_AI_1; break;
-        case 0x05: fw_type_from_header = FIRMWARE_AI_1; break;
+        case 0x04: fw_type_from_header = FIRMWARE_AI_2; break;
+        case 0x05: fw_type_from_header = FIRMWARE_AI_2; break;
         default: fw_type_from_header = FIRMWARE_APP; break;
     }
     
@@ -380,7 +380,7 @@ static aicam_result_t ota_precheck_header(const uint8_t *header_data, size_t dat
                  (int)sizeof(header->fw_ver), header->fw_ver);
     
     // ============== Part 2: Validate model package header (second 1KB, for AI model only) ==============
-    if (fw_type_param == FIRMWARE_AI_1 || fw_type_param == FIRMWARE_DEFAULT_AI) {
+    if (fw_type_param == FIRMWARE_AI_2 || fw_type_param == FIRMWARE_AI_1) {
         
         // Model package header starts at offset 1KB (after OTA header)
         const nn_package_header_t *model_header = (const nn_package_header_t *)(header_data + sizeof(ota_header_t));
@@ -444,7 +444,7 @@ aicam_result_t ota_precheck_handler(http_handler_context_t *ctx)
     FirmwareType fw_type = parse_firmware_type(fw_type_str);
     
     // Determine required Content-Length based on firmware type
-    aicam_bool_t is_ai_model = (fw_type == FIRMWARE_AI_1 || fw_type == FIRMWARE_DEFAULT_AI);
+    aicam_bool_t is_ai_model = (fw_type == FIRMWARE_AI_2 || fw_type == FIRMWARE_AI_1);
     size_t required_size = is_ai_model ? OTA_PRECHECK_DATA_SIZE : sizeof(ota_header_t);
     
     // Check Content-Length (1KB for non-AI, 2KB for AI model)
@@ -787,7 +787,7 @@ void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data)
             }
 
             // Update json config
-            if (ctx->fw_type_param == FIRMWARE_AI_1) {
+            if (ctx->fw_type_param == FIRMWARE_AI_2) {
                 json_config_set_ai_1_active(AICAM_TRUE);
             }
 
@@ -908,9 +908,9 @@ aicam_result_t ota_export_firmware_handler(http_handler_context_t *ctx)
     
     // parse the parameters
     FirmwareType fw_type = parse_firmware_type(type_item->valuestring);
-    if(fw_type == FIRMWARE_AI_1) {
+    if(fw_type == FIRMWARE_AI_2) {
         if(!json_config_get_ai_1_active()) {
-            fw_type = FIRMWARE_DEFAULT_AI;
+            fw_type = FIRMWARE_AI_1;
         }
     }
     char export_filename[256] = {0};

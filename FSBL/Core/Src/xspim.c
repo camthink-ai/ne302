@@ -60,7 +60,11 @@ void MX_XSPI2_Init(void)
     hxspi2.Init.FifoThresholdByte = 4;
     hxspi2.Init.MemoryMode = HAL_XSPI_SINGLE_MEM;
     hxspi2.Init.MemoryType = HAL_XSPI_MEMTYPE_MICRON;     /* GD55 */
+#if defined(BOARD_FLASH_SIZE) && BOARD_FLASH_SIZE == 128
     hxspi2.Init.MemorySize = HAL_XSPI_SIZE_1GB;
+#else
+    hxspi2.Init.MemorySize = HAL_XSPI_SIZE_512MB;
+#endif
     hxspi2.Init.ChipSelectHighTimeCycle = 1;
     hxspi2.Init.FreeRunningClock = HAL_XSPI_FREERUNCLK_DISABLE;
     hxspi2.Init.ClockMode = HAL_XSPI_CLOCK_MODE_0;
@@ -76,7 +80,7 @@ void MX_XSPI2_Init(void)
     {
         Error_Handler();
     }
-
+    
 #ifndef XSPI_SKIP_XSPIM_CONFIG
     sXspiManagerCfg.nCSOverride = HAL_XSPI_CSSEL_OVR_NCS1;
     sXspiManagerCfg.IOPort = HAL_XSPIM_IOPORT_2;

@@ -1047,8 +1047,8 @@ static int nn_cmd(int argc, char *argv[])
             return -1;
         }
         uintptr_t model_ptr = strtoul(argv[3], NULL, 16);
-        if (model_ptr < AI_DEFAULT_BASE || model_ptr > AI_3_END) {
-            LOG_SIMPLE("Error: model path is not in [0x%lx, 0x%lx]\r\n", AI_DEFAULT_BASE, AI_3_END);
+        if (model_ptr < AI_1_BASE || model_ptr > AI_2_END) {
+            LOG_SIMPLE("Error: model path is not in [0x%lx, 0x%lx]\r\n", AI_1_BASE, AI_2_END);
             return -1;
         }
         int ret = nn_instance_load_model(nn, model_ptr);

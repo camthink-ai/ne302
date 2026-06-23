@@ -455,7 +455,7 @@ static void qs_ai_thread(void *argument)
     qt_prof_step(&prof, "[QS] ai:nn ");
 
     /* load model: follow device_service fast path selection */
-    uintptr_t model_ptr = (s_cfg.ai_1_active) ? (AI_1_BASE + 1024U) : (AI_DEFAULT_BASE + 1024U);
+    uintptr_t model_ptr = (s_cfg.ai_1_active) ? (AI_2_BASE + 1024U) : (AI_1_BASE + 1024U);
     if (nn_load_model(model_ptr) != 0) {
         QT_TRACE("[QS] ", "load model fail");
         (void)osEventFlagsSet(s_evt, QS_FLAG_AI_INFO_READY | QS_FLAG_AI_RESULT_READY);

@@ -40,7 +40,7 @@ ADDRESS_MAP = {
     },
     'WEB': {
         'pattern': 'ne301_Web_v*_pkg.bin',
-        'address': 0x77B00000,
+        'address': 0x71900000,
         'required': True
     },
     'MODEL': {
@@ -291,7 +291,7 @@ def pack_bin_to_hex(build_dir: Path, output_file: Path, include_wifi: bool = Fal
                 # - flash_header.fw_total_size == FW_HEADER_SIZE + image_size == len(.rps)
                 # - CRC covers [WIFI_FLASH_HEADER_SIZE .. WIFI_FLASH_HEADER_SIZE + fw_total_size)
 
-                WIFI_FLASH_BASE_ADDR = 0x77C00000
+                WIFI_FLASH_BASE_ADDR = 0x71A00000
                 WIFI_FLASH_HEADER_SIZE = 32
                 WIFI_FLASH_VALID_FLAGS = 0x20060123
 

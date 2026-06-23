@@ -32,7 +32,7 @@ U0_NAME = $(PROJECT_NAME)_WakeCore
 # Flash addresses
 FLASH_ADDR_FSBL = 0x70000000
 FLASH_ADDR_APP = 0x70100000
-FLASH_ADDR_WEB = 0x77B00000
+FLASH_ADDR_WEB = 0x71900000
 FLASH_ADDR_MODEL = 0x70900000
 FLASH_ADDR_WAKECORE = 0x8000000
 
@@ -47,20 +47,16 @@ FLASH_ADDR_APP1_BASE = 0x70100000
 FLASH_ADDR_APP1_END = 0x704FFFFF
 FLASH_ADDR_APP2_BASE = 0x70500000
 FLASH_ADDR_APP2_END = 0x708FFFFF
-FLASH_ADDR_AI_DEFAULT_BASE = 0x70900000
-FLASH_ADDR_AI_DEFAULT_END = 0x70DFFFFF
-FLASH_ADDR_AI_1_BASE = 0x70E00000
-FLASH_ADDR_AI_1_END = 0x712FFFFF
-FLASH_ADDR_AI_2_BASE = 0x71300000
-FLASH_ADDR_AI_2_END = 0x717FFFFF
-FLASH_ADDR_AI_3_BASE = 0x71800000
-FLASH_ADDR_AI_3_END = 0x71FFFFFF
-FLASH_ADDR_LITTLEFS_BASE = 0x72000000
-FLASH_ADDR_LITTLEFS_END = 0x75FFFFFF
-FLASH_ADDR_WEB_BASE = 0x77B00000
-FLASH_ADDR_WEB_END = 0x77BFFFFF
-FLASH_ADDR_WIFI_FW_BASE = 0x77C00000
-FLASH_ADDR_WIFI_FW_END = 0x77FFFFFF
+FLASH_ADDR_AI_1_BASE = 0x70900000
+FLASH_ADDR_AI_1_END = 0x710FFFFF
+FLASH_ADDR_AI_2_BASE = 0x71100000
+FLASH_ADDR_AI_2_END = 0x718FFFFF
+FLASH_ADDR_WEB_BASE = 0x71900000
+FLASH_ADDR_WEB_END = 0x719FFFFF
+FLASH_ADDR_WIFI_FW_BASE = 0x71A00000
+FLASH_ADDR_WIFI_FW_END = 0x71CFFFFF
+FLASH_ADDR_LITTLEFS_BASE = 0x71D00000
+FLASH_ADDR_LITTLEFS_END = 0x73CFFFFF
 
 
 # Parallel build (auto-detect CPU cores)
@@ -104,7 +100,7 @@ OPT = -g3
 COMMON_CFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections -fstack-usage -std=gnu11
 COMMON_ASFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 COMMON_LDFLAGS = $(MCU_FLAGS) -specs=nano.specs -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--print-memory-usage -u _printf_float
-COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=64
+COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=64 -DBOARD_FLASH_SIZE=64
 
 # Export to sub-Makefiles
 export CC AS CP SZ READELF HEX BIN MCU_FLAGS OPT
@@ -315,10 +311,8 @@ $(eval $(call erase_partition,nvs,$(FLASH_ADDR_NVS_BASE),$(FLASH_ADDR_NVS_END)))
 $(eval $(call erase_partition,ota,$(FLASH_ADDR_OTA_BASE),$(FLASH_ADDR_OTA_END)))
 $(eval $(call erase_partition,app1,$(FLASH_ADDR_APP1_BASE),$(FLASH_ADDR_APP1_END)))
 $(eval $(call erase_partition,app2,$(FLASH_ADDR_APP2_BASE),$(FLASH_ADDR_APP2_END)))
-$(eval $(call erase_partition,ai-default,$(FLASH_ADDR_AI_DEFAULT_BASE),$(FLASH_ADDR_AI_DEFAULT_END)))
 $(eval $(call erase_partition,ai-1,$(FLASH_ADDR_AI_1_BASE),$(FLASH_ADDR_AI_1_END)))
 $(eval $(call erase_partition,ai-2,$(FLASH_ADDR_AI_2_BASE),$(FLASH_ADDR_AI_2_END)))
-$(eval $(call erase_partition,ai-3,$(FLASH_ADDR_AI_3_BASE),$(FLASH_ADDR_AI_3_END)))
 $(eval $(call erase_partition,littlefs,$(FLASH_ADDR_LITTLEFS_BASE),$(FLASH_ADDR_LITTLEFS_END)))
 
 .PHONY: erase-all
@@ -422,11 +416,11 @@ info:
 	@echo "  OTA:           $(FLASH_ADDR_OTA) (8KB)"
 	@echo "  APP1:          $(FLASH_ADDR_APP1) (4MB)"
 	@echo "  APP2:          $(FLASH_ADDR_APP2) (4MB)"
-	@echo "  AI_Default:    $(FLASH_ADDR_AI_DEFAULT) (5MB)"
-	@echo "  AI_1:          $(FLASH_ADDR_AI_1) (5MB)"
-	@echo "  AI_2:          $(FLASH_ADDR_AI_2) (5MB)"
-	@echo "  AI_3:          $(FLASH_ADDR_AI_3) (8MB)"
-	@echo "  LittleFS:      $(FLASH_ADDR_LITTLEFS) (64MB)"
+	@echo "  AI_1:          $(FLASH_ADDR_AI_1) (8MB)"
+	@echo "  AI_2:          $(FLASH_ADDR_AI_2) (8MB)"
+	@echo "  WEB:           $(FLASH_ADDR_WEB) (1MB)"
+	@echo "  WiFi FW:       $(FLASH_ADDR_WIFI_FW) (3MB)"
+	@echo "  LittleFS:      $(FLASH_ADDR_LITTLEFS) (32MB)"
 	@echo "========================================="
 	@$(CC) --version | head -n 1 2>/dev/null || echo "Toolchain not found"
 	@echo "========================================="

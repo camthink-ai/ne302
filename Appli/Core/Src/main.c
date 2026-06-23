@@ -244,16 +244,8 @@ static void PLATFORM_Config(void)
     // NPUCache_config();
 #endif
     /*** External RAM and NOR Flash *********************************************/
-#ifdef BOOT_IN_PSRAM
     // BSP_XSPI_RAM_Init(0);
     // BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-#else
-    // MX_XSPI1_Init();
-    // XSPI_PSRAM_EnableMemoryMappedMode();
-    BSP_XSPI_RAM_Init(0);
-    BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-#endif
-
     MX_XSPI2_Init();
     XSPI_NOR_EnableMemoryMappedMode();
 

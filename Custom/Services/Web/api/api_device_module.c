@@ -2069,8 +2069,8 @@ static aicam_result_t firmware_versions_handler(http_handler_context_t *ctx)
     get_firmware_version_string(FIRMWARE_WEB, version_str, sizeof(version_str));
     cJSON_AddStringToObject(response, "web", version_str);
     
-    // MODEL version (use AI_1 if active, otherwise AI_DEFAULT)
-    FirmwareType model_type = json_config_get_ai_1_active() ? FIRMWARE_AI_1 : FIRMWARE_DEFAULT_AI;
+    // MODEL version (use AI_2 if active, otherwise AI_1)
+    FirmwareType model_type = json_config_get_ai_1_active() ? FIRMWARE_AI_2 : FIRMWARE_AI_1;
     get_firmware_version_string(model_type, version_str, sizeof(version_str));
     cJSON_AddStringToObject(response, "model", version_str);
     
