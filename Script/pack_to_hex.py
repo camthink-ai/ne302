@@ -77,7 +77,7 @@ def find_latest_wifi_firmware(project_root: Path) -> Optional[Path]:
     """
     Find the latest WiFi firmware file (.rps file).
     """
-    wifi_dir = project_root / 'Custom' / 'Common' / 'Lib' / 'si91x'
+    wifi_dir = project_root / 'Custom' / 'Common' / 'Lib' / 'SiliconLabs_SDK' / 'firmware'
     if not wifi_dir.exists():
         return None
     
