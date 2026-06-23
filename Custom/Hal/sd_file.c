@@ -4,6 +4,7 @@
 #include "exti.h"
 #include "common_utils.h"
 #include "drtc.h"
+#include "mem_map.h"
 
 #define SD_CHUNK_SIZE           4096
 #define SD_CHUNK_ALIGN          32
@@ -320,7 +321,7 @@ int sd_filex_fwrite(void *context, void *fd, const void *buf, size_t size)
     void *buf_aligned = NULL;
     UINT status;
     
-    if ((uint32_t)buf < 0x34000000U || (uint32_t)buf >= 0x34200000U) {
+    if ((uint32_t)buf < SRAM_POOL_BASE || (uint32_t)buf >= SRAM_AI_BASE) {
         buf_aligned = hal_mem_alloc_aligned(SD_CHUNK_SIZE, SD_CHUNK_ALIGN, SD_CHUNK_TYPE);
         if (buf_aligned == NULL) {
             LOG_DRV_ERROR("sd_filex_fwrite: cannot malloc buf_aligned\r\n");
@@ -371,7 +372,7 @@ int sd_filex_fread(void *context, void *fd, void *buf, size_t size)
     int actual_total = 0;
     UINT status = 0;
 
-    if ((uint32_t)buf < 0x34000000U || (uint32_t)buf >= 0x34200000U) {
+    if ((uint32_t)buf < SRAM_POOL_BASE || (uint32_t)buf >= SRAM_AI_BASE) {
         while (sd_read_buf_lock) osDelay(1);
         sd_read_buf_lock = 1;
         // cycle read

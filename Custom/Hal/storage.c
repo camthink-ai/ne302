@@ -11,7 +11,7 @@
 #define LFS_UNLOCK(sys) do{ if ((sys)->thread_safe && (sys)->unlock) (sys)->unlock(); }while(0)
 
 static storage_t g_storage = {0};
-static uint8_t old_data[4096];
+static uint8_t old_data[4096] ALIGN_32 = {0};
 static uint8_t storage_tread_stack[1024 * 4] ALIGN_32 IN_PSRAM;
 const osThreadAttr_t storageTask_attributes = {
     .name = "storageTask",
@@ -48,44 +48,55 @@ static int mem_block_read(const struct lfs_config *cfg, lfs_block_t block,
 
 // 2. Write
 static int mem_block_prog(const struct lfs_config *cfg, lfs_block_t block,
-                         lfs_off_t off, const void *buffer, lfs_size_t size) 
+                         lfs_off_t off, const void *buffer, lfs_size_t size)
 {
     mem_block_dev_t *dev = (mem_block_dev_t *)cfg->context;
     uint32_t addr = dev->start_addr + block * dev->block_size + off;
+    int ret = LFS_ERR_OK;
 
     if (size > sizeof(old_data)) {
         return LFS_ERR_IO;
     }
+    
     XSPI_NOR_DisableMemoryMappedMode();
     if (XSPI_NOR_Read(old_data, addr, size) != 0) {
-        return LFS_ERR_IO;
+        ret = LFS_ERR_IO;
+        goto out;
     }
     if (!is_programmable(old_data, buffer, size)) {
-        return LFS_ERR_CORRUPT;
+        ret = LFS_ERR_CORRUPT;
+        goto out;
     }
     if (XSPI_NOR_Write((const uint8_t *)buffer, addr, size) != 0) {
-        return LFS_ERR_IO;
+        ret = LFS_ERR_IO;
+        goto out;
     }
+
+out:
     XSPI_NOR_EnableMemoryMappedMode();
-    return LFS_ERR_OK;
+    return ret;
 }
 
 // 3. Erase
-static int mem_block_erase(const struct lfs_config *cfg, lfs_block_t block) 
+static int mem_block_erase(const struct lfs_config *cfg, lfs_block_t block)
 {
     mem_block_dev_t *dev = (mem_block_dev_t *)cfg->context;
+    int ret = LFS_ERR_OK;
+
     if (dev->erase_counts[block] >= dev->max_erase) {
         return LFS_ERR_IO;
     }
     XSPI_NOR_DisableMemoryMappedMode();
     uint32_t block_addr = dev->start_addr + block * dev->block_size;
-    // uint32_t block_addr = (dev->start_addr / dev->block_size) + block;
     if (XSPI_NOR_Erase4K(block_addr) != 0) {
-        return LFS_ERR_IO;
+        ret = LFS_ERR_IO;
+        goto out;
     }
-    XSPI_NOR_EnableMemoryMappedMode();
     dev->erase_counts[block]++;
-    return LFS_ERR_OK;
+
+out:
+    XSPI_NOR_EnableMemoryMappedMode();
+    return ret;
 }
 
 static int mem_block_sync(const struct lfs_config *cfg) 
