@@ -40,7 +40,8 @@ C_SOURCES += $(wildcard Core/Src/iwdg.c Core/Src/jpeg.c Core/Src/ramcfg.c)
 C_SOURCES += $(wildcard Core/Src/rng.c Core/Src/rtc.c Core/Src/sai.c)
 C_SOURCES += $(wildcard Core/Src/sdmmc.c Core/Src/spi.c Core/Src/tim.c)
 C_SOURCES += $(wildcard Core/Src/usart.c Core/Src/usb_otg.c Core/Src/venc.c)
-C_SOURCES += $(wildcard Core/Src/wwdg.c Core/Src/xspim.c Core/Src/secure_nsc.c)
+C_SOURCES += $(wildcard Core/Src/wwdg.c Core/Src/secure_nsc.c)
+C_SOURCES += ../FSBL/Core/Src/xspim.c
 C_SOURCES += $(wildcard Core/Src/crc.c)
 
 # Custom - Core
@@ -574,6 +575,7 @@ ASM_SOURCES_S += ../Middlewares/ST/threadx/ports/cortex_M55/gnu/src/tx_timer_int
 ######################################
 C_DEFS = $(COMMON_DEFS)
 C_DEFS += -DBOOT_IN_PSRAM
+C_DEFS += -DXSPI_SKIP_XSPIM_CONFIG
 # C_DEFS += -DSTM32N6_DK_BOARD
 
 # Basic

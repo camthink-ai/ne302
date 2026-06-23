@@ -21,7 +21,7 @@
 #include "mem_map.h"
 #include "rs485_driver.h"
 #include "storage.h"
-#include "xspim.h"
+#include "../FSBL/Core/Inc/xspim.h"
 #include "crc.h"
 
 static int create_file(const char* filename, const void* data, size_t data_size);

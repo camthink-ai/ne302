@@ -1,6 +1,6 @@
 #include "storage.h"
 #include "debug.h"
-#include "xspim.h"
+#include "../FSBL/Core/Inc/xspim.h"
 #include "common_utils.h"
 #include "upgrade_manager.h"
 #include "crc.h"

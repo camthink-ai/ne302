@@ -45,7 +45,7 @@
 #include "framework.h"
 #include "driver_core.h"
 #include "driver_test.h"
-#include "xspim.h"
+#include "../FSBL/Core/Inc/xspim.h"
 #include "rng.h"
 #include "mm_hal_common.h"
 #include "core_init.h"
