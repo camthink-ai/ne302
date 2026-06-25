@@ -461,6 +461,17 @@ static void mm_halow_gpios_init(void)
     HAL_NVIC_EnableIRQ(EXTI15_IRQn);
 }
 
+static void mm_halow_gpios_deinit(void)
+{
+    HAL_GPIO_DeInit(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin);
+    HAL_GPIO_DeInit(MM_HALOW_WAKE_GPIO_Port, MM_HALOW_WAKE_Pin);
+    HAL_GPIO_DeInit(MM_HALOW_SPI_IRQ_GPIO_Port, MM_HALOW_SPI_IRQ_Pin);
+    HAL_GPIO_DeInit(MM_HALOW_BUSY_GPIO_Port, MM_HALOW_BUSY_Pin);
+
+    HAL_NVIC_DisableIRQ(EXTI4_IRQn);
+    HAL_NVIC_DisableIRQ(EXTI15_IRQn);
+}
+
 static void mm_halow_link_status_callback(const struct mmipal_link_status *link_status)
 {
     if (link_status == NULL) {
@@ -680,6 +691,7 @@ static void halow_stack_deinit_locked(void)
     MX_SPI6_DeInit();                   /* ↔ MX_SPI6_Init() (HAL_SPI_DeInit + MspDeInit) */
 #endif
     /* ↔ mm_halow_gpios_init: pins left as-is */
+    mm_halow_gpios_deinit();
 
     halow_stack_ready = 0;
     halow_state = NETIF_STATE_DEINIT;

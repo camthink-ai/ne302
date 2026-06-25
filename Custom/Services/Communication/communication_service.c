@@ -9,9 +9,7 @@
 #include "debug.h"
 #include "system_service.h"
 #include "netif_manager.h"
-#if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mm_halow_netif.h"
-#endif
 #include "netif_init_manager.h"
 #include "sl_net_netif.h"
 #include "buffer_mgr.h"
@@ -175,7 +173,7 @@ static void make_startup_connection_decision(void);
 static communication_type_t get_highest_priority_available_type(void);
 static void startup_timeout_callback(void *argument);
 
-#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+#if NETIF_4G_CAT1_IS_ENABLE
 /**
  * @brief Validate NVS preferred_comm_type as communication_type_t (communication_service.h).
  */
@@ -1165,7 +1163,7 @@ aicam_result_t communication_service_start(void)
     g_communication_service.startup_decision_made = AICAM_FALSE;
     g_communication_service.startup_begin_time = rtc_get_uptime_ms();
 
-#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+#if NETIF_4G_CAT1_IS_ENABLE
     comm_reload_preferred_type_from_nvs();
 #endif
     
@@ -1210,10 +1208,13 @@ aicam_result_t communication_service_start(void)
         // Note: try_connect_known_networks() will be called in on_wifi_sta_ready() callback
     }
 
-#if NETIF_4G_CAT1_IS_ENABLE && NETIF_WIFI_HALOW_IS_ENABLE
+#if NETIF_4G_CAT1_IS_ENABLE
+#if NETIF_WIFI_HALOW_IS_ENABLE
     aicam_bool_t cellular_first = comm_prefers_cellular_over_halow_init();
 #else
-    aicam_bool_t cellular_first = AICAM_FALSE;
+    /* HaLow not compiled in — Cellular has no competitor, auto-start if configured */
+    aicam_bool_t cellular_first = AICAM_TRUE;
+#endif
 #endif
 
 #if NETIF_4G_CAT1_IS_ENABLE

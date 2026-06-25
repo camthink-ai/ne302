@@ -70,28 +70,29 @@
 #define NETIF_NAME_LOCAL                    "lo"
 #define NETIF_NAME_WIFI_STA                 "wl"
 #define NETIF_NAME_WIFI_AP                  "ap"
+#define NETIF_NAME_WIFI_HALOW               "hw"
+#define NETIF_NAME_ETH_WAN                  "wn"
+#define NETIF_NAME_4G_CAT1                  "4g"
+#define NETIF_NAME_USB_ECM                  "ue"
+#define NETIF_DEFAULT_NETIF_NAME            NETIF_NAME_ETH_WAN
+
 #define NETIF_WIFI_HALOW_IS_ENABLE          (1)
+#define NETIF_WIFI_HALOW_DEFAULT_TX_PWR       (0)
+#define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (30)
 #if NETIF_WIFI_HALOW_IS_ENABLE
-#define NETIF_NAME_WIFI_HALOW                 "hw"
 #define NETIF_WIFI_HALOW_DEFAULT_SSID         ""
 #define NETIF_WIFI_HALOW_DEFAULT_PW           ""
 #define NETIF_WIFI_HALOW_DEFAULT_COUNTRY      "US"
-#define NETIF_WIFI_HALOW_DEFAULT_TX_PWR       (0)
 #define NETIF_WIFI_HALOW_DEFAULT_IP           {192, 168, 12, 199}
 #define NETIF_WIFI_HALOW_DEFAULT_MASK         {255, 255, 255, 0}
 #define NETIF_WIFI_HALOW_DEFAULT_GW           {192, 168, 12, 1}
 #define NETIF_WIFI_HALOW_DEFAULT_IP_MODE      (NETIF_IP_MODE_DHCP)
-#define NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL   (30)
 #define NETIF_WIFI_HALOW_MAX_SCAN_DWELL       (300)
 /** 1: scan de-dup by BSSID+SSID+freq+bw; 0 (default): BSSID+SSID only */
 #ifndef NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW
 #define NETIF_WIFI_HALOW_SCAN_DEDUP_BY_FREQ_BW  (0)
 #endif
 #endif
-#define NETIF_NAME_ETH_WAN                  "wn"
-#define NETIF_NAME_4G_CAT1                  "4g"
-#define NETIF_NAME_USB_ECM                  "ue"
-#define NETIF_DEFAULT_NETIF_NAME            NETIF_NAME_ETH_WAN
 
 #define NETIF_MAC_STR_FMT                   "%02x:%02x:%02x:%02x:%02x:%02x"
 #define NETIF_MAC_SCAN_STR_FMT              "%2hhx:%2hhx:%2hhx:%2hhx:%2hhx:%2hhx"
@@ -195,10 +196,10 @@ typedef struct
     uint8_t max_client_num;                 // Maximum client count (only for AP network cards)
 } wireless_config_t;
 
-#if NETIF_WIFI_HALOW_IS_ENABLE
 /** HaLow regdomain code buffer size (matches @ref MMWLAN_COUNTRY_CODE_LEN). */
 #define NETIF_HALOW_COUNTRY_CODE_LEN        (16U)
 
+#if NETIF_WIFI_HALOW_IS_ENABLE
 /// @brief HaLow (mmx108) extended wireless configuration
 typedef struct {
     char country_code[NETIF_HALOW_COUNTRY_CODE_LEN];  ///< Regdomain code (e.g. "US", "AU_2020")

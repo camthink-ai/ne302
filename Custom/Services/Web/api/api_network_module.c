@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include "web_server.h"
 #include "json_config_mgr.h"
-#if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mm_halow_netif.h"
+#if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mmwlan.h"
 #endif
 #include <ctype.h>

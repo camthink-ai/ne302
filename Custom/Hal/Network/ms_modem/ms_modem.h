@@ -11,7 +11,8 @@ extern "C" {
 #define MODEM_RX_TASK_PRIORITY          (osPriorityRealtime5)       // Task priority
 #define MODEM_TX_TASK_STACK_SIZE        (4096)                      // Task stack
 #define MODEM_TX_TASK_PRIORITY          (osPriorityRealtime4)       // Task priority
-#define MODEM_POWER_ON_DELAY_MS         (1000)                      // Module power-on stabilization delay
+#define MODEM_POWER_OFF_DELAY_MS        (200)                       // Module power-off stabilization delay
+#define MODEM_POWER_ON_DELAY_MS         (800)                      // Module power-on stabilization delay
 #define MODEM_GPIO_READY_TIMEOUT_MS     (3000)                      // Module power-on GPIO ready timeout
 #define MODEM_UART_SEND_MAX_TIME_MS     (1000)                      // Maximum wait time for sending data 1s
 #define MODEM_UART_BAUDRATE             (921600U)                   // UART baud rate

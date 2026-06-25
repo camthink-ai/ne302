@@ -13,9 +13,7 @@
 #include "Log/debug.h"
 #include "aicam_types.h"
 #include "sl_net_netif.h"
-#if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mm_halow_netif.h"
-#endif
 #include "w5500_netif.h"
 #include "eg912u_gl_netif.h"
 #include "usb_ecm_netif.h"

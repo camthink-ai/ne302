@@ -324,6 +324,8 @@ int modem_device_init(void)
     if (modem_state >= MODEM_STATE_INIT) return MODEM_ERR_INVALID_STATE;
     
     SCB_InvalidateDCache_by_Addr(MODEM_NET_RECV_BUF_START_PTR, MODEM_NET_RECV_BUF_SIZE * MODEM_NET_RECV_BUF_NUM);
+    pwr_manager_release(pwr_manager_get_handle(PWR_CAT1_NAME));
+    osDelay(MODEM_POWER_OFF_DELAY_MS);
     pwr_manager_acquire(pwr_manager_get_handle(PWR_CAT1_NAME));
     osDelay(MODEM_POWER_ON_DELAY_MS);
 
@@ -995,7 +997,7 @@ int modem_device_get_info(modem_info_t *info, uint8_t is_update_all)
     }
 
     // Get Network Info (+QNWINFO: "FDD LTE","46011","LTE BAND 5",2452)
-    ret = modem_at_cmd_wait_rsp(&modem_at_handle, "AT+QNWINFO\r\n", rsp_bufs, 2, 500);
+    ret = modem_at_cmd_wait_rsp(&modem_at_handle, "AT+QNWINFO\r\n", rsp_bufs, 2, 1000);
     if (ret == 2) {
         ret = MODEM_OK;
         if (strstr(rsp_bufs[1], "OK") == NULL) ret = MODEM_ERR_FAILED;
