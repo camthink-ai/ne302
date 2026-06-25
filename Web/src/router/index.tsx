@@ -9,7 +9,6 @@ import ApplicationManagement from "@/pages/applicationManagement";
 import HardwareManagement from "@/pages/hardwareManagement";
 import SystemSettings from "@/pages/systemSettings";
 import StorageManagement from "@/pages/storageManagement";
-import BrowseFiles from "@/pages/browseFiles";
 import DeviceInformation from "@/pages/deviceInformation";
 import AuthGuard from "./components/auth-guard";
 import ImportFSBL from "@/pages/ImportFSBL";
@@ -48,12 +47,7 @@ const baseRoutes = [
     path: "/storage-management",
     element: <StorageManagement />,
   },
-  
-  {
-    path: "/browse-files",
-    element: <BrowseFiles />,
-  },
-  
+
   {
     path: "/device-information",
     element: <DeviceInformation />,

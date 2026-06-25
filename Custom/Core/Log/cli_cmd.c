@@ -58,7 +58,7 @@ static int ls_cmd(int argc, char* argv[])
         strncpy(local_path, argv[1], MAX_FILENAME_LEN - 1);
         local_path[MAX_FILENAME_LEN - 1] = '\0';
     } else {
-        strncpy(local_path, ".", MAX_FILENAME_LEN - 1);
+        strncpy(local_path, "/", MAX_FILENAME_LEN - 1);
         local_path[MAX_FILENAME_LEN - 1] = '\0';
     }
     void *dd = file_opendir(local_path);
@@ -66,14 +66,15 @@ static int ls_cmd(int argc, char* argv[])
         LOG_SIMPLE("ls: cannot open directory %s\r\n", local_path);
         return -1;
     }
-    struct lfs_info info;
+    // Union large enough for both lfs_info (264B) and sd_info (~282B)
+    union { struct lfs_info lfs; char _pad[300]; } entry;
     int ret;
     LOG_SIMPLE("\r\n");
-    while ((ret = file_readdir(dd, (char*)&info)) == 1) {
-        if (info.type == LFS_TYPE_DIR) {
-            LOG_SIMPLE("%-20s <DIR>\r\n", info.name);
+    while ((ret = file_readdir(dd, (char*)&entry)) == 1) {
+        if (entry.lfs.type == LFS_TYPE_DIR) {
+            LOG_SIMPLE("%-20s <DIR>\r\n", entry.lfs.name);
         } else {
-            LOG_SIMPLE("%-20s %10lu bytes\r\n", info.name, (unsigned long)info.size);
+            LOG_SIMPLE("%-20s %10lu bytes\r\n", entry.lfs.name, (unsigned long)entry.lfs.size);
         }
     }
     if (ret < 0) {

@@ -308,6 +308,18 @@ static int storage_lfs_stat(void *context, const char *filename, struct stat *st
     return -1; // File does not exist
 }
 
+static int storage_lfs_mkdir(void *context, const char *path)
+{
+    lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
+    if (!sys) return -1;
+    LFS_LOCK(sys);
+
+    int res = lfs_mkdir(&sys->lfs, path);
+
+    LFS_UNLOCK(sys);
+    return (res == LFS_ERR_OK) ? 0 : -1;
+}
+
 void *flash_lfs_fopen(const char *path, const char *mode)
 {
     return storage_lfs_fopen(&g_storage.lfs_sys, path, mode);
@@ -372,6 +384,12 @@ int flash_lfs_stat(const char *filename, struct stat *st)
 {
     return storage_lfs_stat(&g_storage.lfs_sys, filename, st);
 }
+
+int flash_lfs_mkdir(const char *path)
+{
+    return storage_lfs_mkdir(&g_storage.lfs_sys, path);
+}
+
 // Complete file operation interface table
 
 
@@ -382,6 +400,7 @@ static file_ops_t lfs_file_ops = {
     .fread   = storage_lfs_fread,
     .remove  = storage_lfs_remove,
     .rename  = storage_lfs_rename,
+    .mkdir   = storage_lfs_mkdir,
     .ftell   = storage_lfs_ftell,
     .fseek   = storage_lfs_fseek,
     .fflush  = storage_lfs_fflush,

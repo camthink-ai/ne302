@@ -199,6 +199,7 @@ C_SOURCES += ../Custom/Services/Web/websocket_stream_server.c
 C_SOURCES += ../Custom/Services/Web/api/api_ai_management_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_auth_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_device_module.c
+C_SOURCES += ../Custom/Services/Web/api/api_file_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_model_validation_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_mqtt_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_network_module.c

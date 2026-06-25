@@ -24,13 +24,22 @@ extern "C" {
  * @brief Storage management structure
  */
 typedef struct {
+    // SD card storage
     aicam_bool_t sd_card_connected;          // SD card connected
-    uint64_t total_capacity_mb;              // Total capacity (MB)
+    uint64_t total_capacity_mb;              // Total capacity (MB) - primary storage
     uint64_t available_capacity_mb;          // Available capacity (MB)
     uint64_t used_capacity_mb;               // Used capacity (MB)
     float usage_percent;                     // Usage percentage
     aicam_bool_t cyclic_overwrite_enabled;   // Cyclic overwrite enabled
     uint32_t overwrite_threshold_percent;    // Overwrite threshold percentage
+
+    // Internal Flash (LittleFS) storage
+    aicam_bool_t flash_fs_mounted;           // Internal flash filesystem mounted
+    uint64_t flash_total_capacity_mb;        // Flash total capacity (MB)
+    uint64_t flash_available_capacity_mb;    // Flash available capacity (MB)
+    uint64_t flash_used_capacity_mb;         // Flash used capacity (MB)
+    float flash_usage_percent;               // Flash usage percentage
+    char flash_fs_type[8];                   // Filesystem type ("littlefs")
 } storage_info_t;
 
 /**

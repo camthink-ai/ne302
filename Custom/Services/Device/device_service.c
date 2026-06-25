@@ -448,35 +448,35 @@ void device_service_update_communication_type()
 static void update_storage_info(storage_info_t *info)
 {
     if (!info) return;
-    
+
+    // ── SD Card ──────────────────────────────────────────
     sd_disk_info_t sd_info;
     int result = sd_get_disk_info(&sd_info);
-    
-    info->sd_card_connected = (result == 0 && 
+
+    info->sd_card_connected = (result == 0 &&
                             (sd_info.mode == SD_MODE_NORMAL || sd_info.mode == SD_MODE_FORMATING));
-    
+
     if (info->sd_card_connected && sd_info.mode == SD_MODE_NORMAL) {
         info->total_capacity_mb = (uint64_t)sd_info.total_KBytes / 1024;
         info->available_capacity_mb = (uint64_t)sd_info.free_KBytes / 1024;
         info->used_capacity_mb = info->total_capacity_mb - info->available_capacity_mb;
-        
+
         if (info->total_capacity_mb > 0) {
             info->usage_percent = (float)info->used_capacity_mb / info->total_capacity_mb * 100.0f;
         } else {
             info->usage_percent = 0.0f;
         }
-        
-        g_device_service.device_info.storage_usage_percent = info->usage_percent;
-        
 
-        snprintf(g_device_service.device_info.storage_card_info, 
+        g_device_service.device_info.storage_usage_percent = info->usage_percent;
+
+        snprintf(g_device_service.device_info.storage_card_info,
                 sizeof(g_device_service.device_info.storage_card_info),
-                "%.1fGB %s SD Card (%.1f%% used)", 
-                info->total_capacity_mb / 1024.0f, 
+                "%.1fGB %s SD Card (%.1f%% used)",
+                info->total_capacity_mb / 1024.0f,
                 sd_info.fs_type,
                 info->usage_percent);
-                
-        LOG_SVC_DEBUG("SD Card Info: Total=%.1fGB, Used=%.1fGB, Free=%.1fGB, FS=%s", 
+
+        LOG_SVC_DEBUG("SD Card Info: Total=%.1fGB, Used=%.1fGB, Free=%.1fGB, FS=%s",
                     info->total_capacity_mb / 1024.0f,
                     info->used_capacity_mb / 1024.0f,
                     info->available_capacity_mb / 1024.0f,
@@ -486,9 +486,9 @@ static void update_storage_info(storage_info_t *info)
         info->used_capacity_mb = 0;
         info->available_capacity_mb = 0;
         info->usage_percent = 0.0f;
-        
+
         g_device_service.device_info.storage_usage_percent = 0.0f;
-        
+
         const char* status_msg = "No SD Card";
         switch (sd_info.mode) {
             case SD_MODE_UNPLUG:
@@ -504,12 +504,46 @@ static void update_storage_info(storage_info_t *info)
                 status_msg = "SD Card Not Ready";
                 break;
         }
-        
-        snprintf(g_device_service.device_info.storage_card_info, 
+
+        snprintf(g_device_service.device_info.storage_card_info,
                 sizeof(g_device_service.device_info.storage_card_info),
                 "%s", status_msg);
-                
+
         LOG_SVC_DEBUG("SD Card Status: mode=%d, result=%d", sd_info.mode, result);
+    }
+
+    // ── Internal Flash (LittleFS) ────────────────────────
+    storage_disk_info_t flash_info;
+    int flash_result = storage_get_disk_info(&flash_info);
+    info->flash_fs_mounted = (flash_result == 0 && flash_info.mounted);
+
+    if (info->flash_fs_mounted) {
+        info->flash_total_capacity_mb = (uint64_t)flash_info.total_KBytes / 1024;
+        info->flash_available_capacity_mb = (uint64_t)flash_info.free_KBytes / 1024;
+        info->flash_used_capacity_mb = info->flash_total_capacity_mb - info->flash_available_capacity_mb;
+
+        if (info->flash_total_capacity_mb > 0) {
+            info->flash_usage_percent = (float)info->flash_used_capacity_mb / info->flash_total_capacity_mb * 100.0f;
+        } else {
+            info->flash_usage_percent = 0.0f;
+        }
+
+        strncpy(info->flash_fs_type, flash_info.fs_type, sizeof(info->flash_fs_type) - 1);
+        info->flash_fs_type[sizeof(info->flash_fs_type) - 1] = '\0';
+
+        LOG_SVC_DEBUG("Flash FS Info: Total=%.1fGB, Used=%.1fGB, Free=%.1fGB, FS=%s, Mounted=%d",
+                    info->flash_total_capacity_mb / 1024.0f,
+                    info->flash_used_capacity_mb / 1024.0f,
+                    info->flash_available_capacity_mb / 1024.0f,
+                    info->flash_fs_type, info->flash_fs_mounted);
+    } else {
+        info->flash_total_capacity_mb = 0;
+        info->flash_available_capacity_mb = 0;
+        info->flash_used_capacity_mb = 0;
+        info->flash_usage_percent = 0.0f;
+        memset(info->flash_fs_type, 0, sizeof(info->flash_fs_type));
+
+        LOG_SVC_DEBUG("Flash FS: not mounted (result=%d)", flash_result);
     }
 }
 

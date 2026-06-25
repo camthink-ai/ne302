@@ -115,6 +115,8 @@ int flash_lfs_readdir(void *dd, char *info);
 int flash_lfs_closedir(void *dd);
 int flash_lfs_stat(const char *filename, struct stat *st);
 
+int flash_lfs_mkdir(const char *path);
+
 int storage_nvs_write(NVS_Type_t type, const char *key, const void *data, size_t len);
 int storage_nvs_read(NVS_Type_t type, const char *key, void *data, size_t len);
 int storage_nvs_delete(NVS_Type_t type, const char *key);

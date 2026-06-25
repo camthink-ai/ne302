@@ -214,25 +214,38 @@ aicam_result_t device_storage_handler(http_handler_context_t *ctx) {
     
     // Add storage connection status
     cJSON_AddBoolToObject(response_json, "sd_card_connected", storage_info.sd_card_connected);
-    
+
     // Add capacity information (in MB and GB)
     cJSON_AddNumberToObject(response_json, "total_capacity_mb", storage_info.total_capacity_mb);
     cJSON_AddNumberToObject(response_json, "available_capacity_mb", storage_info.available_capacity_mb);
     cJSON_AddNumberToObject(response_json, "used_capacity_mb", storage_info.used_capacity_mb);
     cJSON_AddNumberToObject(response_json, "usage_percent", storage_info.usage_percent);
-    
+
     // Add capacity information in GB for user-friendly display
     cJSON_AddNumberToObject(response_json, "total_capacity_gb", (double)storage_info.total_capacity_mb / 1024.0);
     cJSON_AddNumberToObject(response_json, "available_capacity_gb", (double)storage_info.available_capacity_mb / 1024.0);
     cJSON_AddNumberToObject(response_json, "used_capacity_gb", (double)storage_info.used_capacity_mb / 1024.0);
-    
+
     // Add cyclic overwrite policy
     cJSON_AddBoolToObject(response_json, "cyclic_overwrite_enabled", storage_info.cyclic_overwrite_enabled);
     cJSON_AddNumberToObject(response_json, "overwrite_threshold_percent", storage_info.overwrite_threshold_percent);
-    
+
+    // ── Internal Flash (LittleFS) storage ──
+    cJSON_AddBoolToObject(response_json, "flash_fs_mounted", storage_info.flash_fs_mounted);
+    cJSON_AddNumberToObject(response_json, "flash_total_capacity_mb", storage_info.flash_total_capacity_mb);
+    cJSON_AddNumberToObject(response_json, "flash_available_capacity_mb", storage_info.flash_available_capacity_mb);
+    cJSON_AddNumberToObject(response_json, "flash_used_capacity_mb", storage_info.flash_used_capacity_mb);
+    cJSON_AddNumberToObject(response_json, "flash_usage_percent", storage_info.flash_usage_percent);
+    cJSON_AddNumberToObject(response_json, "flash_total_capacity_gb", (double)storage_info.flash_total_capacity_mb / 1024.0);
+    cJSON_AddNumberToObject(response_json, "flash_available_capacity_gb", (double)storage_info.flash_available_capacity_mb / 1024.0);
+    cJSON_AddNumberToObject(response_json, "flash_used_capacity_gb", (double)storage_info.flash_used_capacity_mb / 1024.0);
+    cJSON_AddStringToObject(response_json, "flash_fs_type", storage_info.flash_fs_type);
+
     // Add status summary
     const char* status_summary;
+    const char* primary_storage;
     if (storage_info.sd_card_connected) {
+        primary_storage = "sd";
         if (storage_info.usage_percent > storage_info.overwrite_threshold_percent) {
             status_summary = storage_info.cyclic_overwrite_enabled ? "full_auto_overwrite" : "full_manual_cleanup";
         } else if (storage_info.usage_percent > 80.0f) {
@@ -240,10 +253,21 @@ aicam_result_t device_storage_handler(http_handler_context_t *ctx) {
         } else {
             status_summary = "normal";
         }
+    } else if (storage_info.flash_fs_mounted) {
+        primary_storage = "flash";
+        if (storage_info.flash_usage_percent > 95.0f) {
+            status_summary = "full";
+        } else if (storage_info.flash_usage_percent > 80.0f) {
+            status_summary = "warning";
+        } else {
+            status_summary = "normal";
+        }
     } else {
+        primary_storage = "none";
         status_summary = "no_card";
     }
     cJSON_AddStringToObject(response_json, "status", status_summary);
+    cJSON_AddStringToObject(response_json, "primary_storage", primary_storage);
     
     // Send response
     char* json_string = cJSON_Print(response_json);
