@@ -19,6 +19,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "../Inc/xspim.h"
+#include "main.h"
 #include <stdio.h>
 
 /* USER CODE BEGIN 0 */
@@ -572,6 +573,7 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
         sCommand.InstructionWidth   = HAL_XSPI_INSTRUCTION_8_BITS;
         sCommand.InstructionDTRMode = HAL_XSPI_INSTRUCTION_DTR_DISABLE;
         sCommand.Instruction        = GD55_OCTAL_READ_STATUS_REG_CMD;
+        sCommand.AddressMode        = HAL_XSPI_ADDRESS_NONE;
         sCommand.DummyCycles        = GD55_DUMMY_CLOCK_CYCLES_READ_OCTAL;
     }
 

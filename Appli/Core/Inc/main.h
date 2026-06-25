@@ -68,8 +68,9 @@ typedef funcptr funcptr_NS;
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
-void Error_Handler(void);
+void _Error_Handler_(void);
 
+#define Error_Handler() {printf("Error_Handler, file: %s line: %d\n", __FILE__, __LINE__);_Error_Handler_();}
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */

@@ -35,7 +35,7 @@
 static void sli_mx_gpio_init(void);
 static void sli_mx_dma_init(void);
 static void sli_mx_spi1_init(void);
-extern void Error_Handler(void);
+// extern void Error_Handler(void);
 void gpio_interrupt(void);
 
 SPI_HandleTypeDef hspi1;

@@ -180,13 +180,7 @@ void mmhal_log_write(const uint8_t *data, size_t length)
 {
     //mmhal_log_write_uart(data, length);
     //mmhal_log_write_itm(data, length);
-    uint8_t end[2] = {'\r', '\n'};
-    HAL_UART_Transmit(&huart2, (uint8_t*)data, length, HAL_MAX_DELAY);
-	
-	if (data[length - 1] == '\n' && data[length - 2] != '\r')
-    {
-    	HAL_UART_Transmit(&huart2, (uint8_t*)end, 2, HAL_MAX_DELAY);
-	}
+    // HAL_UART_Transmit(&huart2, (uint8_t*)data, length, 200);
 }
 
 void mmhal_log_flush(void)

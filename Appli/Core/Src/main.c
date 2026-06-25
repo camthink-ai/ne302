@@ -371,6 +371,11 @@ void StartMainTask(void *argument)
     // wdg_task_change_priority(osPriorityNormal);
     printf("[MAIN] Entering main loop\r\n");
 
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
+        LOG_WARN("[MAIN] System reset due to IWDG reset\r\n");
+        __HAL_RCC_CLEAR_RESET_FLAGS();
+    }
+    
     /* Infinite loop */
     for(;;)
     {
@@ -575,7 +580,7 @@ static void SystemIsolation_Config(void)
   * @brief  This function is executed in case of error occurrence.
   * @retval None
   */
-void Error_Handler(void)
+void _Error_Handler_(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */

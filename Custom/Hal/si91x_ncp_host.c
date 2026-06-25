@@ -42,7 +42,7 @@
 #endif
 #define DMA_ENABLED
 
-extern void Error_Handler(void);
+// extern void Error_Handler(void);
 void gpio_interrupt(void);
 
 extern SPI_HandleTypeDef hspi4;

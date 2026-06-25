@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include "main.h"
+#include "stm32n6xx_hal.h"
 
 /* ============================================================================
  * Flash commands — GD55LX01GE (JEDEC Xccela OPI)

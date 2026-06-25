@@ -737,16 +737,21 @@ static aicam_result_t debug_init_ymodem(void)
 
 static void debug_uart_output(char c)
 {
-    HAL_UART_Transmit(&H_UART, (uint8_t*)&c, 1, HAL_MAX_DELAY);
+    // HAL_UART_Transmit(&H_UART, (uint8_t*)&c, 1, 10);
+    printf("%c", c);
 }
 
 static void debug_uart_output_str(const char* str)
 {
+    // if (str) {
+    //     while (*str) {
+    //         HAL_UART_Transmit(&H_UART, (uint8_t*)str, 1, 10);
+    //         str++;
+    //     }
+    // }
+
     if (str) {
-        while (*str) {
-            HAL_UART_Transmit(&H_UART, (uint8_t*)str, 1, HAL_MAX_DELAY);
-            str++;
-        }
+        printf("%s", str);
     }
 }
 
@@ -853,7 +858,8 @@ static uint64_t debug_log_get_time(void)
 static void debug_uart_log_output(const char *msg, int len)
 {
     // Output log message to UART
-    HAL_UART_Transmit(&H_UART, (uint8_t*)msg, len, HAL_MAX_DELAY);
+    // HAL_UART_Transmit(&H_UART, (uint8_t*)msg, len, 200);
+    printf("%.*s", len, msg);
 }
 
 
