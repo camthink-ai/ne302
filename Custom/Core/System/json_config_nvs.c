@@ -862,6 +862,11 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save cellular operator to NVS");
 
+    // Save cellular PLMN
+    result = json_config_nvs_write_string(NVS_KEY_CELLULAR_PLMN, config->cellular.plmn);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save cellular PLMN to NVS");
+
     // Save PoE configuration
     aicam_result_t poe_result = json_config_save_poe_config_to_nvs(&config->poe);
     if (poe_result != AICAM_OK)
@@ -2118,6 +2123,11 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->network_service.cellular.operator = temp_uint8;
     else
         json_config_nvs_write_uint8(NVS_KEY_CELLULAR_OPERATOR, config->network_service.cellular.operator);
+
+    result = json_config_nvs_read_string(NVS_KEY_CELLULAR_PLMN, config->network_service.cellular.plmn,
+                                        sizeof(config->network_service.cellular.plmn));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_CELLULAR_PLMN, config->network_service.cellular.plmn);
 
     // Load PoE configuration
     result = json_config_load_poe_config_from_nvs(&config->network_service.poe);

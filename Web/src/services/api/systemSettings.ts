@@ -27,6 +27,7 @@ export interface SetCellularReq {
     authentication?: number;
     enable_roaming?: boolean;
     operator?: number;
+    plmn?: string;
     save?: boolean;
 }
 

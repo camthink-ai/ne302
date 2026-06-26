@@ -151,6 +151,7 @@ typedef struct {
     uint8_t authentication;                 // Authentication type (0=None, 1=PAP, 2=CHAP, 3=Auto)
     aicam_bool_t enable_roaming;            // Enable roaming
     uint8_t operator;                       // Mobile operator (0=Auto, 1=CMCC, 2=CUCC, 3=CTCC, etc.)
+    char plmn[8];                           // Manual PLMN code (MCC+MNC, 5-6 digits); empty = auto COPS=0
 } cellular_config_persist_t;
 
 /**

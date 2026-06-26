@@ -206,6 +206,7 @@
 #define NVS_KEY_CELLULAR_AUTH           "cell_auth"
 #define NVS_KEY_CELLULAR_ROAMING        "cell_roam"
 #define NVS_KEY_CELLULAR_OPERATOR       "cell_operator"
+#define NVS_KEY_CELLULAR_PLMN           "cell_plmn"
 
 // PoE/Ethernet configuration key names
 #define NVS_KEY_POE_IP_MODE             "poe_ip_mode"

@@ -834,6 +834,7 @@ int quick_storage_read_netif_config(qs_comm_pref_type_t comm_pref_type, netif_co
         if (qs_nvs_read_uint8(NVS_KEY_CELLULAR_OPERATOR, &netif_config->cellular_cfg.isp_selected) != AICAM_OK) {
             netif_config->cellular_cfg.isp_selected = 0;
         }
+        (void)qs_nvs_read_string(NVS_KEY_CELLULAR_PLMN, netif_config->cellular_cfg.plmn, sizeof(netif_config->cellular_cfg.plmn));
         netif_config->ip_mode = NETIF_IP_MODE_DHCP;
         return AICAM_OK;
     }

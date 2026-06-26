@@ -984,6 +984,9 @@ aicam_result_t communication_service_init(void *config)
         g_communication_service.cellular_settings.authentication = net_cfg.cellular.authentication;
         g_communication_service.cellular_settings.enable_roaming = net_cfg.cellular.enable_roaming;
         g_communication_service.cellular_settings.operator = net_cfg.cellular.operator;
+        strncpy(g_communication_service.cellular_settings.plmn, net_cfg.cellular.plmn,
+                sizeof(g_communication_service.cellular_settings.plmn) - 1);
+        g_communication_service.cellular_settings.plmn[sizeof(g_communication_service.cellular_settings.plmn) - 1] = '\0';
         
         LOG_SVC_INFO("Loaded communication config from NVS: preferred_type=%d, auto_priority=%d",
                      g_communication_service.preferred_type,
@@ -3551,6 +3554,8 @@ aicam_result_t communication_cellular_set_settings(const cellular_connection_set
     cellular_cfg.cellular_cfg.authentication = (uint8_t)settings->authentication;
     cellular_cfg.cellular_cfg.is_enable_roam = settings->enable_roaming ? 1 : 0;
     cellular_cfg.cellular_cfg.isp_selected = settings->operator;
+    strncpy(cellular_cfg.cellular_cfg.plmn, settings->plmn, sizeof(cellular_cfg.cellular_cfg.plmn) - 1);
+    cellular_cfg.cellular_cfg.plmn[sizeof(cellular_cfg.cellular_cfg.plmn) - 1] = '\0';
     
     aicam_result_t result = nm_set_netif_cfg(NETIF_NAME_4G_CAT1, &cellular_cfg);
     
@@ -3602,6 +3607,9 @@ aicam_result_t communication_cellular_save_settings(void)
     net_cfg.cellular.authentication = (uint8_t)g_communication_service.cellular_settings.authentication;
     net_cfg.cellular.enable_roaming = g_communication_service.cellular_settings.enable_roaming;
     net_cfg.cellular.operator = g_communication_service.cellular_settings.operator;
+    strncpy(net_cfg.cellular.plmn, g_communication_service.cellular_settings.plmn,
+            sizeof(net_cfg.cellular.plmn) - 1);
+    net_cfg.cellular.plmn[sizeof(net_cfg.cellular.plmn) - 1] = '\0';
     
     result = json_config_set_network_service_config(&net_cfg);
     if (result != AICAM_OK) {
@@ -5456,6 +5464,7 @@ static int comm_cellular_cmd(int argc, char* argv[])
             printf("PIN Code: %s\r\n", settings.pin_code);
             printf("Authentication: %d (0=None, 1=PAP, 2=CHAP, 3=Auto)\r\n", settings.authentication);
             printf("Roaming: %s\r\n", settings.enable_roaming ? "Enabled" : "Disabled");
+            printf("PLMN: %s\r\n", settings.plmn[0] ? settings.plmn : "(auto)");
             printf("========================================================\r\n\r\n");
             return 0;
         }
@@ -5476,8 +5485,11 @@ static int comm_cellular_cmd(int argc, char* argv[])
             } else if (strcmp(argv[i], "auth") == 0) {
                 settings.authentication = (cellular_auth_type_t)atoi(argv[i+1]);
             } else if (strcmp(argv[i], "roam") == 0) {
-                settings.enable_roaming = (strcmp(argv[i+1], "1") == 0 || 
+                settings.enable_roaming = (strcmp(argv[i+1], "1") == 0 ||
                                           strcasecmp(argv[i+1], "true") == 0);
+            } else if (strcmp(argv[i], "plmn") == 0) {
+                strncpy(settings.plmn, argv[i+1], sizeof(settings.plmn) - 1);
+                settings.plmn[sizeof(settings.plmn) - 1] = '\0';
             }
         }
         

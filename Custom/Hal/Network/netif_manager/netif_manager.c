@@ -1000,6 +1000,7 @@ void nm_print_netif_info(const char *if_name, netif_info_t *netif_info)
         printf("AUTH: %d\r\n", netif_info->cellular_cfg.authentication);
         printf("ROAMING: %d\r\n", netif_info->cellular_cfg.is_enable_roam);
         printf("ISP SELECTED: %d\r\n", netif_info->cellular_cfg.isp_selected);
+        printf("PLMN: %s\r\n", netif_info->cellular_cfg.plmn);
         printf("PPP CONTEXT ID: %d\r\n", netif_info->cellular_cfg.ppp_context_id);
         printf("OPERATOR: %s\r\n", netif_info->cellular_info.operator);
         printf("SIM STATUS: %s\r\n", netif_info->cellular_info.sim_status);

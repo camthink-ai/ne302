@@ -511,6 +511,40 @@ modem_operator_t modem_device_get_operator(void)
     modem_operator_t op = MODEM_OPERATOR_UNKNOWN;
     size_t len = 0;
 
+    /* 0. If user has set a manual PLMN, determine operator directly from it */
+    if (g_modem_config.plmn[0] != '\0') {
+        len = strlen(g_modem_config.plmn);
+        if (len >= 5 && len <= 6) {
+            if (len == 6) {
+                if (strncmp(g_modem_config.plmn, "310004", 6) == 0 ||
+                    strncmp(g_modem_config.plmn, "311480", 6) == 0 ||
+                    strncmp(g_modem_config.plmn, "311270", 6) == 0 ||
+                    strncmp(g_modem_config.plmn, "311271", 6) == 0 ||
+                    strncmp(g_modem_config.plmn, "311272", 6) == 0) {
+                    return MODEM_OPERATOR_AMERICAN_VERIZON;
+                }
+            }
+            if (strncmp(g_modem_config.plmn, "46000", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46002", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46007", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46008", 5) == 0) {
+                return MODEM_OPERATOR_CHINA_MOBILE;
+            }
+            if (strncmp(g_modem_config.plmn, "46001", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46006", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46009", 5) == 0) {
+                return MODEM_OPERATOR_CHINA_UNICOM;
+            }
+            if (strncmp(g_modem_config.plmn, "46003", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46005", 5) == 0 ||
+                strncmp(g_modem_config.plmn, "46011", 5) == 0) {
+                return MODEM_OPERATOR_CHINA_TELECOM;
+            }
+        }
+        /* PLMN set but unrecognized — still return UNKNOWN so caller falls through */
+        return MODEM_OPERATOR_UNKNOWN;
+    }
+
     /* 1. Prefer AT+CIMI to read IMSI and use the first 5/6 digits (MCC+MNC) to determine the operator */
     rsp_bufs = modem_device_malloc_rsp_bufs(2);
     if (rsp_bufs != NULL) {
@@ -733,6 +767,7 @@ static int modem_device_activate_network(void)
         operator = (modem_operator_t)g_modem_config.isp_selected;
     }
     if (operator == MODEM_OPERATOR_AUTO) operator = modem_device_get_operator();
+
     if (operator == MODEM_OPERATOR_AMERICAN_VERIZON) {
         if (g_modem_config.apn_context_id != 1) {
             // Deactivate PDP context
@@ -1092,6 +1127,21 @@ int modem_device_set_config(const modem_config_t *config)
         is_need_restart_network = 1;
     }
 
+    if (strcmp(config->plmn, g_modem_config.plmn) != 0) {
+        MODEM_LOGD("Set Modem PLMN: %s => %s.", g_modem_config.plmn, config->plmn);
+        if (config->plmn[0] == 0) {
+            ret = modem_at_cmd_wait_ok(&modem_at_handle, "AT+COPS=0\r\n", 500);
+            if (ret != MODEM_OK) return ret;
+        } else {
+            snprintf(at_cmd, sizeof(at_cmd), "AT+COPS=1,2,\"%s\"\r\n", config->plmn);
+            ret = modem_at_cmd_wait_ok(&modem_at_handle, at_cmd, 500);
+            if (ret != MODEM_OK) return ret;
+        }
+        strncpy(g_modem_config.plmn, config->plmn, sizeof(g_modem_config.plmn) - 1);
+        g_modem_config.plmn[sizeof(g_modem_config.plmn) - 1] = '\0';
+        is_need_restart_network = 1;
+    }
+
     if (config->is_enable_roam != g_modem_config.is_enable_roam) {
         snprintf(at_cmd, sizeof(at_cmd), "AT+QCFG=\"roamservice\",%d,1\r\n", (config->is_enable_roam ? 2 : 1));
         ret = modem_at_cmd_wait_ok(&modem_at_handle, at_cmd, 500);
@@ -1118,6 +1168,7 @@ int modem_device_set_config(const modem_config_t *config)
         MODEM_LOGD("Set Modem ISP Selected: %d => %d.", g_modem_config.isp_selected, config->isp_selected);
         g_modem_config.isp_selected = config->isp_selected;
     }
+
     if (config->ppp_context_id != g_modem_config.ppp_context_id) {
         MODEM_LOGD("Set Modem PPP Context ID: %d => %d.", g_modem_config.ppp_context_id, config->ppp_context_id);
         g_modem_config.ppp_context_id = config->ppp_context_id;
@@ -1324,6 +1375,7 @@ int modem_device_get_config(modem_config_t *config)
     config->isp_selected = g_modem_config.isp_selected;
     config->ppp_context_id = g_modem_config.ppp_context_id;
     memcpy(config->ppp_pre_at_cmds, g_modem_config.ppp_pre_at_cmds, sizeof(g_modem_config.ppp_pre_at_cmds));
+    memcpy(config->plmn, g_modem_config.plmn, sizeof(g_modem_config.plmn));
 
     modem_device_free_rsp_bufs(rsp_bufs, 8);
     return MODEM_OK;

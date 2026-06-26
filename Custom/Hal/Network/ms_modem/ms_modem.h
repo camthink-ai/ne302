@@ -67,6 +67,7 @@ typedef struct {
     uint8_t authentication;             // APN authentication
     uint8_t is_enable_roam;             // Enable roaming
     uint8_t isp_selected;               // ISP selected (0: Auto, 1: China Mobile, 2: China Unicom, 3: China Telecom, 4: American Verizon)
+    char plmn[8];                       // Manual PLMN code (MCC+MNC, 5-6 digits); empty = auto COPS=0
     char pin[32];                       // SIM PIN
     char puk[32];                       // SIM PUK
     uint8_t ppp_context_id;             // PPP context ID (0: Auto, others: specified)

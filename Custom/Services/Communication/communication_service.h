@@ -87,6 +87,7 @@ typedef struct {
     cellular_auth_type_t authentication;    // Authentication type
     aicam_bool_t enable_roaming;            // Enable roaming
     uint8_t operator;                       // Mobile operator (0: Auto, 1: China Mobile, 2: China Unicom, 3: China Telecom, 4: American Verizon)
+    char plmn[8];                           // Manual PLMN code (MCC+MNC, 5-6 digits); empty = auto COPS=0
 } cellular_connection_settings_t;
 
 /**
