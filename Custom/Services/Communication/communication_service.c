@@ -93,6 +93,10 @@ typedef struct {
     aicam_bool_t startup_decision_made;             // Startup connection decision made
     uint32_t startup_begin_time;                    // When startup began (for timeout)
     osTimerId_t startup_timeout_timer;              // Startup timeout timer
+
+    // Wake-capture netif restriction: when != COMM_TYPE_NONE, start() brings up
+    // only this netif on the wake path (set by service_start via capture config).
+    communication_type_t required_type;
     
     // Switch management
     aicam_bool_t switch_in_progress;                // Switch operation in progress
@@ -173,9 +177,10 @@ static void make_startup_connection_decision(void);
 static communication_type_t get_highest_priority_available_type(void);
 static void startup_timeout_callback(void *argument);
 
-#if NETIF_4G_CAT1_IS_ENABLE
 /**
  * @brief Validate NVS preferred_comm_type as communication_type_t (communication_service.h).
+ *        Not gated on NETIF_4G_CAT1_IS_ENABLE: communication_service_init() loads the
+ *        preferred type from NVS regardless of which physical interfaces are enabled.
  */
 static communication_type_t comm_nvs_to_comm_type(uint32_t raw)
 {
@@ -185,6 +190,7 @@ static communication_type_t comm_nvs_to_comm_type(uint32_t raw)
     return (communication_type_t)raw;
 }
 
+#if NETIF_4G_CAT1_IS_ENABLE
 static void comm_reload_preferred_type_from_nvs(void)
 {
     network_service_config_t net_cfg;
@@ -1122,8 +1128,47 @@ aicam_result_t communication_service_init(void *config)
     g_communication_service.state = SERVICE_STATE_INITIALIZED;
 
     LOG_SVC_INFO("Communication Service initialized");
-    
+
     return AICAM_OK;
+}
+
+/* Map a communication type to its netif interface name.
+ * Returns NULL for COMM_TYPE_NONE / unknown. */
+static const char *netif_name_for_comm_type(communication_type_t type)
+{
+    switch (type) {
+    case COMM_TYPE_WIFI:     return NETIF_NAME_WIFI_STA;
+    case COMM_TYPE_HALOW:    return NETIF_NAME_WIFI_HALOW;
+    case COMM_TYPE_CELLULAR: return NETIF_NAME_4G_CAT1;
+    case COMM_TYPE_POE:      return NETIF_NAME_ETH_WAN;
+    default:                 return NULL;
+    }
+}
+
+/* Wake-capture fast-fail: if we're on the single-required-netif path and this
+ * callback (for the required type) reports init failure, raise the
+ * NETIF_ALL_FAILED signal so the upload-coordinator's network wait aborts
+ * immediately instead of timing out. */
+static void comm_check_required_netif_failed(communication_type_t type, aicam_result_t result)
+{
+    if (g_communication_service.required_type != COMM_TYPE_NONE &&
+        g_communication_service.required_type == type &&
+        result != AICAM_OK) {
+        LOG_SVC_WARN("Required netif %s failed (result=%d) — signalling all-failed",
+                     communication_type_to_string(type), result);
+        (void)service_set_netif_all_failed(AICAM_TRUE);
+    }
+}
+
+/* Set the required netif for the wake-capture path. When non-NONE,
+ * communication_service_start() brings up only this netif instead of all
+ * auto_start_* interfaces. Called by service_start() before start() when the
+ * capture-upload config specifies a particular upload network. */
+void communication_service_set_required_type(communication_type_t type)
+{
+    g_communication_service.required_type = type;
+    LOG_SVC_INFO("Required wake-capture netif set: %s",
+                 type == COMM_TYPE_NONE ? "default(all)" : communication_type_to_string(type));
 }
 
 aicam_result_t communication_service_start(void)
@@ -1169,6 +1214,44 @@ aicam_result_t communication_service_start(void)
 #if NETIF_4G_CAT1_IS_ENABLE
     comm_reload_preferred_type_from_nvs();
 #endif
+
+    /* Wake-capture fast path: if a specific upload netif is required, restrict
+     * auto_start to ONLY that netif and set it as preferred, then fall through
+     * to the normal start logic (timer + init + decision). This way only one
+     * netif initializes (saving the multi-second bring-up of the others), but
+     * make_startup_connection_decision still runs to actually CONNECT it
+     * (which is what sets SERVICE_READY_STA). Without this, init alone never
+     * triggers a connect → upload wait times out. */
+    if (g_communication_service.required_type != COMM_TYPE_NONE) {
+        communication_type_t req = g_communication_service.required_type;
+        const char *if_name = netif_name_for_comm_type(req);
+        if (if_name) {
+            LOG_SVC_INFO("Wake-capture fast path: restricting to %s",
+                         communication_type_to_string(req));
+            /* Only the required netif auto-starts; AP never needed on a
+             * capture wake (essential-only sources, not BUTTON_LONG). */
+            g_communication_service.config.auto_start_wifi_ap  = AICAM_FALSE;
+            g_communication_service.config.auto_start_wifi_sta = (req == COMM_TYPE_WIFI)     ? AICAM_TRUE : AICAM_FALSE;
+            g_communication_service.config.auto_start_halow    = (req == COMM_TYPE_HALOW)    ? AICAM_TRUE : AICAM_FALSE;
+            g_communication_service.config.auto_start_cellular = (req == COMM_TYPE_CELLULAR) ? AICAM_TRUE : AICAM_FALSE;
+            g_communication_service.config.auto_start_poe      = (req == COMM_TYPE_POE)      ? AICAM_TRUE : AICAM_FALSE;
+            /* Preferred = required so the decision connects this type. */
+            g_communication_service.preferred_type = req;
+            g_communication_service.config.preferred_type = (uint32_t)req;
+            /* Mark the non-required ready flags TRUE so check_all_ready_and_decide
+             * doesn't wait on interfaces we won't start (belt-and-suspenders,
+             * since their auto_start is now false). */
+            if (req != COMM_TYPE_WIFI)     g_communication_service.wifi_sta_ready = AICAM_TRUE;
+            if (req != COMM_TYPE_HALOW)    g_communication_service.halow_ready = AICAM_TRUE;
+            if (req != COMM_TYPE_CELLULAR) g_communication_service.cellular_ready = AICAM_TRUE;
+            if (req != COMM_TYPE_POE)      g_communication_service.poe_ready = AICAM_TRUE;
+            /* fall through to normal start (timer + init + decision) */
+        } else {
+            LOG_SVC_WARN("Required comm type %d has no netif name — signalling all-failed",
+                         (int)req);
+            (void)service_set_netif_all_failed(AICAM_TRUE);
+        }
+    }
     
     // Create startup timeout timer
     if (g_communication_service.startup_timeout_timer == NULL) {
@@ -2031,11 +2114,13 @@ static void make_startup_connection_decision(void)
     LOG_SVC_INFO("Selected type set to: %s", communication_type_to_string(target_type));
     
     // Try to connect the selected type
+    aicam_result_t connect_result = AICAM_ERROR;  /* declared at function scope so
+                                                   * the wake fast-fail check below
+                                                   * can read it after the block */
     if (target_type != COMM_TYPE_NONE) {
         LOG_SVC_INFO("Attempting to connect %s...", communication_type_to_string(target_type));
-        
-        aicam_result_t connect_result = AICAM_ERROR;
-        
+
+
         switch (target_type) {
             case COMM_TYPE_WIFI:
                 // WiFi needs known networks
@@ -2106,7 +2191,23 @@ static void make_startup_connection_decision(void)
         }
 
     }
-    
+
+    /* Wake-capture fast-fail: on the single-required-netif path, if no type was
+     * selected (all unavailable) or the connect attempt failed, signal
+     * all-failed so the upload-coordinator's network wait aborts immediately
+     * instead of timing out. On normal full boots (required_type == NONE) we
+     * do NOT raise this — the user may configure the network manually. */
+    if (g_communication_service.required_type != COMM_TYPE_NONE) {
+        if (target_type == COMM_TYPE_NONE) {
+            LOG_SVC_WARN("Wake fast path: no netif available — signalling all-failed");
+            (void)service_set_netif_all_failed(AICAM_TRUE);
+        } else if (connect_result != AICAM_OK) {
+            LOG_SVC_WARN("Wake fast path: %s connect failed — signalling all-failed",
+                         communication_type_to_string(target_type));
+            (void)service_set_netif_all_failed(AICAM_TRUE);
+        }
+    }
+
     update_type_info_cache();
     
     LOG_SVC_INFO("=== Startup decision complete ===");
@@ -2664,6 +2765,7 @@ static aicam_bool_t halow_scan_contains_ssid(const char *ssid, uint32_t scan_tim
 static void on_halow_ready(const char *if_name, aicam_result_t result)
 {
     (void)if_name;
+    comm_check_required_netif_failed(COMM_TYPE_HALOW, result);
 
     g_communication_service.halow_ready = AICAM_TRUE;
 
@@ -2727,6 +2829,7 @@ static void on_cellular_ready(const char *if_name, aicam_result_t result)
 {
     // Mark as ready regardless of result
     g_communication_service.cellular_ready = AICAM_TRUE;
+    comm_check_required_netif_failed(COMM_TYPE_CELLULAR, result);
     
     if (result == AICAM_OK) {
         LOG_SVC_INFO("Cellular/4G initialized and ready");
@@ -2832,9 +2935,10 @@ static void on_cellular_ready(const char *if_name, aicam_result_t result)
 static void on_poe_ready(const char *if_name, aicam_result_t result)
 {
     uint32_t init_time = netif_init_manager_get_init_time(if_name);
-    
+
     // Mark as ready regardless of result
     g_communication_service.poe_ready = AICAM_TRUE;
+    comm_check_required_netif_failed(COMM_TYPE_POE, result);
     
     if (result == AICAM_OK) {
         LOG_SVC_INFO("[PoE] Hardware initialized in %u ms", init_time);
@@ -6000,6 +6104,7 @@ static void on_wifi_sta_ready(const char *if_name, aicam_result_t result)
 {
     // Mark as ready regardless of result
     g_communication_service.wifi_sta_ready = AICAM_TRUE;
+    comm_check_required_netif_failed(COMM_TYPE_WIFI, result);
     
     if (result == AICAM_OK) {
         LOG_SVC_INFO("WiFi STA initialized and ready");

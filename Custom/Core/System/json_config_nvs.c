@@ -388,6 +388,100 @@ aicam_result_t json_config_load_webhook_from_nvs(webhook_config_t *config)
     return AICAM_OK;
 }
 
+/* ==================== Capture-Upload Configuration ==================== */
+
+aicam_result_t json_config_save_capture_upload_to_nvs(const capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+
+    aicam_result_t result = AICAM_OK;
+    aicam_result_t r;
+
+    r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_VERSION, config->version);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup version"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_MODE, (uint8_t)config->mode);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup mode"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_STORAGE, (uint8_t)config->storage);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup storage"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_POLICY, (uint8_t)config->policy);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup policy"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_PROTO, (uint8_t)config->upload_protocol);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup proto"); result = r; }
+
+    r = json_config_nvs_write_bool(NVS_KEY_CAPUP_RETRY_EN, config->retry_enable);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup retry_enable"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_RETRY_MAX, config->retry_max_attempts);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup retry_max"); result = r; }
+
+    r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_BATCH_N, (uint32_t)config->batch_count);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup batch_count"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_SCHED_CNT, config->schedule_node_count);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup schedule_count"); result = r; }
+
+    for (uint8_t i = 0; i < CAPTURE_SCHEDULE_MAX_NODES; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), NVS_KEY_CAPUP_SCHED_MIN_FMT, (unsigned)i);
+        r = json_config_nvs_write_uint32(key, (uint32_t)config->schedule_minutes[i]);
+        if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup sched[%u]", (unsigned)i); result = r; }
+    }
+
+    r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_KEEP_HOURS, config->keep_sent_hours);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup keep_hours"); result = r; }
+
+    r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_MAX_PENDING, config->max_pending_records);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup max_pending"); result = r; }
+
+    r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_COMM_TYPE, (uint8_t)config->upload_comm_type);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup upload_comm_type"); result = r; }
+
+    LOG_CORE_INFO("Capture-upload configuration saved to NVS");
+    return result;
+}
+
+aicam_result_t json_config_load_capture_upload_from_nvs(capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+
+    /* Start with defaults, then overlay anything found in NVS. */
+    json_config_capture_upload_defaults(config);
+
+    uint32_t u32 = 0;
+    uint8_t  u8  = 0;
+    aicam_bool_t b = AICAM_FALSE;
+
+    if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_VERSION, &u32) == AICAM_OK) config->version = u32;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_MODE,    &u8 ) == AICAM_OK) config->mode = (capture_mode_t)u8;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_STORAGE, &u8 ) == AICAM_OK) config->storage = (capture_storage_t)u8;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_POLICY,  &u8 ) == AICAM_OK) config->policy = (storage_policy_t)u8;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_PROTO,   &u8 ) == AICAM_OK) config->upload_protocol = (upload_proto_t)u8;
+    if (json_config_nvs_read_bool  (NVS_KEY_CAPUP_RETRY_EN, &b) == AICAM_OK) config->retry_enable = b;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_RETRY_MAX, &u8) == AICAM_OK) config->retry_max_attempts = u8;
+    if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_BATCH_N, &u32) == AICAM_OK) config->batch_count = (uint16_t)u32;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_SCHED_CNT, &u8) == AICAM_OK) {
+        config->schedule_node_count = (u8 > CAPTURE_SCHEDULE_MAX_NODES) ? CAPTURE_SCHEDULE_MAX_NODES : u8;
+    }
+    for (uint8_t i = 0; i < CAPTURE_SCHEDULE_MAX_NODES; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), NVS_KEY_CAPUP_SCHED_MIN_FMT, (unsigned)i);
+        if (json_config_nvs_read_uint32(key, &u32) == AICAM_OK) {
+            config->schedule_minutes[i] = (u32 > 1439) ? 0 : (uint16_t)u32;
+        }
+    }
+    if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_KEEP_HOURS, &u32) == AICAM_OK) config->keep_sent_hours = u32;
+    if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_MAX_PENDING, &u32) == AICAM_OK) config->max_pending_records = u32;
+    if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_COMM_TYPE, &u8) == AICAM_OK) {
+        config->upload_comm_type = (u8 >= (uint8_t)4 /*COMM_TYPE_MAX*/) ? 0 /*COMM_TYPE_NONE*/ : (uint32_t)u8;
+    }
+
+    return AICAM_OK;
+}
+
 #define WEBHOOK_CA_CERT_PATH  "/certs/webhook_ca.pem"
 
 aicam_result_t json_config_get_webhook_ca_cert(char **cert_data, size_t *cert_len)
@@ -1410,6 +1504,11 @@ aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config)
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save webhook configuration to NVS");
 
+    // Save capture-upload configuration
+    result = json_config_save_capture_upload_to_nvs(&config->capture_upload);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save capture-upload configuration to NVS");
+
     LOG_CORE_INFO("All config saved to NVS successfully");
     return AICAM_OK;
 }
@@ -1633,6 +1732,9 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
     result = json_config_nvs_read_string(NVS_KEY_WEBHOOK_SECRET,
                 config->webhook_config.secret, sizeof(config->webhook_config.secret));
     if (result != AICAM_OK) config->webhook_config.secret[0] = '\0';
+
+    // Load capture-upload configuration (idempotent — fills with defaults when keys missing)
+    json_config_load_capture_upload_from_nvs(&config->capture_upload);
 
     // Load device service configuration - image config
     result = json_config_nvs_read_uint32(NVS_KEY_IMAGE_BRIGHTNESS, &temp_uint32);

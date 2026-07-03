@@ -552,7 +552,7 @@ static int firmware_upgrade_from_flash(void)
     crc_data_size = flash_header->fw_total_size;
     
     // Use hardware CRC to calculate (byte-wise, InputDataFormat is configured as BYTES)
-    calculated_crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)crc_data_ptr, crc_data_size);
+    calculated_crc = CRC_Calculate((void *)crc_data_ptr, crc_data_size);
 
     printf("[CRC] Calculated CRC: 0x%08lX, Expected CRC: 0x%08lX\r\n",
            calculated_crc, flash_header->fw_crc);

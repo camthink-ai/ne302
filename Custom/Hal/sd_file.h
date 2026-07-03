@@ -78,6 +78,7 @@ int sd_file_ops_switch(void);
 int sd_format(void);
 int sd_get_disk_info(sd_disk_info_t *info);
 int sd_is_detected(void);
+int sd_is_media_open(void);              /* non-blocking: true once fx_media_open completed */
 int sd_wait_ready_for_open(uint32_t timeout_ms);
 int sd_register(void);
 int sd_unregister(void);

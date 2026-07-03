@@ -550,6 +550,7 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
 {
     XSPI_RegularCmdTypeDef  sCommand={0};
     uint8_t reg[2];
+    uint32_t start_tick = 0;
 
     /* Configure automatic polling mode to wait for memory ready ------ */
     sCommand.OperationType      = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -577,6 +578,7 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
         sCommand.DummyCycles        = GD55_DUMMY_CLOCK_CYCLES_READ_OCTAL;
     }
 
+    start_tick = HAL_GetTick();
     do
     {
         if (HAL_XSPI_Command(hxspi, &sCommand, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
@@ -588,7 +590,12 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
         {
             Error_Handler();
         }
-    } while((reg[0] & MEMORY_READY_MASK_VALUE) != MEMORY_READY_MATCH_VALUE);
+    } while((reg[0] & MEMORY_READY_MASK_VALUE) != MEMORY_READY_MATCH_VALUE && (HAL_GetTick() - start_tick) < HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
+
+    if ((reg[0] & MEMORY_READY_MASK_VALUE) != MEMORY_READY_MATCH_VALUE)
+    {
+        Error_Handler();
+    }
 }
 
 /**
@@ -991,6 +998,7 @@ int32_t XSPI_NOR_DisableMemoryMappedMode(void)
 {
     int32_t ret = 0;
 
+    __DSB();
     if (HAL_XSPI_Abort(&hxspi2) != HAL_OK)
     {
         ret = -1;

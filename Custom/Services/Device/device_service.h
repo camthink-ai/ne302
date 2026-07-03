@@ -157,6 +157,16 @@ service_state_t device_service_get_state(void);
 aicam_result_t device_service_get_info(device_info_config_t *info);
 
 /**
+ * @brief Get cached device info without storage scan (fast, hot-path safe).
+ * Only updates battery (HAL read) and returns the in-memory copy.
+ * Does NOT call update_storage_info() — use device_service_get_info() when
+ * storage capacity/usage data is actually needed.
+ * @param info Pointer to device_info_config_t structure
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t device_service_get_cached_info(device_info_config_t *info);
+
+/**
  * @brief Update device information
  * @param info Pointer to device_info_config_t structure
  * @return aicam_result_t Operation result

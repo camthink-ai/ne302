@@ -19,6 +19,7 @@
 #include "generic_file.h"
 #include "json_config_mgr.h"
 #include "json_config_internal.h"
+#include "wake_scheduler.h"
 #include "ai_service.h"
 #include "ota_service.h"
 #include "ota_header.h"
@@ -1245,7 +1246,11 @@ aicam_result_t system_time_handler(http_handler_context_t *ctx) {
     
     // Set system time using RTC
     rtc_setup_by_timestamp(timestamp, timezone_offset_hours);
-    
+
+    /* RTC stepped — invalidate wake_scheduler's last-handled-at state so
+     * we don't accidentally suppress freshly-due events on the new clock. */
+    wake_scheduler_reset_state();
+
     // Get the actual set time for response
     uint64_t current_timestamp = rtc_get_timeStamp();
     uint64_t local_timestamp = rtc_get_local_timestamp();

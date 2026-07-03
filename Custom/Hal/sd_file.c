@@ -268,7 +268,12 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
         status = fx_file_open(media, file, fx_path, open_mode);
     } else if (writing && !appending && !plus) { // "w"
         fx_file_delete(media, fx_path);
-        fx_file_create(media, fx_path);
+        UINT create_status = fx_file_create(media, fx_path);
+        if (create_status != FX_SUCCESS && create_status != FX_ALREADY_CREATED) {
+            LOG_DRV_ERROR("fx_file_create failed: 0x%02X path=%s\r\n", create_status, path);
+            hal_mem_free(file);
+            return NULL;
+        }
         open_mode = FX_OPEN_FOR_WRITE;
         status = fx_file_open(media, file, fx_path, open_mode);
     } else if (writing && !appending && plus) { // "w+"
@@ -300,6 +305,7 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
     }
 
     if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("fx_file_open failed: 0x%02X path=%s\r\n", status, path);
         hal_mem_free(file);
         return NULL;
     }
@@ -1039,10 +1045,13 @@ int sd_get_disk_info(sd_disk_info_t *info)
     if (!info) {
         return -1;
     }
-
+    /* Zero everything first — callers must never see stale/garbage free_KBytes. */
+    memset(info, 0, sizeof(*info));
     info->mode = g_sd.mode;
     if(g_sd.media_status != MEDIA_OPENED){
-        return 0;
+        /* Media not open: report the mode but signal failure so callers do not
+         * mistake an unmounted card for an empty/full one. */
+        return -1;
     }
     FX_MEDIA *media = &g_sd.sdio_disk;
     ULONG64 available_bytes = 0;
@@ -1073,6 +1082,13 @@ int sd_get_disk_info(sd_disk_info_t *info)
 int sd_is_detected(void)
 {
     return SD_IsDetected();
+}
+
+int sd_is_media_open(void)
+{
+    /* Non-blocking readiness check: true only after sdProcess has completed
+     * fx_media_open(). Used to avoid mkdir/write attempts on a closed media. */
+    return (g_sd.is_init == true && g_sd.media_status == MEDIA_OPENED) ? 1 : 0;
 }
 
 int sd_wait_ready_for_open(uint32_t timeout_ms)

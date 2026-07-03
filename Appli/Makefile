@@ -77,6 +77,7 @@ C_SOURCES += ../Custom/Core/System/ota_header.c
 C_SOURCES += ../Custom/Core/System/power_manager.c
 C_SOURCES += ../Custom/Core/System/scheduler_manager.c
 C_SOURCES += ../Custom/Core/System/upgrade_manager.c
+C_SOURCES += ../Custom/Core/System/wake_scheduler.c
 
 # Custom - Core/Video
 C_SOURCES += ../Custom/Core/Video/ai_draw_service.c
@@ -187,6 +188,7 @@ C_SOURCES += ../Custom/Services/RTSP/rtsp_server.c
 C_SOURCES += ../Custom/Services/RTSP/rtsp_rtp.c
 C_SOURCES += ../Custom/Services/RTSP/rtsp_digest_auth.c
 C_SOURCES += ../Custom/Services/Webhook/webhook_service.c
+C_SOURCES += ../Custom/Services/Upload/upload_coordinator.c
 C_SOURCES += ../Custom/Services/System/system_service.c
 # video_stream_hub moved to Core/Video
 
@@ -207,6 +209,7 @@ C_SOURCES += ../Custom/Services/Web/api/api_ota_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_rtmp_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_rtsp_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_webhook_module.c
+C_SOURCES += ../Custom/Services/Web/api/api_capture_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_preview_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_work_mode_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_business_error.c
@@ -777,6 +780,7 @@ C_INCLUDES += -I../Custom/Common/Lib/rtmpdump
 C_INCLUDES += -I../Custom/Common/Lib/rtmpdump/librtmp
 C_INCLUDES += -I../Custom/Services/RTSP
 C_INCLUDES += -I../Custom/Services/Webhook
+C_INCLUDES += -I../Custom/Services/Upload
 
 # Drivers - HAL & CMSIS
 C_INCLUDES += -I../Drivers/STM32N6xx_HAL_Driver/Inc

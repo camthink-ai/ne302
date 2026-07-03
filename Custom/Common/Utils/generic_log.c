@@ -5,6 +5,7 @@
 #define UNLOCK(mgr) do { if ((mgr)->thread_safe) (mgr)->unlock(); } while(0)
 
 #define LOG_MAX_LINE 256  // Can be adjusted according to actual needs
+#define LOG_FILE_FREE_MARGIN (8u * 1024u)  /* min free bytes to keep file logging enabled */
 
 static log_manager_t *log_manager = NULL;
 
@@ -35,26 +36,35 @@ static int strip_ansi_sequences(const char *src, char *dst, size_t dst_size)
     return (int)di;
 }
 
-static void rotate_file(const char *filename, int max_files)
+/* Returns 0 on success, -1 if the final (current-file) rename failed — the
+ * only rotation step whose failure reliably indicates a broken FS. Intermediate
+ * renames/removes are best-effort: the .N slots may not exist on the first few
+ * rotations, so their failure is benign and ignored. */
+static int rotate_file(const char *filename, int max_files)
 {
-    if (!log_manager || !log_manager->file_ops) return;
+    if (!log_manager || !log_manager->file_ops) return -1;
     log_file_ops_t *ops = log_manager->file_ops;
 
-    if (max_files <= 0) return;
+    if (max_files <= 0) return 0;
 
     char old_path[256];
     char new_path[256];
 
+    /* Drop the oldest slot if present (may not exist yet — benign). */
     snprintf(old_path, sizeof(old_path), "%s.%d", filename, max_files);
-    ops->remove(old_path);
+    (void)ops->remove(old_path);
 
+    /* Shift .i -> .i+1 from the top down. Tolerate absence on early rotations. */
     for (int i = max_files - 1; i >= 1; i--) {
         snprintf(old_path, sizeof(old_path), "%s.%d", filename, i);
         snprintf(new_path, sizeof(new_path), "%s.%d", filename, i + 1);
-        ops->rename(old_path, new_path);
+        (void)ops->rename(old_path, new_path);
     }
+
+    /* The current file exists (rotation only triggers after append exceeded
+     * max_size), so this rename must succeed — failure means the FS is broken. */
     snprintf(new_path, sizeof(new_path), "%s.1", filename);
-    ops->rename(filename, new_path);
+    return (ops->rename(filename, new_path) == 0) ? 0 : -1;
 }
 
 int log_register_module(const char *name, LogLevel level, LogLevel file_level)
@@ -175,6 +185,24 @@ int log_add_output(OutputType type, const char *filename, size_t max_size, int m
         output->config.file.filename = fname;
         output->config.file.max_size = max_size;
         output->config.file.max_files = max_files;
+
+        /* One-shot free-space check at registration: if the FS reports low
+         * space, hard-disable this output for the run so the hot log_message
+         * path never attempts a write. Kept here (not in log_message) so the
+         * per-line log cost stays a single bool check. If the FS is not ready
+         * yet (rc != 0), leave it enabled — the circuit breaker in log_message
+         * will disable on the first failed write. */
+        if (log_manager->file_ops && log_manager->file_ops->get_free_bytes) {
+            uint64_t free_bytes = 0;
+            if (log_manager->file_ops->get_free_bytes(&free_bytes) == 0) {
+                uint64_t threshold = (uint64_t)max_size + LOG_FILE_FREE_MARGIN;
+                if (free_bytes < threshold) {
+                    output->config.file.disabled = true;
+                    fprintf(stderr, "[LOG] file logging disabled: low free space at registration (%lu B, need %lu B)\r\n",
+                            (unsigned long)free_bytes, (unsigned long)threshold);
+                }
+            }
+        }
     }
     
     log_manager->output_count++;
@@ -270,6 +298,14 @@ void log_message(LogLevel level, const char *module_name, const char *format, ..
 
             case OUTPUT_FILE: {
                 if (level < file_level || level == LOG_SIMPLE) break;
+                /* Circuit breaker: once a prior write/open/rename failed (or
+                 * registration found free space too low), skip all file output
+                 * for the rest of this run — stops the "Failed to write log
+                 * file" retry storm on a full or broken FS. Free space is
+                 * checked once at registration (log_add_output), not here, so
+                 * the per-line cost is just this single bool. Not re-enabled
+                 * by log_set_output_enabled. */
+                if (output->config.file.disabled) break;
                 log_file_ops_t *ops = log_manager->file_ops;
                 const char *filename = output->config.file.filename;
 
@@ -284,16 +320,24 @@ void log_message(LogLevel level, const char *module_name, const char *format, ..
                 }
                 size_t new_size = current_size + (size_t)clean_len;
                 if (output->config.file.max_size > 0 && new_size > output->config.file.max_size) {
-                    rotate_file(filename, output->config.file.max_files);
+                    if (rotate_file(filename, output->config.file.max_files) != 0) {
+                        output->config.file.disabled = true;
+                        fprintf(stderr, "[LOG] file logging disabled: rotation failed\r\n");
+                        break;
+                    }
                 }
                 void *file = ops->fopen(filename, "a");
                 if (!file) {
-                    fprintf(stderr, "Failed to open log file: %s\r\n", filename);
+                    output->config.file.disabled = true;
+                    fprintf(stderr, "[LOG] file logging disabled: open failed\r\n");
                     break;
                 }
                 size_t written = ops->fwrite(file, clean_buffer, (size_t)clean_len);
                 if (written != (size_t)clean_len) {
-                    fprintf(stderr, "Failed to write log file: %s\r\n", filename);
+                    ops->fclose(file);
+                    output->config.file.disabled = true;
+                    fprintf(stderr, "[LOG] file logging disabled: write failed\r\n");
+                    break;
                 }
                 ops->fflush(file);
                 ops->fclose(file);

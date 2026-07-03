@@ -591,6 +591,18 @@ int storage_flash_erase(uint32_t offset, size_t num_blk)
     return 0;
 }
 
+/* lfs_fs_size traverses the whole FS (~120ms on 8192 blocks). Boot calls
+ * storage_get_disk_info several times (log registration, ensure_dirs, status
+ * polls). Cache the used-block count for a short window so repeat calls within
+ * the window are free. Stale by up to TTL ms is acceptable: space checks use
+ * large margins (≥512 KB), and total capacity never changes. */
+#define FS_SIZE_CACHE_TTL_MS  2000U
+static struct {
+    lfs_ssize_t used_blocks;
+    uint32_t    ts_ms;
+    bool        valid;
+} g_fs_size_cache;
+
 int storage_get_disk_info(storage_disk_info_t *info)
 {
     if (info == NULL) {
@@ -608,10 +620,21 @@ int storage_get_disk_info(storage_disk_info_t *info)
     lfs_mem_system_t *sys = &g_storage.lfs_sys;
     LFS_LOCK(sys);
 
-    lfs_ssize_t used_blocks = lfs_fs_size(&sys->lfs);
-    if (used_blocks < 0) {
-        LFS_UNLOCK(sys);
-        return -2;
+    /* Use cached used-block count if fresh — avoids the ~120ms full-FS traverse
+     * on repeat calls (boot hits this 2-3x, web status polls hit it regularly). */
+    lfs_ssize_t used_blocks;
+    uint32_t now = HAL_GetTick();
+    if (g_fs_size_cache.valid && (now - g_fs_size_cache.ts_ms) < FS_SIZE_CACHE_TTL_MS) {
+        used_blocks = g_fs_size_cache.used_blocks;
+    } else {
+        used_blocks = lfs_fs_size(&sys->lfs);
+        if (used_blocks < 0) {
+            LFS_UNLOCK(sys);
+            return -2;
+        }
+        g_fs_size_cache.used_blocks = used_blocks;
+        g_fs_size_cache.ts_ms = now;
+        g_fs_size_cache.valid = true;
     }
 
     size_t total_bytes = sys->mem_dev.block_count * sys->mem_dev.block_size;
@@ -624,6 +647,11 @@ int storage_get_disk_info(storage_disk_info_t *info)
     info->free_KBytes = (uint32_t)(free_bytes / 1024U);
 
     return 0;
+}
+
+bool storage_is_lfs_mounted(void)
+{
+    return (g_storage.is_init && g_storage.lfs_sys.mounted);
 }
 
 static int storage_flash_erase4K(uint32_t offset, size_t size)
@@ -705,7 +733,7 @@ static int sysclk_nor_flash_erase(uint32_t address, size_t size)
 
 static uint32_t sysclk_hal_crc32(void *data, size_t size)
 {
-    return HAL_CRC_Calculate(&hcrc, (uint32_t *)data, (uint32_t)size);
+    return CRC_Calculate(data, (uint32_t)size);
 }
 
 static int storage_nvs_init(nvs_fs_t *nvs, uint32_t flash_offset, size_t sector_size, size_t sector_count) 
@@ -949,6 +977,9 @@ void storage_format(void)
         err = lfs_mount(&g_storage.lfs_sys.lfs, &g_storage.lfs_sys.config);
         g_storage.lfs_sys.mounted = (err == LFS_ERR_OK);
     }
+    /* Invalidate the free-space cache — used-block count is meaningless after
+     * a format/remount. */
+    g_fs_size_cache.valid = false;
 
     if (g_storage.lfs_sys.thread_safe && g_storage.lfs_sys.lock && g_storage.lfs_sys.unlock) {
         g_storage.lfs_sys.unlock();

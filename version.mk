@@ -71,9 +71,9 @@ endif
 # =============================================================================
 # Set component-specific versions (leave empty to use main version)
 # Format: MAJOR.MINOR.PATCH.BUILD or empty
-FSBL_VERSION_OVERRIDE    := 1.0.1.0
+FSBL_VERSION_OVERRIDE    := 1.0.2.0
 APP_VERSION_OVERRIDE     := $(VERSION)
-WEB_VERSION_OVERRIDE     := 1.4.0.0
+WEB_VERSION_OVERRIDE     := 1.4.1.0
 MODEL_VERSION_OVERRIDE   := 2.0.0.0
 WAKECORE_VERSION_OVERRIDE := 0.2.7.5
 

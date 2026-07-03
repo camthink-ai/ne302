@@ -766,7 +766,7 @@ static int halow_mmwlan_boot_locked(void)
 
     ret = mmwlan_boot(&boot_args);
     if (ret != MMWLAN_SUCCESS) {
-        LOG_DRV_ERROR("HaLow mmwlan_boot failed, ret=%d", ret);
+        // LOG_DRV_ERROR("HaLow mmwlan_boot failed, ret=%d", ret);
         if (ret == MMWLAN_HW_DEVICE_UNAVAILABLE) return -333;
         return -1;
     }

@@ -355,6 +355,21 @@
 #define NVS_KEY_WEBHOOK_SECRET      "wh_secret"
 #define NVS_KEY_WEBHOOK_CA_CERT_PATH "wh_ca_path"
 
+// Capture-upload configuration key names
+#define NVS_KEY_CAPUP_VERSION       "cu_ver"
+#define NVS_KEY_CAPUP_MODE          "cu_mode"
+#define NVS_KEY_CAPUP_STORAGE       "cu_store"
+#define NVS_KEY_CAPUP_POLICY        "cu_policy"
+#define NVS_KEY_CAPUP_PROTO         "cu_proto"
+#define NVS_KEY_CAPUP_RETRY_EN      "cu_re_en"
+#define NVS_KEY_CAPUP_RETRY_MAX     "cu_re_max"
+#define NVS_KEY_CAPUP_BATCH_N       "cu_bat_n"
+#define NVS_KEY_CAPUP_SCHED_CNT     "cu_sch_cnt"
+#define NVS_KEY_CAPUP_SCHED_MIN_FMT "cu_sch_%u"   /* uint16_t index 0..7 */
+#define NVS_KEY_CAPUP_KEEP_HOURS    "cu_keep_h"
+#define NVS_KEY_CAPUP_MAX_PENDING   "cu_max_pd"
+#define NVS_KEY_CAPUP_COMM_TYPE     "cu_comm"
+
 
  /* ==================== Internal Function Prototypes ==================== */
  
@@ -375,6 +390,8 @@ aicam_result_t json_config_save_mqtt_service_config_to_nvs(const mqtt_service_co
 aicam_result_t json_config_save_auth_mgr_config_to_nvs(const auth_mgr_config_t *config);
 aicam_result_t json_config_save_webhook_config_to_nvs(const webhook_config_t *config);
 aicam_result_t json_config_load_webhook_from_nvs(webhook_config_t *config);
+aicam_result_t json_config_save_capture_upload_to_nvs(const capture_upload_config_t *config);
+aicam_result_t json_config_load_capture_upload_from_nvs(capture_upload_config_t *config);
  aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config);
  aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config);
  

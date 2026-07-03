@@ -23,6 +23,9 @@
 #define FS_FLASH_SIZE   LITTLEFS_SIZE
 #define FS_BLK_OFFSET   (FS_FLASH_OFFSET / FS_FLASH_BLK)
 
+#define FS_LFS_CACHE_SIZE       64
+#define FS_LFS_LOOKAHEAD_SIZE   32
+ 
 #define NVS_FLASH_BLK    FLASH_BLOCK_SIZE
 #define NVS_FLASH_WRITE_BLOCK_SIZE 	4	/** Choose TYPEPROGAM from HAL. */
 #define NVS_FLASH_ERASE_VALUE		0xFF
@@ -127,6 +130,10 @@ int storage_flash_write(uint32_t offset, void *data, size_t size);
 int storage_flash_read(uint32_t offset, void *data, size_t size);
 int storage_flash_erase(uint32_t offset, size_t num_blk);
 int storage_get_disk_info(storage_disk_info_t *info);
+/* Lightweight mounted check — just reads the RAM flag, NO lfs_fs_size traverse.
+ * Use this instead of storage_get_disk_info() when you only need to know if the
+ * littlefs volume is mounted (e.g. readiness probes in hot paths). */
+bool storage_is_lfs_mounted(void);
 void storage_lock(void);
 void storage_unlock(void);
 void storage_format(void);

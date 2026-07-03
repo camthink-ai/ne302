@@ -363,6 +363,7 @@ static void qs_snapshot_thread(void *argument)
         osThreadExit();
         return;
     }
+    printf("[QS]end1, %lu ms\r\n", HAL_GetTick());
 
     if (need_ai) {
         camera_buffer_with_frame_id_t pipe2 = {0};
@@ -384,6 +385,7 @@ static void qs_snapshot_thread(void *argument)
             osThreadExit();
             return;
         }
+        printf("[QS]end2, %lu ms\r\n", HAL_GetTick());
     }
 
     /* turn light off after capture */
@@ -393,7 +395,6 @@ static void qs_snapshot_thread(void *argument)
 
     /* Stop pipes/sensor early to reduce power while encoding/inference runs */
     qs_stop_camera_pipes(need_ai);
-    printf("[QS]end, %lu ms\r\n", HAL_GetTick());
     qt_prof_step(&prof, "[QS] snap:stop ");
 
     /* JPEG encode using pipe1 buffer */

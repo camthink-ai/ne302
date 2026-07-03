@@ -236,6 +236,15 @@ aicam_result_t communication_service_init(void *config);
 aicam_result_t communication_service_start(void);
 
 /**
+ * @brief Set the required netif for the wake-capture path.
+ * @param type COMM_TYPE_NONE = default (init all per system comm-pref);
+ *             otherwise bring up only that netif on the next start().
+ * @note Must be called before communication_service_start(). Only takes effect
+ *       on the wake-capture boot path; full-speed boots ignore it.
+ */
+void communication_service_set_required_type(communication_type_t type);
+
+/**
  * @brief Stop communication service
  * @return aicam_result_t Operation result
  */

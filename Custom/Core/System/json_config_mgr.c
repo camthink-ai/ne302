@@ -449,6 +449,9 @@
      memcpy(config, &default_config, sizeof(aicam_global_config_t));
      config->timestamp = json_config_get_timestamp();
 
+     /* Fields not covered by the static default_config table */
+     json_config_capture_upload_defaults(&config->capture_upload);
+
      // Delegate checksum calculation
      aicam_result_t result = json_config_calculate_checksum(config, &config->checksum);
      return result;
@@ -1573,6 +1576,76 @@ aicam_result_t json_config_set_webhook_config(const webhook_config_t *config)
     aicam_result_t result = json_config_save_webhook_config_to_nvs(config);
     if (result == AICAM_OK) {
         memcpy(&g_json_config_ctx.current_config.webhook_config, config, sizeof(webhook_config_t));
+    }
+    return result;
+}
+
+/* ==================== Capture-Upload Configuration ==================== */
+
+void json_config_capture_upload_defaults(capture_upload_config_t *config)
+{
+    if (!config) return;
+    memset(config, 0, sizeof(*config));
+    config->version              = CAPTURE_UPLOAD_CFG_VERSION;
+    config->mode                 = CAPTURE_MODE_INSTANT;
+    config->storage              = CAPTURE_STORE_AUTO;
+    config->policy               = STORAGE_POLICY_WRAP;
+    config->upload_protocol      = UPLOAD_PROTO_MQTT;
+    config->retry_enable         = AICAM_TRUE;
+    config->retry_max_attempts   = 5;
+    config->batch_count          = 10;
+    config->schedule_node_count  = 0;
+    config->keep_sent_hours      = 168;     /* 7 days */
+    config->max_pending_records  = 200;
+    config->upload_comm_type     = 0;  /* COMM_TYPE_NONE = default logic */
+}
+
+aicam_result_t json_config_get_capture_upload_config(capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+    return json_config_load_capture_upload_from_nvs(config);
+}
+
+aicam_result_t json_config_set_capture_upload_config(const capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+
+    /* Light normalization before persisting so callers don't have to. */
+    capture_upload_config_t norm = *config;
+    if (norm.version == 0) norm.version = CAPTURE_UPLOAD_CFG_VERSION;
+    if (norm.mode    >= CAPTURE_MODE_LOCAL_ONLY + 1) norm.mode    = CAPTURE_MODE_INSTANT;
+    if (norm.storage >  CAPTURE_STORE_NONE)          norm.storage = CAPTURE_STORE_AUTO;
+    if (norm.policy  >  STORAGE_POLICY_STOP)         norm.policy  = STORAGE_POLICY_WRAP;
+    if (norm.upload_protocol > UPLOAD_PROTO_WEBHOOK) norm.upload_protocol = UPLOAD_PROTO_MQTT;
+    /* retry_max_attempts: 0 = unlimited, 1..20 otherwise */
+    if (norm.retry_max_attempts > 20) norm.retry_max_attempts = 20;
+    /* batch_count: 2..20 (1 makes no sense for "batch") */
+    if (norm.batch_count < 2)  norm.batch_count = 2;
+    if (norm.batch_count > 20) norm.batch_count = 20;
+    if (norm.schedule_node_count > CAPTURE_SCHEDULE_MAX_NODES)
+        norm.schedule_node_count = CAPTURE_SCHEDULE_MAX_NODES;
+    for (uint8_t i = 0; i < CAPTURE_SCHEDULE_MAX_NODES; i++) {
+        if (norm.schedule_minutes[i] > 1439) norm.schedule_minutes[i] = 0;
+    }
+    if (norm.keep_sent_hours > 24 * 30) norm.keep_sent_hours = 24 * 30;
+    if (norm.max_pending_records == 0)  norm.max_pending_records = 200;
+    if (norm.max_pending_records > 1000) norm.max_pending_records = 1000;
+
+    /* Cross-field constraints */
+    if (norm.storage == CAPTURE_STORE_NONE && norm.mode != CAPTURE_MODE_INSTANT) {
+        /* "none" only allowed with INSTANT; downgrade to AUTO. */
+        norm.storage = CAPTURE_STORE_AUTO;
+    }
+    if (norm.mode == CAPTURE_MODE_LOCAL_ONLY) {
+        norm.retry_enable = AICAM_FALSE;
+    }
+    if (norm.storage == CAPTURE_STORE_NONE) {
+        norm.retry_enable = AICAM_FALSE;
+    }
+
+    aicam_result_t result = json_config_save_capture_upload_to_nvs(&norm);
+    if (result == AICAM_OK) {
+        memcpy(&g_json_config_ctx.current_config.capture_upload, &norm, sizeof(capture_upload_config_t));
     }
     return result;
 }

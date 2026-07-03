@@ -990,19 +990,6 @@ export default function StorageManagement() {
                   {i18n._('sys.storage_management.no_storage')}
                 </div>
               )}
-
-              {/* Overwrite Policy (SD only) */}
-              {storageInfo?.sd_card_connected && (
-                <>
-                  <Separator />
-                  <div className="flex items-center justify-between gap-4 px-1">
-                    <Label className="text-sm">{i18n._('sys.storage_management.storage_policy')}</Label>
-                    {storageInfo?.cyclic_overwrite_enabled
-                      ? <p className="text-sm">{i18n._('sys.storage_management.loop_coverage')}</p>
-                      : <p className="text-sm">--</p>}
-                  </div>
-                </>
-              )}
             </div>
           )}
         </CardContent>

@@ -29,7 +29,9 @@
 #include "quick_snapshot.h"
 #include "cJSON.h"
 #include "webhook_service.h"
-#include "api_ota_module.h" 
+#include "upload_coordinator.h"
+#include "wake_scheduler.h"
+#include "api_ota_module.h"
  
  /* ==================== System Controller Implementation ==================== */
  
@@ -1471,24 +1473,53 @@ aicam_result_t system_controller_register_io_trigger(system_controller_t *contro
      system_controller_t *controller = g_system_service_ctx.controller;
      
      // Check wakeup source and handle accordingly
-     if (wakeup_flag & PWR_WAKEUP_FLAG_RTC_TIMING) {
-         LOG_SVC_INFO("Woken by RTC timing");
-         handle_wakeup_event(controller, WAKEUP_SOURCE_RTC);
-     }
-     else if (wakeup_flag & (PWR_WAKEUP_FLAG_RTC_ALARM_A | PWR_WAKEUP_FLAG_RTC_ALARM_B)) {
-         LOG_SVC_INFO("Woken by RTC alarm");
-         
-         // Trigger scheduler check for RTC alarms
+
+     /* RTC wake (timing or alarm): use wake_scheduler to determine whether
+      * a capture, an upload-flush, or both are due now. Pure flush wakes
+      * don't trigger a capture — they just drain pending uploads and sleep. */
+     if (wakeup_flag & (PWR_WAKEUP_FLAG_RTC_TIMING |
+                        PWR_WAKEUP_FLAG_RTC_ALARM_A |
+                        PWR_WAKEUP_FLAG_RTC_ALARM_B)) {
+         LOG_SVC_INFO("Woken by RTC");
+
          if (wakeup_flag & PWR_WAKEUP_FLAG_RTC_ALARM_A) {
-             LOG_SVC_INFO("RTC Alarm A triggered, checking scheduler 1");
              rtc_trigger_scheduler_check(1);
          }
          if (wakeup_flag & PWR_WAKEUP_FLAG_RTC_ALARM_B) {
-             LOG_SVC_INFO("RTC Alarm B triggered, checking scheduler 2");
              rtc_trigger_scheduler_check(2);
          }
-         
-         handle_wakeup_event(controller, WAKEUP_SOURCE_RTC);
+
+         uint64_t now_unix = rtc_get_timeStamp();
+         wake_event_t evs[WAKE_DUTY_MAX];
+         int n = wake_scheduler_due_events(
+             now_unix > WAKE_TOLERANCE_SEC ? now_unix - WAKE_TOLERANCE_SEC : 0,
+             now_unix + WAKE_TOLERANCE_SEC,
+             evs, WAKE_DUTY_MAX);
+
+         aicam_bool_t need_capture = AICAM_FALSE;
+         aicam_bool_t need_flush   = AICAM_FALSE;
+         for (int i = 0; i < n; i++) {
+             if (evs[i].duty == WAKE_DUTY_CAPTURE)      need_capture = AICAM_TRUE;
+             if (evs[i].duty == WAKE_DUTY_UPLOAD_FLUSH) need_flush   = AICAM_TRUE;
+             wake_scheduler_mark_handled(evs[i].duty, evs[i].due_unix_sec);
+         }
+
+         if (need_flush) {
+             (void)upload_coordinator_kick();
+         }
+         if (need_capture || n == 0) {
+             handle_wakeup_event(controller, WAKEUP_SOURCE_RTC);
+             /* When capture + flush coincide (e.g. 3-min interval landing on the
+              * upload node), the kick above is async and would be abandoned when
+              * the device sleeps after the capture. Drain synchronously so the
+              * flush completes before sleep. */
+             if (need_flush) {
+                 (void)upload_coordinator_drain(30000);
+             }
+         } else {
+             (void)upload_coordinator_drain(30000);
+             system_service_task_completed();
+         }
      }
     else if (wakeup_flag & PWR_WAKEUP_FLAG_WUFI) {
         LOG_SVC_INFO("Woken by WUFI");
@@ -2061,7 +2092,7 @@ static aicam_result_t prepare_for_sleep(void)
      ms_bridging_alarm_t alarm_b = {0};
      uint64_t next_wakeup_a = 0;
      uint64_t next_wakeup_b = 0;
-     
+
      // Get next wakeup time for Alarm A (scheduler 1)
      if (rtc_get_next_wakeup_time(1, &next_wakeup_a) == 0) {
          // Convert timestamp to local time
@@ -2075,11 +2106,11 @@ static aicam_result_t prepare_for_sleep(void)
              alarm_a.minute = tm_info->tm_min;
              alarm_a.second = tm_info->tm_sec;
              wakeup_flags |= PWR_WAKEUP_FLAG_RTC_ALARM_A;
-             LOG_SVC_INFO("RTC Alarm A configured: %02d:%02d:%02d, weekday=%d", 
+             LOG_SVC_INFO("RTC Alarm A configured: %02d:%02d:%02d, weekday=%d",
                          alarm_a.hour, alarm_a.minute, alarm_a.second, alarm_a.week_day);
          }
      }
-     
+
      // Get next wakeup time for Alarm B (scheduler 2)
      if (rtc_get_next_wakeup_time(2, &next_wakeup_b) == 0) {
          // Convert timestamp to local time
@@ -2093,11 +2124,47 @@ static aicam_result_t prepare_for_sleep(void)
              alarm_b.minute = tm_info->tm_min;
              alarm_b.second = tm_info->tm_sec;
              wakeup_flags |= PWR_WAKEUP_FLAG_RTC_ALARM_B;
-             LOG_SVC_INFO("RTC Alarm B configured: %02d:%02d:%02d, weekday=%d", 
+             LOG_SVC_INFO("RTC Alarm B configured: %02d:%02d:%02d, weekday=%d",
                          alarm_b.hour, alarm_b.minute, alarm_b.second, alarm_b.week_day);
          }
      }
-     
+
+     /* The RTC scheduler (rtc_get_next_wakeup_time) only knows about capture
+      * timer jobs — it does NOT include the scheduled upload nodes (those live
+      * in wake_scheduler, driven by capture_upload_config.schedule_minutes).
+      * Without this, the alarm is set to the next capture interval, missing an
+      * earlier upload node (e.g. capture at 11:30:53 but upload node at 11:30:00
+      * → device wakes 53s late). Query wake_scheduler_next_event (which covers
+      * both capture AND upload) and override alarm_a if it's earlier. */
+     {
+         wake_event_t wev = {0};
+         uint64_t wake_evt = wake_scheduler_next_event(rtc_get_timeStamp(),
+                                                        24 * 3600, &wev);
+         if (wake_evt > 0) {
+             uint64_t rtc_earliest = next_wakeup_a;
+             if (next_wakeup_b > 0 && (rtc_earliest == 0 || next_wakeup_b < rtc_earliest)) {
+                 rtc_earliest = next_wakeup_b;
+             }
+             if (rtc_earliest == 0 || wake_evt < rtc_earliest) {
+                 const char *dname = (wev.duty == WAKE_DUTY_CAPTURE) ? "CAPTURE"
+                                   : (wev.duty == WAKE_DUTY_UPLOAD_FLUSH) ? "FLUSH" : "?";
+                 LOG_SVC_INFO("[WAKE] alarm override: wake_scheduler %s at %lu earlier than RTC alarm %lu",
+                             dname, (unsigned long)wake_evt, (unsigned long)rtc_earliest);
+                 time_t wake_time = (time_t)wake_evt;
+                 struct tm *tm_info = localtime(&wake_time);
+                 if (tm_info) {
+                     alarm_a.is_valid = 1;
+                     alarm_a.week_day = tm_info->tm_wday == 0 ? 7 : tm_info->tm_wday;
+                     alarm_a.date = 0;
+                     alarm_a.hour = tm_info->tm_hour;
+                     alarm_a.minute = tm_info->tm_min;
+                     alarm_a.second = tm_info->tm_sec;
+                     wakeup_flags |= PWR_WAKEUP_FLAG_RTC_ALARM_A;
+                 }
+             }
+         }
+     }
+
      LOG_SVC_INFO("Entering sleep mode: wakeup=0x%08X, power=0x%08X, duration=%u", 
                   wakeup_flags, switch_bits, sleep_sec);
      
@@ -3074,6 +3141,53 @@ aicam_result_t system_service_request_sleep(uint32_t duration_sec)
     return AICAM_OK;
 }
 
+/**
+ * @brief Poll for a scheduled upload-flush node that's due now, while awake.
+ *        Covers FULL_SPEED mode and LOW_POWER awake periods that span a
+ *        scheduled node without a dedicated wake (the wake path only fires on
+ *        cold-boot wake; a device awake across a node would otherwise miss it).
+ *        Idempotent: mark_handled prevents repeat triggers. Call ~every 15s.
+ */
+aicam_result_t system_service_poll_scheduled_flush(void)
+{
+    if (!g_system_service_ctx.is_initialized) return AICAM_ERROR_NOT_INITIALIZED;
+
+    uint64_t now = rtc_get_timeStamp();
+    wake_event_t evs[WAKE_DUTY_MAX];
+    int n = wake_scheduler_due_events(
+        now > WAKE_TOLERANCE_SEC ? now - WAKE_TOLERANCE_SEC : 0,
+        now + WAKE_TOLERANCE_SEC, evs, WAKE_DUTY_MAX);
+
+    for (int i = 0; i < n; i++) {
+        if (evs[i].duty == WAKE_DUTY_UPLOAD_FLUSH) {
+            LOG_SVC_INFO("[WAKE] scheduled flush due (awake poll) at=%lu",
+                         (unsigned long)evs[i].due_unix_sec);
+            wake_scheduler_mark_handled(WAKE_DUTY_UPLOAD_FLUSH, evs[i].due_unix_sec);
+            (void)upload_coordinator_drain(30000);
+            return AICAM_OK;
+        }
+    }
+    return AICAM_OK;
+}
+
+/**
+ * @brief Wait for an in-progress upload flush to finish before sleeping.
+ *        Does NOT start a new flush — pending that hasn't started waits for
+ *        the next wake. Only protects an upload already in flight.
+ */
+aicam_result_t system_service_wait_upload_before_sleep(uint32_t timeout_ms)
+{
+    uint64_t t0 = rtc_get_uptime_ms();
+    while (upload_coordinator_is_flushing() && (rtc_get_uptime_ms() - t0) < timeout_ms) {
+        osDelay(50);
+    }
+    if (upload_coordinator_is_flushing()) {
+        LOG_SVC_WARN("Sleep: upload still in progress after %u ms, sleeping anyway",
+                     timeout_ms);
+    }
+    return AICAM_OK;
+}
+
 /* ==================== Unified Capture Entry ==================== */
 
 aicam_bool_t system_service_capture_in_progress(void)
@@ -3379,10 +3493,94 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             g_capture_in_progress = AICAM_FALSE;
             return ret;
         }
-        LOG_SVC_INFO("[TIMING] Step 1 COMPLETED: Image captured - %u bytes, frame_id: %lu (duration: %lu ms)", 
+        LOG_SVC_INFO("[TIMING] Step 1 COMPLETED: Image captured - %u bytes, frame_id: %lu (duration: %lu ms)",
                      jpeg_size, (unsigned long)frame_id, (unsigned long)step_duration);
     }
 
+    /* Route ALL modes through upload_coordinator. It handles:
+     *   INSTANT    → persist + synchronous upload via upload_one_record()
+     *   BATCH      → persist + kick when batch_count reached
+     *   SCHEDULED  → persist + wait for schedule-minute flush
+     *   LOCAL_ONLY → persist into local/, never upload
+     * Previously INSTANT was excluded and fell through to a legacy
+     * sd_write_file() path that created no records and never uploaded. */
+    {
+        capture_upload_config_t cu_cfg;
+        (void)json_config_get_capture_upload_config(&cu_cfg);
+
+        /* Build metadata now so the coordinator can freeze it. */
+        jpegc_params_t jpeg_enc_param = {0};
+        (void)device_service_camera_get_jpeg_params(&jpeg_enc_param);
+
+        mqtt_image_metadata_t metadata = {0};
+        mqtt_service_generate_image_id(metadata.image_id, "cam01");
+        metadata.timestamp = rtc_get_timeStamp();
+        metadata.format    = MQTT_IMAGE_FORMAT_JPEG;
+        metadata.width     = jpeg_enc_param.ImageWidth;
+        metadata.height    = jpeg_enc_param.ImageHeight;
+        metadata.size      = (uint32_t)jpeg_size;
+        metadata.quality   = jpeg_enc_param.ImageQuality;
+        metadata.trigger_type = trigger_type;
+
+        /* AI result -> JSON */
+        char *ai_json = NULL;
+        if (enable_ai && nn_result.is_valid) {
+            cJSON *ai_json_root = nn_create_ai_result_json(&nn_result);
+            if (ai_json_root) {
+                ai_json = cJSON_PrintUnformatted(ai_json_root);
+                cJSON_Delete(ai_json_root);
+            }
+        }
+
+        /* AI inference JPEG (bounding-box overlay) — get from quick_snapshot
+         * (pre-generated during fast capture) or generate on the fly. */
+        uint8_t *inf_jpeg = NULL;
+        uint32_t inf_jpeg_size = 0;
+        if (enable_ai && nn_result.is_valid &&
+            (nn_result.od.nb_detect > 0 || nn_result.mpe.nb_detect > 0)) {
+            if (quick_snapshot_is_init()) {
+                size_t sz = 0;
+                if (quick_snapshot_wait_ai_jpeg(&inf_jpeg, &sz) == AICAM_OK &&
+                    inf_jpeg && sz > 0) {
+                    inf_jpeg_size = (uint32_t)sz;
+                }
+            } else {
+                (void)generate_inference_image(jpeg_buffer, (uint32_t)jpeg_size,
+                                               &nn_result, &inf_jpeg,
+                                               &inf_jpeg_size);
+            }
+        }
+
+        wakeup_source_type_t ws = system_service_get_wakeup_source_type();
+        aicam_result_t coord_ret = upload_coordinator_enqueue_capture(
+            jpeg_buffer, (uint32_t)jpeg_size,
+            inf_jpeg, inf_jpeg_size,
+            ai_json,
+            &metadata, trigger_type, ws);
+
+        /* Free inference JPEG (owned by quick_snapshot/jpegc — use camera free) */
+        if (inf_jpeg) {
+            device_service_camera_free_jpeg_buffer(inf_jpeg);
+        }
+        if (ai_json) cJSON_free(ai_json);
+        if (jpeg_copy && jpeg_buffer == jpeg_copy) {
+            buffer_free(jpeg_buffer);
+        } else {
+            device_service_camera_free_jpeg_buffer(jpeg_buffer);
+        }
+        jpeg_buffer = NULL; jpeg_copy = NULL;
+
+        uint64_t total_duration = rtc_get_uptime_ms() - total_start_time;
+        if (coord_ret == AICAM_OK) {
+            LOG_SVC_INFO("========== Capture enqueued to upload coordinator (mode=%d), total=%lu ms",
+                         cu_cfg.mode, (unsigned long)total_duration);
+        } else {
+            LOG_SVC_ERROR("Capture coordinator enqueue failed: %d (%lu ms)",
+                          coord_ret, (unsigned long)total_duration);
+        }
+        g_capture_in_progress = AICAM_FALSE;
+        return coord_ret;
+    }
 
     //store image to sd card if sd card is connected
     if(store_to_sd && device_service_storage_is_sd_connected()){

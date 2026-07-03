@@ -1021,7 +1021,24 @@ aicam_result_t device_service_update_info(const device_info_config_t *info)
     }
     
     LOG_SVC_INFO("Device information updated");
-    
+
+    return AICAM_OK;
+}
+
+/* Lightweight read of cached device info — no storage scan, no side effects.
+ * Use this in hot paths (e.g. capture metadata build) where only battery %,
+ * device name, and serial are needed. Avoids device_service_get_info() which
+ * internally calls update_storage_info() → storage_get_disk_info() → lfs_fs_size()
+ * (230 ms on a full 32 MB littlefs volume). */
+aicam_result_t device_service_get_cached_info(device_info_config_t *info)
+{
+    if (!info) return AICAM_ERROR_INVALID_PARAM;
+    if (!g_device_service.initialized) return AICAM_ERROR_NOT_INITIALIZED;
+
+    /* Battery is dynamic but fast (HAL GPIO read); update it here. */
+    update_battery_info(&g_device_service.device_info);
+
+    memcpy(info, &g_device_service.device_info, sizeof(device_info_config_t));
     return AICAM_OK;
 }
 

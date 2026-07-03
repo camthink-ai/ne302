@@ -1330,7 +1330,7 @@ static int camera_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsig
             memcpy(&camera->isp_iq_param, ubuf, sizeof(ISP_IQParamTypeDef));
             ret = AICAM_OK;
             // #include "crc.h"
-            // uint32_t crc32 = HAL_CRC_Calculate(&hcrc, (uint32_t *)ubuf, sizeof(ISP_IQParamTypeDef));
+            // uint32_t crc32 = CRC_Calculate(ubuf, sizeof(ISP_IQParamTypeDef));
             // printf("isp crc32: 0x%08lX\r\n", crc32);
             break;
 

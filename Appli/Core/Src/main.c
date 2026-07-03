@@ -377,15 +377,26 @@ void StartMainTask(void *argument)
     }
     
     /* Infinite loop */
+    uint32_t flush_poll_div = 0;  /* counts osDelay(100) ticks; poll flush every ~150 (15s) */
     for(;;)
     {
+        // Periodic scheduled-flush poll: catches upload nodes that arrive while
+        // awake (FULL_SPEED mode, or LOW_POWER awake periods spanning a node).
+        // The wake path only fires on cold-boot wake; this covers the gap.
+        if (++flush_poll_div >= 150) {
+            flush_poll_div = 0;
+            (void)system_service_poll_scheduled_flush();
+        }
+
         // Check if system needs to enter sleep mode
         aicam_bool_t sleep_pending = AICAM_FALSE;
         result = system_service_is_sleep_pending(&sleep_pending);
-        
+
         if (result == AICAM_OK && sleep_pending == AICAM_TRUE) {
+            // Wait for any in-progress upload to finish before cutting power.
+            (void)system_service_wait_upload_before_sleep(30000);
             printf("[MAIN] Sleep pending detected, entering sleep mode...\r\n");
-            
+
             // Execute sleep operation
             result = system_service_execute_pending_sleep();
             if (result == AICAM_OK) {
@@ -398,14 +409,7 @@ void StartMainTask(void *argument)
                 osDelay(100); // Wait before retry
             }
         }
-        
-        // Main loop periodic tasks can be added here
-        // For example:
-        // - System health monitoring
-        // - Watchdog feeding
-        // - LED blinking
-        // ...
-        
+
         // Sleep 100ms to avoid busy waiting
         osDelay(100);
     }

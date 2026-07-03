@@ -22,6 +22,7 @@ typedef int   (*log_fseek_func_t)(void *handle, long offset, int whence);
 typedef int   (*log_fflush_func_t)(void *handle);
 typedef int   (*log_fwrite_func_t)(void *handle, const void *buf, size_t size);
 typedef int   (*log_stat_func_t)(const char *filename, struct stat *st);
+typedef int   (*log_get_free_bytes_func_t)(uint64_t *out_free_bytes);  /* 0 = ok, -1 = FS not ready */
 typedef void (*log_custom_output_func_t)(const char *msg, int len);
 
 typedef enum {
@@ -49,6 +50,7 @@ typedef struct {
     log_fflush_func_t  fflush;
     log_fwrite_func_t  fwrite;
     log_stat_func_t    fstat;
+    log_get_free_bytes_func_t get_free_bytes;  /* optional; NULL ⇒ skip free-space pre-check */
 } log_file_ops_t;
 
 typedef struct {
@@ -70,6 +72,9 @@ typedef struct {
             char *filename;
             size_t max_size;
             int max_files;
+            bool disabled;        /* hard-disabled for this run — set at registration (low free
+                                   * space) or by the circuit breaker on a write/open/rename
+                                   * failure. Not re-enabled by log_set_output_enabled. */
         } file;
         struct {
             log_custom_output_func_t func;

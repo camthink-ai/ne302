@@ -537,6 +537,67 @@ typedef struct {
     char secret[WEBHOOK_SECRET_MAX_LEN];          // Auth token/credentials
 } webhook_config_t;
 
+/* ==================== Capture Upload Configuration ==================== */
+
+/** Capture-mode: when the device wakes/triggers a snapshot, how should the result be uploaded. */
+typedef enum {
+    CAPTURE_MODE_INSTANT    = 0,  /* Snap-and-upload, retry queue available */
+    CAPTURE_MODE_BATCH      = 1,  /* Accumulate N, then flush */
+    CAPTURE_MODE_SCHEDULED  = 2,  /* Flush at scheduled minutes-of-day */
+    CAPTURE_MODE_LOCAL_ONLY = 3,  /* Store only, no upload */
+} capture_mode_t;
+
+/** Capture storage target. */
+typedef enum {
+    CAPTURE_STORE_AUTO  = 0, /* Prefer SD, fall back to internal flash */
+    CAPTURE_STORE_FLASH = 1,
+    CAPTURE_STORE_SD    = 2,
+    CAPTURE_STORE_NONE  = 3, /* In-memory only (INSTANT mode only, no retry possible) */
+} capture_storage_t;
+
+/** Behavior when the chosen storage is full. */
+typedef enum {
+    STORAGE_POLICY_WRAP = 0, /* Delete oldest sent/local/failed/pending until enough free */
+    STORAGE_POLICY_STOP = 1, /* Reject this capture and raise alarm */
+} storage_policy_t;
+
+/** Upload protocol selection (per-record, derived from this config at enqueue time). */
+typedef enum {
+    UPLOAD_PROTO_MQTT    = 0,
+    UPLOAD_PROTO_WEBHOOK = 1,
+} upload_proto_t;
+
+#define CAPTURE_SCHEDULE_MAX_NODES  8
+#define CAPTURE_UPLOAD_CFG_VERSION  1
+
+typedef struct {
+    uint32_t          version;            /* schema version */
+    capture_mode_t    mode;
+    capture_storage_t storage;
+    storage_policy_t  policy;
+    upload_proto_t    upload_protocol;
+
+    /* Retry (mode != LOCAL_ONLY, storage != NONE) */
+    aicam_bool_t      retry_enable;
+    uint8_t           retry_max_attempts;     /* default 5; >max → marked failed */
+
+    /* Batch (mode == BATCH) */
+    uint16_t          batch_count;            /* default 10, range 1..50 */
+
+    /* Schedule (mode == SCHEDULED) */
+    uint8_t           schedule_node_count;
+    uint16_t          schedule_minutes[CAPTURE_SCHEDULE_MAX_NODES]; /* 0..1439 */
+
+    /* Housekeeping */
+    uint32_t          keep_sent_hours;        /* 0 = delete immediately on success; default 168 (7d) */
+    uint32_t          max_pending_records;    /* hard cap on queue length; default 200 */
+
+    /* Wake-capture network: which netif to bring up on the wake path.
+     * Values = communication_type_t (communication_service.h).
+     * COMM_TYPE_NONE (0) = default (use system comm-pref logic, init all). */
+    uint32_t          upload_comm_type;
+} capture_upload_config_t;
+
 // RTMP config is now part of video_stream_mode_config_t
 // These macros are kept for compatibility
 #define RTMP_CONFIG_MAX_URL_LENGTH         256
@@ -559,6 +620,7 @@ typedef struct {
     mqtt_service_config_t mqtt_service;
     auth_mgr_config_t auth_mgr;
     webhook_config_t webhook_config;
+    capture_upload_config_t capture_upload; /* Capture/upload mode, storage, retry, schedule */
     // RTMP config is now in work_mode_config.video_stream_mode
  } aicam_global_config_t;
  
@@ -985,6 +1047,21 @@ aicam_result_t json_config_get_webhook_config(webhook_config_t *config);
  * @brief Set webhook configuration
  */
 aicam_result_t json_config_set_webhook_config(const webhook_config_t *config);
+
+/**
+ * @brief Get capture-upload configuration
+ */
+aicam_result_t json_config_get_capture_upload_config(capture_upload_config_t *config);
+
+/**
+ * @brief Set capture-upload configuration (persisted to NVS)
+ */
+aicam_result_t json_config_set_capture_upload_config(const capture_upload_config_t *config);
+
+/**
+ * @brief Fill capture-upload struct with safe defaults
+ */
+void json_config_capture_upload_defaults(capture_upload_config_t *config);
 
 /**
  * @brief Get webhook custom CA certificate (from LittleFS file)

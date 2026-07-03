@@ -95,6 +95,7 @@ static int debug_log_fseek(void *handle, long offset, int whence);
 static int debug_log_fflush(void *handle);
 static int debug_log_fwrite(void *handle, const void *buf, size_t size);
 static int debug_log_fstat(const char *filename, struct stat *st);
+static int debug_log_get_free_bytes(uint64_t *out_free);
 static uint64_t debug_log_get_time(void);
 static void debug_uart_log_output(const char *msg, int len);
 
@@ -678,6 +679,7 @@ static aicam_result_t debug_init_logging(void)
     g_debug_ctx.log_file_ops.fflush = debug_log_fflush;
     g_debug_ctx.log_file_ops.fwrite = debug_log_fwrite;
     g_debug_ctx.log_file_ops.fstat = debug_log_fstat;
+    g_debug_ctx.log_file_ops.get_free_bytes = debug_log_get_free_bytes;
     
     // Initialize log manager
     int result = log_init(&g_debug_ctx.log_manager, 
@@ -847,6 +849,19 @@ static int debug_log_fwrite(void *handle, const void *buf, size_t size)
 static int debug_log_fstat(const char *filename, struct stat *st)
 {
     return flash_lfs_stat(filename, st);
+}
+
+/* Free-space probe for the file-log circuit breaker. aicam.log lives on the
+ * internal-flash LittleFS; if it is unmounted or too full, the log layer uses
+ * this to disable file output for the run instead of retrying every line. */
+static int debug_log_get_free_bytes(uint64_t *out_free)
+{
+    storage_disk_info_t info;
+    if (storage_get_disk_info(&info) != 0 || !info.mounted) {
+        return -1;  /* FS not ready — log layer will retry, not disable */
+    }
+    *out_free = (uint64_t)info.free_KBytes * 1024u;
+    return 0;
 }
 
 static uint64_t debug_log_get_time(void)
