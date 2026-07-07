@@ -62,6 +62,7 @@
  #define NVS_KEY_CONFIDENCE          "confidence"
  #define NVS_KEY_NMS_THRESHOLD       "nms_thresh"
  #define NVS_KEY_OVERLAY_RESULTS     "overlay_results"
+ #define NVS_KEY_INFER_INTERVAL      "ai_infer_iv"
  
  // Power mode configuration key names
  #define NVS_KEY_POWER_CURRENT_MODE  "power_cur_mode"
@@ -286,6 +287,11 @@
 
 // Report content
 #define NVS_KEY_MQTT_REPORT_CONTENT     "mqtt_rpt_ct"
+
+// Continuous AI telemetry
+#define NVS_KEY_MQTT_TELEMETRY_ENABLE   "mqtt_tel_en"
+#define NVS_KEY_MQTT_TELEMETRY_TOPIC    "mqtt_t_tel"
+#define NVS_KEY_MQTT_TELEMETRY_QOS      "mqtt_q_tel"
  
  // Work mode configuration key names
  #define NVS_KEY_WORK_MODE           "work_mode"
@@ -389,6 +395,7 @@ aicam_result_t json_config_load_webhook_from_nvs(webhook_config_t *config);
  uint32_t json_config_crc32(const void *data, size_t length);
  uint64_t json_config_get_timestamp(void);
  aicam_result_t json_config_validate_ranges(const aicam_global_config_t *config);
+ aicam_bool_t json_config_enforce_invariants(aicam_global_config_t *config);
  void json_config_generate_device_name_from_mac(char *device_name, size_t name_size, const char *mac_address);
  
  
