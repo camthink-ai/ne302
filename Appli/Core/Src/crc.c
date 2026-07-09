@@ -113,7 +113,11 @@ uint32_t CRC_Accumulate(uint32_t crcValue, void *pBuffer, uint32_t BufferLength)
 
   osMutexAcquire(hcrc_mutex_id, osWaitForever);
   hcrc.Instance->INIT = crcValue;
-  CRC->CR   = CRC_CR_RESET;
+  // Use the HAL macro (CR |= CRC_CR_RESET) so only the RESET bit is set.
+  // A direct "CRC->CR = CRC_CR_RESET" write clobbers POLYSIZE / REV_IN /
+  // REV_OUT / RTYPE config bits programmed during MX_CRC_Init(), corrupting
+  // every subsequent CRC computation.
+  __HAL_CRC_DR_RESET(&hcrc);
   crcResult = HAL_CRC_Accumulate(&hcrc, (uint32_t *)pBuffer, BufferLength);
   osMutexRelease(hcrc_mutex_id);
 

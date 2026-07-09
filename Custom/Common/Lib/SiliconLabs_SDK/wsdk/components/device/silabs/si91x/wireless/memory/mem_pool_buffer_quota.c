@@ -37,6 +37,12 @@
 #include "sl_core.h"
 #include <string.h>
 #include "sl_rsi_utility.h"
+#include "Hal/mem.h"   /* route the WiFi buffer pool backing store through the
+                        * global HAL slab allocator instead of libc malloc. The
+                        * internal pool lives in SRAM_POOL (same region as the
+                        * libc heap), so SPI NCP DMA reachability / cache
+                        * behavior is unchanged; MEM_FAST keeps the buffers out
+                        * of PSRAM. */
 
 #define SLI_BUFFER_TYPE    4
 #define SLI_WATERMARKLEVEL 10
@@ -69,7 +75,7 @@ sl_status_t sli_si91x_host_init_buffer_manager(const sl_wifi_buffer_configuratio
     configuration->tx_buffer_quota + configuration->rx_buffer_quota + configuration->control_buffer_quota;
   uint32_t buffer_size = configuration->block_size * block_count;
   if (configuration->buffer_memory == NULL) {
-    allocated_wifi_buffer = malloc(buffer_size);
+    allocated_wifi_buffer = hal_mem_alloc(buffer_size, MEM_FAST);
     if (allocated_wifi_buffer == NULL) {
       return SL_STATUS_ALLOCATION_FAILED;
     }
@@ -101,7 +107,7 @@ sl_status_t sli_si91x_host_deinit_buffer_manager(void)
 
   // If allocated_wifi_buffer is not NULL, free it and set the pointer to NULL
   if (allocated_wifi_buffer != NULL) {
-    free(allocated_wifi_buffer);
+    hal_mem_free(allocated_wifi_buffer);
     allocated_wifi_buffer = NULL;
   }
 

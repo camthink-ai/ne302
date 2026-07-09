@@ -328,9 +328,11 @@ static int sli_parse_ipv6_segments(const char **src,
       continue;
     }
 
-    // Skip non-colon characters
+    // Reject invalid (non-hex, non-colon) characters instead of silently
+    // skipping them. Skipping allowed completely invalid IPv6 addresses
+    // (e.g. "gggg::1", "2001:db8::g") to be accepted as valid.
     if (ch != ':') {
-      continue;
+      return 0;
     }
 
     // Process colon separator

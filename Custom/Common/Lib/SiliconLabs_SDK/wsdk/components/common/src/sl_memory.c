@@ -7,6 +7,7 @@
  */
 #include "sl_memory.h"
 #include <malloc.h>
+#include "Hal/mem.h"
 
 #if defined(SLI_SI91X_LWIP_HOSTED_NETWORK_STACK)
 #include "lwip/pbuf.h"
@@ -20,10 +21,19 @@ sl_buffer_t *sl_memory_allocate_buffer(sl_buffer_type_t type, uint16_t size)
   UNUSED_PARAMETER(type);
   buffer = (sl_buffer_t *)pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
 #else
-  buffer = malloc(size + sizeof(sl_buffer_t));
+  // Allocate the buffer object and its data storage as separate blocks so that
+  // buffer->data is itself a malloc return value. The free path calls
+  // hal_mem_free(buffer->data) when SL_BUFFER_DATA_ALLOCATED is set; if data pointed
+  // into the middle of a single object+data allocation (as the SDK originally
+  // did), that hal_mem_free() would corrupt the heap and crash.
+  buffer = hal_mem_alloc_fast(sizeof(sl_buffer_t));
   if (buffer != NULL) {
+    buffer->data = hal_mem_alloc_fast(size);
+    if (buffer->data == NULL) {
+      hal_mem_free(buffer);
+      return NULL;
+    }
     buffer->type        = type | SL_BUFFER_OBJECT_ALLOCATED | SL_BUFFER_DATA_ALLOCATED;
-    buffer->data        = &buffer[1];
     buffer->data_length = size;
     buffer->next_length = 0;
   }
@@ -39,7 +49,7 @@ sl_buffer_t *sl_memory_make_into_buffer(sl_buffer_type_t type, void *data, uint1
   UNUSED_PARAMETER(type);
   buffer = (sl_buffer_t *)pbuf_alloc_reference(data, data_size, PBUF_ROM);
 #else
-  buffer = malloc(sizeof(sl_buffer_t));
+  buffer = hal_mem_alloc_fast(sizeof(sl_buffer_t));
   if (buffer != NULL) {
     buffer->type        = type | SL_BUFFER_OBJECT_ALLOCATED;
     buffer->data        = data;
@@ -65,7 +75,7 @@ sl_buffer_t *sl_memory_free_buffer(sl_buffer_t *buffer, sl_memory_free_action_t 
 #else
   while (buffer != NULL) {
     if (buffer->type & SL_BUFFER_DATA_ALLOCATED) {
-      free(buffer->data);
+      hal_mem_free(buffer->data);
       buffer->data        = SL_INVALID_POINTER;
       buffer->data_length = 0;
       buffer->next_length = 0;
@@ -73,7 +83,7 @@ sl_buffer_t *sl_memory_free_buffer(sl_buffer_t *buffer, sl_memory_free_action_t 
     sl_buffer_t *next = buffer->next;
     if (buffer->type & SL_BUFFER_OBJECT_ALLOCATED) {
       buffer->type = SL_INVALID_BUFFER;
-      free(buffer);
+      hal_mem_free(buffer);
     }
 
     // Check if we continue looping through the chain
@@ -89,10 +99,10 @@ sl_buffer_t *sl_memory_free_buffer(sl_buffer_t *buffer, sl_memory_free_action_t 
 
 void *sl_memory_allocate(sl_memory_allocation_type_t type, uint16_t size)
 {
-  return malloc(size);
+  return hal_mem_alloc_fast(size);
 }
 
 void sl_memory_free(void *start_of_allocation)
 {
-  free(start_of_allocation);
+  hal_mem_free(start_of_allocation);
 }

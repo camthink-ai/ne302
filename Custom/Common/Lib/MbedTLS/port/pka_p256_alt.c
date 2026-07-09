@@ -356,6 +356,9 @@ int pka_p256_ecdh_gen_public(mbedtls_ecp_group *grp,
 {
     int ret;
 
+    if (grp == NULL || d == NULL || Q == NULL) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
     if (grp->id != MBEDTLS_ECP_DP_SECP256R1) {
         return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }
@@ -375,6 +378,9 @@ int pka_p256_ecdh_compute_shared(mbedtls_ecp_group *grp,
     int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
     mbedtls_ecp_point P;
 
+    if (grp == NULL || z == NULL || Q == NULL || d == NULL) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
     if (grp->id != MBEDTLS_ECP_DP_SECP256R1) {
         return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }
@@ -432,6 +438,9 @@ int pka_p256_ecdsa_sign(mbedtls_ecp_group *grp,
     uint8_t s_buf[PKA_P256_BYTES];
     mbedtls_mpi k;
 
+    if (grp == NULL || r == NULL || s == NULL || d == NULL || buf == NULL) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
     if (grp->id != MBEDTLS_ECP_DP_SECP256R1) {
         return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }
@@ -513,6 +522,9 @@ int pka_p256_ecdsa_verify(mbedtls_ecp_group *grp,
     uint8_t gy[PKA_P256_BYTES];
     uint8_t n[PKA_P256_BYTES];
 
+    if (grp == NULL || buf == NULL || Q == NULL || r == NULL || s == NULL) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
     if (grp->id != MBEDTLS_ECP_DP_SECP256R1) {
         return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }

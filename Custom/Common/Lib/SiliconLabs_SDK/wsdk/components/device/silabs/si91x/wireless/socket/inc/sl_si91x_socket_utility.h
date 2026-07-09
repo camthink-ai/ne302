@@ -96,7 +96,7 @@
   } while (0)
 
 #define SLI_GET_SAFE_MEMCPY_LENGTH(destination_size, source_size) \
-  source_size > destination_size ? destination_size : source_size
+  (((source_size) > (destination_size)) ? (destination_size) : (source_size))
 
 #ifndef IS_POWER_OF_TWO
 #define IS_POWER_OF_TWO(x) (x && (!(x & (x - 1))))

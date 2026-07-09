@@ -155,7 +155,6 @@ void MX_SPI6_Init(void)
   hspi6.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi6.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi6.Init.NSS = SPI_NSS_SOFT;
-  /* Morse HaLow (MM-APPNOTE-51 Mode 0): start ~DIV8–16; soft-SPI-stable boards often need DIV16. */
   hspi6.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi6.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi6.Init.TIMode = SPI_TIMODE_DISABLE;
