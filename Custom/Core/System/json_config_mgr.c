@@ -36,7 +36,9 @@
          .ai_enabled = AICAM_FALSE,
          .ai_1_active = AICAM_FALSE,
          .confidence_threshold = 50,
-         .nms_threshold = 50
+         .nms_threshold = 50,
+         .overlay_results = AICAM_TRUE,
+         .inference_interval_ms = 0
      },
      
      .power_mode_config = {
@@ -273,7 +275,14 @@
         .enable_status_report = AICAM_TRUE,
         .status_report_interval_ms = 60000,
         .enable_heartbeat = AICAM_TRUE,
-        .heartbeat_interval_ms = 30000
+        .heartbeat_interval_ms = 30000,
+        .report_content = MQTT_REPORT_CONTENT_FULL,
+
+        // Continuous AI telemetry
+        .telemetry_enabled = AICAM_FALSE,
+        .telemetry_topic = "aicam/data/telemetry",
+        .telemetry_qos = 0,
+        .telemetry_format = MQTT_TELEMETRY_FORMAT_JSON
     }
  };
 
@@ -820,6 +829,34 @@
  uint32_t json_config_get_nms_threshold(void)
  {
      return g_json_config_ctx.current_config.ai_debug.nms_threshold;
+ }
+
+ aicam_result_t json_config_set_overlay_results(aicam_bool_t overlay_results)
+ {
+     g_json_config_ctx.current_config.ai_debug.overlay_results = overlay_results;
+
+     // update to NVS
+     json_config_nvs_write_bool(NVS_KEY_OVERLAY_RESULTS, overlay_results);
+     return AICAM_OK;
+ }
+
+ aicam_bool_t json_config_get_overlay_results(void)
+ {
+     return g_json_config_ctx.current_config.ai_debug.overlay_results;
+ }
+
+ aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms)
+ {
+     g_json_config_ctx.current_config.ai_debug.inference_interval_ms = interval_ms;
+
+     // update to NVS
+     json_config_nvs_write_uint32(NVS_KEY_INFER_INTERVAL, interval_ms);
+     return AICAM_OK;
+ }
+
+ uint32_t json_config_get_inference_interval_ms(void)
+ {
+     return g_json_config_ctx.current_config.ai_debug.inference_interval_ms;
  }
 
  /*=================== Work Mode Configuration API Implementation ====================*/

@@ -31,6 +31,8 @@
      aicam_bool_t ai_1_active;      // AI_1 active switch
      uint32_t confidence_threshold;             // Confidence threshold 0-100
      uint32_t nms_threshold;                    // NMS threshold 0-100
+     aicam_bool_t overlay_results;  // Draw AI results onto encoded frames
+     uint32_t inference_interval_ms;            // AI inference pacing interval in ms (0 = every frame)
  } ai_debug_config_t;
  
 typedef struct {
@@ -333,6 +335,17 @@ typedef struct {
 } mqtt_base_config_t;
 
 /**
+ * @brief Data report content mode
+ * @note Selects what the capture/report flow publishes on the data report topic
+ * @note Applies to the normal capture path; the Quick_Bootstrap fast-capture
+ *       path builds its report independently and always sends the full report
+ */
+typedef enum {
+    MQTT_REPORT_CONTENT_FULL = 0,           // Image + metadata + AI result
+    MQTT_REPORT_CONTENT_METADATA_ONLY = 1,  // Metadata + AI result only, no image
+} mqtt_report_content_t;
+
+/**
  * @brief Extended MQTT service configuration
  * @note Combines base config with application-specific settings
  */
@@ -360,7 +373,24 @@ typedef struct {
     uint32_t status_report_interval_ms;          // Status report interval (ms)
     aicam_bool_t enable_heartbeat;               // Enable heartbeat
     uint32_t heartbeat_interval_ms;              // Heartbeat interval (ms)
+    uint8_t report_content;                      // Report content mode (mqtt_report_content_t)
+
+    // Continuous AI telemetry
+    aicam_bool_t telemetry_enabled;              // Publish AI results continuously
+    char telemetry_topic[MAX_TOPIC_LENGTH];      // Telemetry topic
+    uint8_t telemetry_qos;                       // Telemetry QoS (0-2)
+    uint8_t telemetry_format;                    // Payload format (mqtt_telemetry_format_t)
 } mqtt_service_config_t;
+
+/**
+ * @brief Continuous AI telemetry payload format
+ * @note Consumers distinguish the payloads on the wire by the first byte:
+ *       '{' (0x7B) for JSON, a CBOR map header (0xA0-0xBF) for CBOR.
+ */
+typedef enum {
+    MQTT_TELEMETRY_FORMAT_JSON = 0,              // cJSON text payload (default)
+    MQTT_TELEMETRY_FORMAT_CBOR = 1               // Compact CBOR binary payload
+} mqtt_telemetry_format_t;
 
 /** Stored in image_config_t.isp_mode — built-in profiles vs NVS-backed custom IQ. */
 #define IMAGE_ISP_MODE_OUTDOOR  0u   /* default */
@@ -903,8 +933,34 @@ uint32_t json_config_get_confidence_threshold(void);
 /**
  * @brief Get NMS threshold
  * @return NMS threshold
- */ 
+ */
 uint32_t json_config_get_nms_threshold(void);
+
+/**
+ * @brief Set AI overlay results flag
+ * @param overlay_results Draw AI results onto encoded frames
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_overlay_results(aicam_bool_t overlay_results);
+
+/**
+ * @brief Get AI overlay results flag
+ * @return AI overlay results flag
+ */
+aicam_bool_t json_config_get_overlay_results(void);
+
+/**
+ * @brief Set AI inference pacing interval
+ * @param interval_ms Interval in milliseconds (0 = process every frame)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms);
+
+/**
+ * @brief Get AI inference pacing interval
+ * @return Interval in milliseconds (0 = process every frame)
+ */
+uint32_t json_config_get_inference_interval_ms(void);
 
 
 /**
@@ -1089,6 +1145,8 @@ aicam_result_t json_config_delete_webhook_ca_cert(void);
 #define JSON_CONFIG_GET_AI_1_ACTIVE(config)    ((config)->ai_debug.ai_1_active)
 #define JSON_CONFIG_GET_CONFIDENCE(config)     ((config)->ai_debug.confidence_threshold)
 #define JSON_CONFIG_GET_NMS_THRESHOLD(config)  ((config)->ai_debug.nms_threshold)
+#define JSON_CONFIG_GET_OVERLAY_RESULTS(config) ((config)->ai_debug.overlay_results)
+#define JSON_CONFIG_GET_INFER_INTERVAL(config) ((config)->ai_debug.inference_interval_ms)
 
 // Macros for quick access to power mode configuration
 #define JSON_CONFIG_GET_POWER_MODE(config)     ((config)->power_mode_config.current_mode)

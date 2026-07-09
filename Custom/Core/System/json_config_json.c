@@ -107,6 +107,8 @@ static void parse_ai_debug(cJSON *json, ai_debug_config_t *cfg)
     json_get_bool(json, "ai_1_active", &cfg->ai_1_active);
     json_get_uint32(json, "confidence_threshold", &cfg->confidence_threshold);
     json_get_uint32(json, "nms_threshold", &cfg->nms_threshold);
+    json_get_bool(json, "overlay_results", &cfg->overlay_results);
+    json_get_uint32(json, "inference_interval_ms", &cfg->inference_interval_ms);
 }
 
 static void parse_power_mode(cJSON *json, power_mode_config_t *cfg)
@@ -564,6 +566,14 @@ static void parse_mqtt_service(cJSON *json, mqtt_service_config_t *cfg)
     json_get_uint32(json, "status_report_interval_ms", &cfg->status_report_interval_ms);
     json_get_bool(json, "enable_heartbeat", &cfg->enable_heartbeat);
     json_get_uint32(json, "heartbeat_interval_ms", &cfg->heartbeat_interval_ms);
+    json_get_uint8(json, "report_content", &cfg->report_content);
+    if (cfg->report_content > MQTT_REPORT_CONTENT_METADATA_ONLY) {
+        cfg->report_content = MQTT_REPORT_CONTENT_FULL;  // normalize unknown imported values
+    }
+    json_get_bool(json, "telemetry_enabled", &cfg->telemetry_enabled);
+    json_get_string(json, "telemetry_topic", cfg->telemetry_topic, sizeof(cfg->telemetry_topic));
+    json_get_uint8(json, "telemetry_qos", &cfg->telemetry_qos);
+    json_get_uint8(json, "telemetry_format", &cfg->telemetry_format);
 }
 
 static void parse_work_mode(cJSON *json, work_mode_config_t *cfg)
@@ -700,6 +710,8 @@ static cJSON *serialize_ai_debug(const ai_debug_config_t *cfg)
     cJSON_AddBoolToObject(json, "ai_1_active", cfg->ai_1_active);
     cJSON_AddNumberToObject(json, "confidence_threshold", cfg->confidence_threshold);
     cJSON_AddNumberToObject(json, "nms_threshold", cfg->nms_threshold);
+    cJSON_AddBoolToObject(json, "overlay_results", cfg->overlay_results);
+    cJSON_AddNumberToObject(json, "inference_interval_ms", cfg->inference_interval_ms);
     return json;
 }
 
@@ -1111,6 +1123,11 @@ static cJSON *serialize_mqtt_service(const mqtt_service_config_t *cfg)
     cJSON_AddNumberToObject(json, "status_report_interval_ms", cfg->status_report_interval_ms);
     cJSON_AddBoolToObject(json, "enable_heartbeat", cfg->enable_heartbeat);
     cJSON_AddNumberToObject(json, "heartbeat_interval_ms", cfg->heartbeat_interval_ms);
+    cJSON_AddNumberToObject(json, "report_content", cfg->report_content);
+    cJSON_AddBoolToObject(json, "telemetry_enabled", cfg->telemetry_enabled);
+    cJSON_AddStringToObject(json, "telemetry_topic", cfg->telemetry_topic);
+    cJSON_AddNumberToObject(json, "telemetry_qos", cfg->telemetry_qos);
+    cJSON_AddNumberToObject(json, "telemetry_format", cfg->telemetry_format);
 
     return json;
 }
@@ -1253,6 +1270,10 @@ aicam_result_t json_config_parse_json_object(const char *json_str, aicam_global_
         parse_auth_mgr(auth_mgr, &config->auth_mgr);
 
     cJSON_Delete(root);
+
+    // Cross-group invariants can only be checked once every section has parsed
+    json_config_enforce_invariants(config);
+
     return result;
 }
 

@@ -49,6 +49,7 @@ C_SOURCES += ../Custom/Core/core_init.c
 
 # Custom - Core/Data
 C_SOURCES += ../Custom/Core/Data/buffer_mgr.c
+C_SOURCES += ../Custom/Core/Data/gauge_reading.c
 
 # Custom - Core/Example
 C_SOURCES += ../Custom/Core/Example/core_example.c
@@ -234,6 +235,7 @@ C_SOURCES += ../Custom/Common/Utils/generic_ymodem.c
 
 # Custom - Common/Lib - Individual libraries
 C_SOURCES += ../Custom/Common/Lib/atc/atc.c
+C_SOURCES += ../Custom/Common/Lib/cbor/cbor_enc.c
 C_SOURCES += ../Custom/Common/Lib/cJSON/cJSON.c
 C_SOURCES += ../Custom/Common/Lib/littlefs/lfs.c
 C_SOURCES += ../Custom/Common/Lib/littlefs/lfs_util.c
@@ -760,6 +762,7 @@ C_INCLUDES += -I../Custom/Common/Utils
 # Custom - Libraries
 C_INCLUDES += -I../Custom/Common/Lib
 C_INCLUDES += -I../Custom/Common/Lib/atc
+C_INCLUDES += -I../Custom/Common/Lib/cbor
 C_INCLUDES += -I../Custom/Common/Lib/cJSON
 C_INCLUDES += -I../Custom/Common/Lib/littlefs
 C_INCLUDES += -I../Custom/Common/Lib/littlefs/bd

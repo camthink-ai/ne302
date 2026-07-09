@@ -1,12 +1,12 @@
 {
   "version": "1.0.0",
   "model_info": {
-    "name": "YOLOv8 Nano Pose Estimation Model (Int8)",
+    "name": "YOLO11n Nano Pose Estimation Model",
     "version": "1.0.0",
-    "description": "YOLOv8 Nano model for multi-person pose estimation with COCO keypoints (Int8 quantized)",
+    "description": "YOLO11n Nano model for multi-person pose estimation with COCO keypoints",
     "type": "POSE_ESTIMATION",
     "framework": "TFLITE",
-    "author": "CamThink"
+    "author": "Ultralytics"
   },
   "input_spec": {
     "width": 256,
@@ -28,10 +28,10 @@
         "batch": 1,
         "height": 1,
         "width": 1344,
-        "channels": 224,
-        "data_type": "int8",
-        "scale": 0.00693925,
-        "zero_point": -104
+        "channels": 56,
+        "data_type": "float32",
+        "scale": 0.003921569,
+        "zero_point": 0
       }
     ]
   },
@@ -42,7 +42,7 @@
     "ext_memory_size": 301056,
     "alignment_requirement": 32
   },
-  "postprocess_type": "pp_mpe_yolo_v8_ui",
+  "postprocess_type": "pp_mpe_yolo_v8_uf",
   "postprocess_params": {
     "num_classes": 1,
     "class_names": ["person"],
@@ -51,8 +51,8 @@
     "max_detections": 10,
     "num_keypoints": 17,
     "total_boxes": 1344,
-    "raw_output_scale": 0.00693925,
-    "raw_output_zero_point": -104,
+    "raw_output_scale": 0.003921569,
+    "raw_output_zero_point": 0,
     "kpts_conf_thresh": 0.15,
     "keypoint_names": [
       "nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -85,4 +85,3 @@
     }
   }
 }
-

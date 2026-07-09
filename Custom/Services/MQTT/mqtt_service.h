@@ -78,6 +78,13 @@ typedef struct {
     int status_report_interval_ms;       // Status report interval
     aicam_bool_t enable_heartbeat;       // Enable heartbeat
     int heartbeat_interval_ms;           // Heartbeat interval
+
+    uint8_t report_content;              // Report content mode (mqtt_report_content_t)
+
+    aicam_bool_t telemetry_enabled;      // Publish AI results continuously
+    char telemetry_topic[128];           // Telemetry topic
+    int telemetry_qos;                   // Telemetry QoS
+    int telemetry_format;                // Payload format (mqtt_telemetry_format_t)
 } mqtt_service_topic_config_t;
 
 /* ==================== MQTT Service Interface Functions ==================== */
@@ -287,6 +294,41 @@ aicam_result_t mqtt_service_get_topic_config(mqtt_service_topic_config_t *config
  */
 aicam_result_t mqtt_service_set_topic_config(const mqtt_service_topic_config_t *config);
 
+/**
+ * @brief Get the configured data report content mode
+ * @return mqtt_report_content_t Report content mode (full when unset or service not initialized)
+ */
+mqtt_report_content_t mqtt_service_get_report_content(void);
+
+/**
+ * @brief Get whether continuous AI telemetry publishing is enabled
+ * @return AICAM_TRUE only when the service is initialized and telemetry is enabled
+ */
+aicam_bool_t mqtt_service_get_telemetry_enabled(void);
+
+/**
+ * @brief Get the continuous AI telemetry payload format
+ * @return MQTT_TELEMETRY_FORMAT_CBOR only when the service is initialized and
+ *         that exact format is configured; any other stored value degrades to
+ *         MQTT_TELEMETRY_FORMAT_JSON (stock behavior)
+ */
+mqtt_telemetry_format_t mqtt_service_get_telemetry_format(void);
+
+/**
+ * @brief Publish a continuous AI telemetry message to the telemetry topic
+ * @param json_str Pre-built JSON payload
+ * @return int Message ID or error code (fails fast while disconnected)
+ */
+int mqtt_service_publish_telemetry(const char *json_str);
+
+/**
+ * @brief Publish a binary continuous AI telemetry message
+ * @param payload Encoded payload bytes (may contain 0x00)
+ * @param payload_len Payload length in bytes
+ * @return int Message ID or error code (fails fast while disconnected)
+ */
+int mqtt_service_publish_telemetry_raw(const uint8_t *payload, int payload_len);
+
 /* ==================== Event Management ==================== */
 
 /**
@@ -445,7 +487,7 @@ int mqtt_service_publish_image_with_ai(const char *topic,
  * @brief Upload image metadata and AI results only (no image data)
  * @param topic MQTT topic to publish to (NULL = use default data report topic)
  * @param metadata Image metadata
- * @param ai_result AI inference result
+ * @param ai_result AI inference result (can be NULL if no AI processing)
  * @param qos Quality of Service (0, 1, 2), -1 = use default
  * @return int Message ID or error code
  * 

@@ -9,11 +9,14 @@
 #include "debug.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "ll_aton_runtime.h"
 #include "ll_aton_reloc_network.h"
 #include "pp.h"
 #include "nn.h"
 #include "cJSON.h"
+#include "cbor_enc.h"
+#include "gauge_reading.h"
 #include "mpool.h"
 #include "camera.h"
 #include "mem_map.h"
@@ -158,6 +161,7 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
         cJSON *data_type = cJSON_GetObjectItemCaseSensitive(json, "data_type");
         if (cJSON_IsString(data_type)) {
             strncpy(info->input_data_type, data_type->valuestring, sizeof(info->input_data_type) - 1);
+            info->is_int8_input = (strcmp(data_type->valuestring, "int8") == 0);
         }
         cJSON *color_format = cJSON_GetObjectItemCaseSensitive(json, "color_format");
         if (cJSON_IsString(color_format)) {
@@ -715,12 +719,27 @@ int nn_instance_inference_frame(nn_handle_t handle, uint8_t *input_data, uint32_
     }
 
     osMutexAcquire(nn->mtx_id, osWaitForever);
-    if (nn->input_buffer_size[0] != input_size) {
+
+    /* Convert camera uint8 to model input: float32, int8, or uint8 passthrough */
+    if (nn->input_buffer_size[0] == input_size * 4) {
+        /* uint8 → float32: (pixel - 127.5) * (1/127.5) → [-1, 1] */
+        float *dst = (float *)nn->input_buffer[0];
+        for (uint32_t i = 0; i < input_size; i++) {
+            dst[i] = ((float)input_data[i] - 127.5f) * 0.00784313725f;
+        }
+    } else if (nn->input_buffer_size[0] != input_size) {
         LOG_DRV_ERROR("input_buffer_size[0] != input_size\r\r\n");
         osMutexRelease(nn->mtx_id);
         return -1;
+    } else if (nn->model.is_int8_input) {
+        int8_t *dst = (int8_t *)nn->input_buffer[0];
+        for (uint32_t i = 0; i < input_size; i++) {
+            dst[i] = (int8_t)((int)input_data[i] - 128);
+        }
+    } else {
+        memcpy(nn->input_buffer[0], input_data, input_size);
     }
-    memcpy(nn->input_buffer[0], input_data, input_size);
+
     int ret = model_run(nn, result, false);
     osMutexRelease(nn->mtx_id);
 
@@ -841,7 +860,26 @@ static cJSON* create_detection_json(const od_detect_t* detection, int index) {
     cJSON_AddNumberToObject(detection_json, "y", detection->y);
     cJSON_AddNumberToObject(detection_json, "width", detection->width);
     cJSON_AddNumberToObject(detection_json, "height", detection->height);
-    
+
+    return detection_json;
+}
+
+/**
+ * @brief Create ISEG segment detection JSON
+ */
+static cJSON* create_iseg_detection_json(const iseg_detect_t* detection, int index) {
+    cJSON* detection_json = cJSON_CreateObject();
+    if (!detection_json) return NULL;
+
+    cJSON_AddNumberToObject(detection_json, "index", index);
+    cJSON_AddStringToObject(detection_json, "class_name", detection->class_name);
+    cJSON_AddNumberToObject(detection_json, "confidence", detection->conf);
+    cJSON_AddNumberToObject(detection_json, "x", detection->x);
+    cJSON_AddNumberToObject(detection_json, "y", detection->y);
+    cJSON_AddNumberToObject(detection_json, "width", detection->width);
+    cJSON_AddNumberToObject(detection_json, "height", detection->height);
+    cJSON_AddNumberToObject(detection_json, "mask_size", detection->mask_size);
+
     return detection_json;
 }
 
@@ -851,13 +889,57 @@ static cJSON* create_detection_json(const od_detect_t* detection, int index) {
 static cJSON* create_keypoint_json(const keypoint_t* keypoint, int index) {
     cJSON* keypoint_json = cJSON_CreateObject();
     if (!keypoint_json) return NULL;
-    
+
     cJSON_AddNumberToObject(keypoint_json, "index", index);
     cJSON_AddNumberToObject(keypoint_json, "x", keypoint->x);
     cJSON_AddNumberToObject(keypoint_json, "y", keypoint->y);
     cJSON_AddNumberToObject(keypoint_json, "confidence", keypoint->conf);
-    
+
     return keypoint_json;
+}
+
+/**
+ * @brief Add keypoint connections ("connections" array + "connection_count") to a pose/detection JSON
+ */
+static void add_connections_json(cJSON* parent_json, const uint8_t* connections, uint8_t num_connections) {
+    if (!connections || num_connections == 0) return;
+
+    cJSON* connections_array = cJSON_CreateArray();
+    if (connections_array) {
+        for (uint8_t i = 0; i < num_connections; i++) {
+            cJSON* connection_json = cJSON_CreateObject();
+            if (connection_json) {
+                cJSON_AddNumberToObject(connection_json, "from", connections[i * 2]);
+                cJSON_AddNumberToObject(connection_json, "to", connections[i * 2 + 1]);
+                cJSON_AddItemToArray(connections_array, connection_json);
+            }
+        }
+        cJSON_AddItemToObject(parent_json, "connections", connections_array);
+    }
+    cJSON_AddNumberToObject(parent_json, "connection_count", num_connections);
+}
+
+/**
+ * @brief Find a keypoint by name and copy its geometry into out.
+ * @retval 1 found, out filled.
+ * @retval 0 not found (or no name table).
+ */
+static int find_keypoint_by_name(const mpe_detect_t* detection, const char* name, gauge_point_t* out)
+{
+    uint32_t i;
+
+    if ((detection == NULL) || (name == NULL) || (out == NULL) || (detection->keypoint_names == NULL)) {
+        return 0;
+    }
+    for (i = 0; i < detection->nb_keypoints; i++) {
+        if ((detection->keypoint_names[i] != NULL) && (strcmp(detection->keypoint_names[i], name) == 0)) {
+            out->x    = detection->keypoints[i].x;
+            out->y    = detection->keypoints[i].y;
+            out->conf = detection->keypoints[i].conf;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /**
@@ -891,25 +973,68 @@ static cJSON* create_mpe_detection_json(const mpe_detect_t* detection, int index
         cJSON_AddItemToObject(detection_json, "keypoints", keypoints_array);
     }
     cJSON_AddNumberToObject(detection_json, "keypoint_count", detection->nb_keypoints);
-    
-    // Add connections array if available
-    if (detection->keypoint_connections && detection->num_connections > 0) {
-        cJSON* connections_array = cJSON_CreateArray();
-        if (connections_array) {
-            for (uint8_t i = 0; i < detection->num_connections; i += 2) {
-                cJSON* connection_json = cJSON_CreateObject();
-                if (connection_json) {
-                    cJSON_AddNumberToObject(connection_json, "from", detection->keypoint_connections[i]);
-                    cJSON_AddNumberToObject(connection_json, "to", detection->keypoint_connections[i + 1]);
-                    cJSON_AddItemToArray(connections_array, connection_json);
-                }
+
+    {
+        gauge_point_t g_center;
+        gauge_point_t g_min;
+        gauge_point_t g_max;
+        gauge_point_t g_tip;
+        gauge_reading_t gr;
+
+        if (find_keypoint_by_name(detection, "center", &g_center) &&
+            find_keypoint_by_name(detection, "min", &g_min) &&
+            find_keypoint_by_name(detection, "max", &g_max) &&
+            find_keypoint_by_name(detection, "tip", &g_tip) &&
+            (gauge_reading_compute(&g_center, &g_min, &g_max, &g_tip,
+                                   0.0f, 100.0f, 0.0f, &gr) == 0)) {
+            cJSON* reading_json = cJSON_CreateObject();
+            if (reading_json != NULL) {
+                cJSON_AddNumberToObject(reading_json, "value",
+                    (double)(roundf(gr.value * 100.0f) / 100.0f));
+                cJSON_AddNumberToObject(reading_json, "ratio",
+                    (double)(roundf(gr.ratio * 10000.0f) / 10000.0f));
+                cJSON_AddStringToObject(reading_json, "direction", gr.direction);
+                cJSON_AddItemToObject(detection_json, "reading", reading_json);
             }
-            cJSON_AddItemToObject(detection_json, "connections", connections_array);
         }
-        cJSON_AddNumberToObject(detection_json, "connection_count", detection->num_connections / 2);
     }
     
+    // Add connections array if available
+    add_connections_json(detection_json, detection->keypoint_connections, detection->num_connections);
+
     return detection_json;
+}
+
+/**
+ * @brief Create SPE pose result JSON (detector-free single instance, no bounding box)
+ */
+static cJSON* create_spe_pose_json(const pp_spe_out_t* spe_result, int index) {
+    cJSON* pose_json = cJSON_CreateObject();
+    if (!pose_json) return NULL;
+
+    cJSON_AddNumberToObject(pose_json, "index", index);
+
+    // Add keypoints array
+    cJSON* keypoints_array = cJSON_CreateArray();
+    if (keypoints_array) {
+        for (uint32_t i = 0; i < spe_result->nb_keypoints; i++) {
+            cJSON* keypoint_json = create_keypoint_json(&spe_result->keypoints[i], i);
+            if (keypoint_json) {
+                // Add keypoint name if available
+                if (spe_result->keypoint_names && spe_result->keypoint_names[i]) {
+                    cJSON_AddStringToObject(keypoint_json, "name", spe_result->keypoint_names[i]);
+                }
+                cJSON_AddItemToArray(keypoints_array, keypoint_json);
+            }
+        }
+        cJSON_AddItemToObject(pose_json, "keypoints", keypoints_array);
+    }
+    cJSON_AddNumberToObject(pose_json, "keypoint_count", spe_result->nb_keypoints);
+
+    // Add connections array if available
+    add_connections_json(pose_json, spe_result->keypoint_connections, spe_result->num_connections);
+
+    return pose_json;
 }
 
 /**
@@ -952,11 +1077,49 @@ cJSON* nn_create_ai_result_json(const nn_result_t* ai_result) {
             cJSON_AddItemToObject(result_json, "poses", poses_array);
         }
         cJSON_AddNumberToObject(result_json, "pose_count", ai_result->mpe.nb_detect);
-        
+
         // Add empty detection results for consistency
         cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
         cJSON_AddNumberToObject(result_json, "detection_count", 0);
-        
+
+    } else if (ai_result->type == PP_TYPE_SPE && ai_result->spe.keypoints != NULL &&
+               ai_result->spe.nb_keypoints > 0) {
+        // Single-Pose Estimation results (detector-free, one instance, no bounding box)
+        int pose_count = 0;
+        cJSON* poses_array = cJSON_CreateArray();
+        if (poses_array) {
+            cJSON* pose_json = create_spe_pose_json(&ai_result->spe, 0);
+            if (pose_json) {
+                cJSON_AddItemToArray(poses_array, pose_json);
+                pose_count = 1;
+            }
+            cJSON_AddItemToObject(result_json, "poses", poses_array);
+        }
+        cJSON_AddNumberToObject(result_json, "pose_count", pose_count);
+
+        // Add empty detection results for consistency
+        cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
+        cJSON_AddNumberToObject(result_json, "detection_count", 0);
+
+    } else if (ai_result->type == PP_TYPE_ISEG && ai_result->iseg.nb_detect > 0) {
+        /* Instance Segmentation results */
+        cJSON* segments_array = cJSON_CreateArray();
+        if (segments_array) {
+            for (int i = 0; i < ai_result->iseg.nb_detect; i++) {
+                cJSON* seg = create_iseg_detection_json(&ai_result->iseg.detects[i], i);
+                if (seg) {
+                    cJSON_AddItemToArray(segments_array, seg);
+                }
+            }
+            cJSON_AddItemToObject(result_json, "segments", segments_array);
+        }
+        cJSON_AddNumberToObject(result_json, "segment_count", ai_result->iseg.nb_detect);
+
+        cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
+        cJSON_AddNumberToObject(result_json, "detection_count", 0);
+        cJSON_AddItemToObject(result_json, "poses", cJSON_CreateArray());
+        cJSON_AddNumberToObject(result_json, "pose_count", 0);
+
     } else {
         // No results or unsupported type
         cJSON_AddItemToObject(result_json, "detections", cJSON_CreateArray());
@@ -997,8 +1160,165 @@ cJSON* nn_create_ai_result_json(const nn_result_t* ai_result) {
             break;
     }
     cJSON_AddStringToObject(result_json, "type_name", type_name);
-    
+
     return result_json;
+}
+
+/* ==================== Compact CBOR encoding ==================== */
+
+// Longest class name carried in a compact payload; longer names truncate
+#define NN_CBOR_CLASS_NAME_MAX 63
+
+/**
+ * @brief Clamp to [0,1] before half-precision encoding
+ * @details The pp layer floor-clamps some MPE fields only (box and keypoint
+ *          x/y have no upper clamp); NaN maps to 0.
+ */
+static float nn_cbor_clamp01(float value) {
+    if (!(value > 0.0f)) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void nn_cbor_put_class(cbor_enc_t* enc, const char* class_name, const char* fallback) {
+    const char* name = class_name ? class_name : (fallback ? fallback : "");
+    size_t len = strlen(name);
+    if (len > NN_CBOR_CLASS_NAME_MAX) {
+        len = NN_CBOR_CLASS_NAME_MAX;
+        // Never cut a multi-byte UTF-8 sequence: RFC 8949 text strings must be
+        // valid UTF-8, and strict decoders reject the whole document otherwise
+        while (len > 0 && ((unsigned char)name[len] & 0xC0U) == 0x80U) {
+            len--;
+        }
+    }
+    cbor_enc_text(enc, "c");
+    cbor_enc_text_n(enc, name, len);
+}
+
+static void nn_cbor_put_conf(cbor_enc_t* enc, float conf) {
+    cbor_enc_text(enc, "conf");
+    cbor_enc_f16(enc, nn_cbor_clamp01(conf));
+}
+
+static void nn_cbor_put_box(cbor_enc_t* enc, float x, float y, float width, float height) {
+    cbor_enc_text(enc, "box");
+    cbor_enc_array(enc, 4);
+    cbor_enc_f16(enc, nn_cbor_clamp01(x));
+    cbor_enc_f16(enc, nn_cbor_clamp01(y));
+    cbor_enc_f16(enc, nn_cbor_clamp01(width));
+    cbor_enc_f16(enc, nn_cbor_clamp01(height));
+}
+
+static void nn_cbor_put_keypoints(cbor_enc_t* enc, const keypoint_t* keypoints, uint32_t count) {
+    if (!keypoints) {
+        count = 0;
+    }
+    cbor_enc_text(enc, "kp");
+    cbor_enc_array(enc, count);
+    for (uint32_t i = 0; i < count && !enc->overflow; i++) {
+        cbor_enc_array(enc, 3);
+        cbor_enc_f16(enc, nn_cbor_clamp01(keypoints[i].x));
+        cbor_enc_f16(enc, nn_cbor_clamp01(keypoints[i].y));
+        cbor_enc_f16(enc, nn_cbor_clamp01(keypoints[i].conf));
+    }
+}
+
+/**
+ * @brief Encode AI result as a compact CBOR map (see nn.h)
+ * @details Map shape mirrors the JSON serializer's dispatch: {"type": N} plus
+ *          one kind-specific key (OD "det", MPE/SPE "poses", ISEG "seg");
+ *          unknown kinds carry {"type": N} alone. Counts and pointers in the
+ *          result are trusted exactly as nn_create_ai_result_json trusts them
+ *          - the caller guarantees they match their backing allocations.
+ *          Loops stop early once the output buffer overflows.
+ */
+int nn_encode_ai_result_cbor(const nn_result_t* ai_result, uint8_t* buf, size_t cap) {
+    if (!ai_result || !buf) {
+        return -1;
+    }
+
+    cbor_enc_t enc;
+    cbor_enc_init(&enc, buf, cap);
+
+    switch (ai_result->type) {
+    case PP_TYPE_OD: {
+        uint8_t count = ai_result->od.detects ? ai_result->od.nb_detect : 0;
+        cbor_enc_map(&enc, 2);
+        cbor_enc_text(&enc, "type");
+        cbor_enc_uint(&enc, PP_TYPE_OD);
+        cbor_enc_text(&enc, "det");
+        cbor_enc_array(&enc, count);
+        for (uint8_t i = 0; i < count && !enc.overflow; i++) {
+            const od_detect_t* detect = &ai_result->od.detects[i];
+            cbor_enc_map(&enc, 3);
+            nn_cbor_put_class(&enc, detect->class_name, "");
+            nn_cbor_put_conf(&enc, detect->conf);
+            nn_cbor_put_box(&enc, detect->x, detect->y, detect->width, detect->height);
+        }
+        break;
+    }
+    case PP_TYPE_MPE: {
+        uint8_t count = ai_result->mpe.detects ? ai_result->mpe.nb_detect : 0;
+        cbor_enc_map(&enc, 2);
+        cbor_enc_text(&enc, "type");
+        cbor_enc_uint(&enc, PP_TYPE_MPE);
+        cbor_enc_text(&enc, "poses");
+        cbor_enc_array(&enc, count);
+        for (uint8_t i = 0; i < count && !enc.overflow; i++) {
+            const mpe_detect_t* detect = &ai_result->mpe.detects[i];
+            // Same inline-array bound as the JSON serializer's keypoint loop
+            uint32_t nb_kp = detect->nb_keypoints < 33 ? detect->nb_keypoints : 33;
+            cbor_enc_map(&enc, 4);
+            nn_cbor_put_class(&enc, detect->class_name, "person");
+            nn_cbor_put_conf(&enc, detect->conf);
+            nn_cbor_put_box(&enc, detect->x, detect->y, detect->width, detect->height);
+            nn_cbor_put_keypoints(&enc, detect->keypoints, nb_kp);
+        }
+        break;
+    }
+    case PP_TYPE_SPE: {
+        int have_pose = (ai_result->spe.keypoints != NULL && ai_result->spe.nb_keypoints > 0);
+        cbor_enc_map(&enc, 2);
+        cbor_enc_text(&enc, "type");
+        cbor_enc_uint(&enc, PP_TYPE_SPE);
+        cbor_enc_text(&enc, "poses");
+        cbor_enc_array(&enc, have_pose ? 1 : 0);
+        if (have_pose) {
+            cbor_enc_map(&enc, 1);
+            nn_cbor_put_keypoints(&enc, ai_result->spe.keypoints, ai_result->spe.nb_keypoints);
+        }
+        break;
+    }
+    case PP_TYPE_ISEG: {
+        uint8_t count = ai_result->iseg.detects ? ai_result->iseg.nb_detect : 0;
+        cbor_enc_map(&enc, 2);
+        cbor_enc_text(&enc, "type");
+        cbor_enc_uint(&enc, PP_TYPE_ISEG);
+        cbor_enc_text(&enc, "seg");
+        cbor_enc_array(&enc, count);
+        for (uint8_t i = 0; i < count && !enc.overflow; i++) {
+            const iseg_detect_t* detect = &ai_result->iseg.detects[i];
+            cbor_enc_map(&enc, 4);
+            nn_cbor_put_class(&enc, detect->class_name, "");
+            nn_cbor_put_conf(&enc, detect->conf);
+            nn_cbor_put_box(&enc, detect->x, detect->y, detect->width, detect->height);
+            cbor_enc_text(&enc, "msz");
+            cbor_enc_uint(&enc, detect->mask_size);
+        }
+        break;
+    }
+    default:
+        cbor_enc_map(&enc, 1);
+        cbor_enc_text(&enc, "type");
+        cbor_enc_uint(&enc, (uint64_t)ai_result->type);
+        break;
+    }
+
+    size_t total = 0;
+    if (cbor_enc_finish(&enc, &total) != 0) {
+        return -1;
+    }
+    return (int)total;
 }
 
 /* ==================== command processing function ==================== */

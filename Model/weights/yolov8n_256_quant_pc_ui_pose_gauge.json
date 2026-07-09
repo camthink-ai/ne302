@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
   "model_info": {
-    "name": "YOLOv8 Nano Pose Estimation Model (Int8)",
-    "version": "1.0.0",
-    "description": "YOLOv8 Nano model for multi-person pose estimation with COCO keypoints (Int8 quantized)",
+    "name": "YOLOv8 Nano Pose Estimation - Analog Gauge (Kpts Decode Norm, Int8 Output)",
+    "version": "4.0.0",
+    "description": "YOLOv8n Pose 4-keypoint gauge model. ST commit 68669b2 kpts_decode normalization applied: bbox + keypoint coords normalized to 0~1 at export, eliminating per-tensor int8 quantization collapse caused by scale mixing with sigmoid confidences.",
     "type": "POSE_ESTIMATION",
     "framework": "TFLITE",
     "author": "CamThink"
@@ -28,10 +28,10 @@
         "batch": 1,
         "height": 1,
         "width": 1344,
-        "channels": 224,
+        "channels": 17,
         "data_type": "int8",
-        "scale": 0.00693925,
-        "zero_point": -104
+        "scale": 0.00613071,
+        "zero_point": -116
       }
     ]
   },
@@ -45,26 +45,25 @@
   "postprocess_type": "pp_mpe_yolo_v8_ui",
   "postprocess_params": {
     "num_classes": 1,
-    "class_names": ["person"],
+    "class_names": ["gauge"],
     "confidence_threshold": 0.25,
     "iou_threshold": 0.5,
     "max_detections": 10,
-    "num_keypoints": 17,
+    "num_keypoints": 4,
     "total_boxes": 1344,
-    "raw_output_scale": 0.00693925,
-    "raw_output_zero_point": -104,
+    "raw_output_scale": 0.00613071,
+    "raw_output_zero_point": -116,
     "kpts_conf_thresh": 0.15,
     "keypoint_names": [
-      "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-      "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-      "left_wrist", "right_wrist", "left_hip", "right_hip",
-      "left_knee", "right_knee", "left_ankle", "right_ankle"
+      "center",
+      "max",
+      "min",
+      "tip"
     ],
     "keypoint_connections": [
-      [0, 1], [0, 2], [1, 3], [2, 4], [1, 2], [3, 5], [4, 6],
-      [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
-      [5, 11], [6, 12], [11, 12],
-      [11, 13], [13, 15], [12, 14], [14, 16]
+      [0, 1],
+      [0, 2],
+      [0, 3]
     ]
   },
   "runtime": {
@@ -85,4 +84,3 @@
     }
   }
 }
-
