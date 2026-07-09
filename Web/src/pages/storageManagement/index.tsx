@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import storageManagement from '@/services/api/storageManagement';
 import fileManagement, { type FileEntry, type FsType } from '@/services/api/fileManagement';
+import FormatFlashDialog from '@/components/format-flash-dialog';
 import StorageManagementSkeleton from './skeleton';
 
 /* ── helpers ── */
@@ -68,6 +69,8 @@ type StorageInfo = {
   total_capacity_gb: number; used_capacity_gb: number; available_capacity_gb: number;
   usage_percent: number;
   flash_fs_mounted: boolean;
+  flash_fs_error: boolean;            // Flash FS error — needs format
+  flash_error: string;                // "not_mounted" | "corrupt" | ""
   flash_total_capacity_mb: number; flash_used_capacity_mb: number; flash_available_capacity_mb: number;
   flash_total_capacity_gb: number; flash_used_capacity_gb: number; flash_available_capacity_gb: number;
   flash_usage_percent: number; flash_fs_type: string;
@@ -871,6 +874,8 @@ export default function StorageManagement() {
 
   // file browser modal
   const [browserFs, setBrowserFs] = useState<FsType | null>(null);
+  // format-flash dialog
+  const [formatOpen, setFormatOpen] = useState(false);
 
   const initData = async () => {
     try {
@@ -937,8 +942,37 @@ export default function StorageManagement() {
         <CardContent>
           {isLoading ? <StorageManagementSkeleton /> : (
             <div className="space-y-3">
-              {/* Internal Flash */}
-              {storageInfo?.flash_fs_mounted && renderStorageCard(
+              {/* Internal Flash — error state takes precedence over capacity view */}
+              {storageInfo?.flash_fs_error ? (
+                <div className="border bg-red-50 rounded-md p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-4">
+                    <Label className="text-sm">{i18n._('sys.storage_management.internal_flash')}</Label>
+                    <div className="flex items-center text-sm text-red-600">
+                      <div className="rounded-full w-2 h-2 mr-2 bg-red-600" />
+                      <span>{i18n._('sys.storage_management.fs_error')}</span>
+                    </div>
+                  </div>
+                  <Separator />
+                  <p className="text-xs text-red-600">
+                    {i18n._('sys.storage_management.fs_error_msg')}
+                  </p>
+                  {/* When the FS is mounted (corrupt-but-readable: capacity/write
+                      failed but reads still work), keep the browse/download
+                      entry so the user can recover existing files before
+                      formatting. Only when truly not mounted is browsing
+                      unavailable. */}
+                  <div className="flex justify-end gap-2">
+                    {storageInfo?.flash_fs_mounted && (
+                      <Button size="sm" variant="outline" onClick={() => setBrowserFs('flash')}>
+                        📂 {i18n._('sys.file_browsing.title')}
+                      </Button>
+                    )}
+                    <Button size="sm" variant="destructive" onClick={() => setFormatOpen(true)}>
+                      🗑 {i18n._('sys.storage_management.format')}
+                    </Button>
+                  </div>
+                </div>
+              ) : storageInfo?.flash_fs_mounted && renderStorageCard(
                 i18n._('sys.storage_management.internal_flash'),
                 storageInfo.flash_usage_percent > 95
                   ? i18n._('sys.storage_management.full')
@@ -1004,6 +1038,14 @@ export default function StorageManagement() {
             ? (storageInfo?.flash_available_capacity_mb ?? 0)
             : (storageInfo?.available_capacity_mb ?? 0)}
           onStorageChange={refreshStorage}
+        />
+      )}
+
+      {/* Format Flash Dialog (two-step confirmation) */}
+      {formatOpen && (
+        <FormatFlashDialog
+          onClose={() => setFormatOpen(false)}
+          onConfirmed={() => { setFormatOpen(false); refreshStorage(); }}
         />
       )}
     </div>

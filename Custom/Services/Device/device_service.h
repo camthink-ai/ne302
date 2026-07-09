@@ -35,6 +35,8 @@ typedef struct {
 
     // Internal Flash (LittleFS) storage
     aicam_bool_t flash_fs_mounted;           // Internal flash filesystem mounted
+    aicam_bool_t flash_fs_error;             // Flash FS error (corrupt/unusable) — needs format
+    char flash_error[24];                    // Error detail ("not_mounted"/"corrupt"/"")
     uint64_t flash_total_capacity_mb;        // Flash total capacity (MB)
     uint64_t flash_available_capacity_mb;    // Flash available capacity (MB)
     uint64_t flash_used_capacity_mb;         // Flash used capacity (MB)

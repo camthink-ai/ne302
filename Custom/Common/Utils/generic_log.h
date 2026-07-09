@@ -25,6 +25,13 @@ typedef int   (*log_stat_func_t)(const char *filename, struct stat *st);
 typedef int   (*log_get_free_bytes_func_t)(uint64_t *out_free_bytes);  /* 0 = ok, -1 = FS not ready */
 typedef void (*log_custom_output_func_t)(const char *msg, int len);
 
+/* Async file-output enqueue callback. When async file mode is enabled via
+ * log_set_async_file(), the OUTPUT_FILE branch of log_message() no longer
+ * writes to disk inline; instead it hands each formatted, ANSI-stripped line
+ * to this callback (expected non-blocking). A background task later drains
+ * the queue and calls log_file_flush_line() to perform the actual write. */
+typedef void (*log_enqueue_cb_t)(const char *line, int len);
+
 typedef enum {
     LOG_DEBUG,
     LOG_INFO,
@@ -94,6 +101,12 @@ typedef struct {
     log_get_time_func_t get_time_func;
     log_custom_output_node_t *custom_outputs;
     bool thread_safe;
+    /* When async_file is true, OUTPUT_FILE dispatch enqueues via enqueue_cb
+     * instead of writing synchronously. The actual write (rotate+fopen+fwrite+
+     * fclose + circuit breaker) is performed by log_file_flush_line(), which
+     * the drain task calls. Keeps callers from blocking on LittleFS I/O. */
+    bool async_file;
+    log_enqueue_cb_t enqueue_cb;
 } log_manager_t;
 
 int log_register_module(const char *name, LogLevel level, LogLevel file_level);
@@ -103,4 +116,14 @@ int log_add_output(OutputType type, const char *filename, size_t max_size, int m
 int log_set_output_enabled(OutputType type, bool enabled);
 void log_message(LogLevel level, const char *module_name, const char *format, ...);
 int log_init(log_manager_t *mgr, log_lock_func_t lock, log_unlock_func_t unlock, log_file_ops_t *file_ops, log_get_time_func_t get_time_func);
+
+/* Enable/disable async file output. When enabled, log_message() forwards each
+ * file-destined line to cb (non-blocking) instead of writing inline. The
+ * caller-owned drain task must invoke log_file_flush_line() to persist. */
+void log_set_async_file(bool enable, log_enqueue_cb_t cb);
+
+/* Persist one already-formatted, ANSI-stripped line to the file output,
+ * performing rotation + circuit-breaker handling. Intended to be called by the
+ * async drain task (NOT the log_message() caller). Takes log_mutex internally. */
+void log_file_flush_line(const char *line, int len);
 #endif

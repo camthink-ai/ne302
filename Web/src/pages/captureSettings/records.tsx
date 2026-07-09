@@ -42,6 +42,25 @@ function dateDir(ts: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Derive the UTC hour dir "HH" (2-digit) — must match the backend's
+ * hour_dir_from_id() which uses gmtime() + "%H". The on-disk layout is
+ * /captures/data/<YYYY-MM-DD>/<HH>/<id>_p.jpg, so omitting the hour (as the old
+ * code did) makes preview/download miss the file. */
+function hourDir(ts: number): string {
+  if (!ts) return '00';
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return '00';
+  return d.toISOString().slice(11, 13);
+}
+
+/** Parse the unix timestamp out of a record id "cap_<ts>_<seq>". The backend's
+ * on-disk date/hour dirs are derived from THIS ts (via ts_from_id), so deriving
+ * the path from the id (not r.timestamp, which can be 0) always matches. */
+function tsFromId(id: string): number {
+  const m = id.match(/^cap_(\d+)_\d+$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 const TABS: { key: RecordState; labelKey: string }[] = [
   { key: 'pending', labelKey: 'sys.capture_settings.state_pending' },
   { key: 'sent',    labelKey: 'sys.capture_settings.state_sent' },
@@ -109,7 +128,8 @@ to: appliedTo,
     setPreviewLoading(true);
     setPreviewUrl(null);
     try {
-      const path = `/captures/data/${dateDir(r.timestamp)}/${r.id}_${type}.jpg`;
+      const ts = tsFromId(r.id) || r.timestamp;
+      const path = `/captures/data/${dateDir(ts)}/${hourDir(ts)}/${r.id}_${type}.jpg`;
       const res: any = await fileManagement.preview(fsType, path, true);
       const blob = res instanceof Blob ? res : res?.data;
       if (blob instanceof Blob) {

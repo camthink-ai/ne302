@@ -541,7 +541,16 @@
       "warning": "即将满",
       "full": "已满",
       "not_detected": "未检测到存储卡",
-      "no_storage": "无可用存储介质"
+      "no_storage": "无可用存储介质",
+      "fs_error": "文件系统异常",
+      "fs_error_msg": "内部 Flash 文件系统异常或损坏，无法读取容量。可尝试格式化以修复（将清除内部 Flash 上所有数据，包括日志与抓拍）。",
+      "format_confirm_title": "格式化内部 Flash",
+      "format_confirm_step1": "此操作将清除内部 Flash 文件系统上的所有数据（日志、抓拍记录等），且不可恢复。设备配置（NVS）不受影响。是否继续？",
+      "format_next": "下一步",
+      "format_confirm_step2": "最终确认：点击下方按钮将立即开始格式化。所有内部 Flash 数据将被永久删除！",
+      "format_confirm_btn": "确认格式化",
+      "format_success": "格式化成功",
+      "format_failed": "格式化失败"
     },
     "file_browsing": {
       "title": "文件管理",
@@ -664,7 +673,8 @@
       "retry_all_ok": "已重置以下记录",
       "no_records": "暂无记录",
       "section_capture_params": "相机参数",
-      "saved_reboot_hint": "配置已保存，需重启设备或下次唤醒后生效",
+      "saved_reboot_hint": "配置已保存，相机参数需重启设备或下次唤醒后生效",
+      "saved_immediate_hint": "配置已保存，已立即生效",
       "save_failed": "保存失败",
       "state_pending": "待上传",
       "state_sent": "已上传",

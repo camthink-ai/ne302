@@ -43,7 +43,7 @@ bool driver_core_init(void)
     uint32_t wakeup_flag = 0;
 #endif
 
-    printf("driver_core_init \r\n");
+    // printf("driver_core_init \r\n");
     hal_mem_register();
     storage_register();
 #if ENABLE_U0_MODULE

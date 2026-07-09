@@ -8,6 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import fileManagement, { type FileEntry, type FsType } from '@/services/api/fileManagement';
 import storageManagement from '@/services/api/storageManagement';
+import FormatFlashDialog from '@/components/format-flash-dialog';
 
 /* ── helpers ── */
 function formatSize(bytes: number): string {
@@ -61,6 +62,8 @@ export default function BrowseFiles() {
   const [loading, setLoading] = useState(false);
   const [sdAvailable, setSdAvailable] = useState(false);
   const [flashMounted, setFlashMounted] = useState(false);
+  const [flashFsError, setFlashFsError] = useState(false);
+  const [formatOpen, setFormatOpen] = useState(false);
 
   /* preview / edit */
   const [previewFile, setPreviewFile] = useState<string | null>(null);
@@ -87,6 +90,7 @@ export default function BrowseFiles() {
       const d = (res && 'data' in res) ? (res as any).data : res;
       setSdAvailable(!!d?.sd_card_connected);
       setFlashMounted(!!d?.flash_fs_mounted);
+      setFlashFsError(!!d?.flash_fs_error);
       // auto-select available FS
       if (!d?.flash_fs_mounted && d?.sd_card_connected) setFsType('sd');
       else if (d?.flash_fs_mounted && !d?.sd_card_connected) setFsType('flash');
@@ -348,6 +352,22 @@ export default function BrowseFiles() {
 
           <Separator className="mb-2" />
 
+          {/* ── Flash FS error banner ── */}
+          {flashFsError && (
+            <div className="mb-2 border bg-red-50 rounded-md p-3 flex items-center justify-between gap-3">
+              <div className="text-xs text-red-600">
+                {i18n._('sys.storage_management.fs_error_msg')}
+              </div>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => setFormatOpen(true)}
+              >
+                🗑 {i18n._('sys.storage_management.format')}
+              </Button>
+            </div>
+          )}
+
           {/* ── File list table ── */}
           {loading ? (
             <div className="text-center py-8 text-gray-400">{actionLabel('loading')}...</div>
@@ -544,6 +564,14 @@ export default function BrowseFiles() {
           )}
         </CardContent>
       </Card>
+
+      {/* Format Flash Dialog (two-step confirmation) */}
+      {formatOpen && (
+        <FormatFlashDialog
+          onClose={() => setFormatOpen(false)}
+          onConfirmed={() => { setFormatOpen(false); checkAvailability(); }}
+        />
+      )}
     </div>
   );
 }

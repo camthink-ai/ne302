@@ -543,7 +543,16 @@
       "warning": "Nearly Full",
       "full": "Full",
       "not_detected": "Not Detected",
-      "no_storage": "No Storage Available"
+      "no_storage": "No Storage Available",
+      "fs_error": "FS Error",
+      "fs_error_msg": "The internal Flash filesystem is abnormal or corrupt and its capacity can't be read. You can try formatting to repair it — this erases ALL data on internal Flash (logs, captures).",
+      "format_confirm_title": "Format Internal Flash",
+      "format_confirm_step1": "This will erase ALL data on the internal Flash filesystem (logs, capture records, etc.). This cannot be undone. Device config (NVS) is unaffected. Continue?",
+      "format_next": "Next",
+      "format_confirm_step2": "Final confirmation: clicking the button below starts formatting immediately. ALL internal Flash data will be permanently deleted!",
+      "format_confirm_btn": "Confirm Format",
+      "format_success": "Format successful",
+      "format_failed": "Format failed"
     },
     "file_browsing": {
       "title": "File Manager",
@@ -666,7 +675,8 @@
       "retry_all_ok": "Reset records",
       "no_records": "No records",
       "section_capture_params": "Camera Parameters",
-      "saved_reboot_hint": "Configuration saved. Takes effect after reboot or next wake-up",
+      "saved_reboot_hint": "Configuration saved. Camera parameters take effect after reboot or next wake-up",
+      "saved_immediate_hint": "Configuration saved. Takes effect immediately",
       "save_failed": "Save failed",
       "state_pending": "Pending",
       "state_sent": "Sent",

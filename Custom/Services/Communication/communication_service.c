@@ -219,7 +219,7 @@ static aicam_bool_t comm_prefers_cellular_over_halow_init(void)
         return AICAM_FALSE;
     }
 
-    /* RTC/PIR/button wakeup: no explicit preferred in NVS — follow last active comm type. */
+    /* RTC/PIR/button wakeup: no explicit preferred in NVS - follow last active comm type. */
     if (system_service_requires_time_optimized_mode(system_service_get_wakeup_source_type())) {
         device_info_config_t dev;
         if (json_config_get_device_info_config(&dev) == AICAM_OK &&
@@ -1154,7 +1154,7 @@ static void comm_check_required_netif_failed(communication_type_t type, aicam_re
     if (g_communication_service.required_type != COMM_TYPE_NONE &&
         g_communication_service.required_type == type &&
         result != AICAM_OK) {
-        LOG_SVC_WARN("Required netif %s failed (result=%d) — signalling all-failed",
+        LOG_SVC_WARN("Required netif %s failed (result=%d) - signalling all-failed",
                      communication_type_to_string(type), result);
         (void)service_set_netif_all_failed(AICAM_TRUE);
     }
@@ -1247,7 +1247,7 @@ aicam_result_t communication_service_start(void)
             if (req != COMM_TYPE_POE)      g_communication_service.poe_ready = AICAM_TRUE;
             /* fall through to normal start (timer + init + decision) */
         } else {
-            LOG_SVC_WARN("Required comm type %d has no netif name — signalling all-failed",
+            LOG_SVC_WARN("Required comm type %d has no netif name - signalling all-failed",
                          (int)req);
             (void)service_set_netif_all_failed(AICAM_TRUE);
         }
@@ -1298,7 +1298,7 @@ aicam_result_t communication_service_start(void)
 #if NETIF_WIFI_HALOW_IS_ENABLE
     aicam_bool_t cellular_first = comm_prefers_cellular_over_halow_init();
 #else
-    /* HaLow not compiled in — Cellular has no competitor, auto-start if configured */
+    /* HaLow not compiled in - Cellular has no competitor, auto-start if configured */
     aicam_bool_t cellular_first = AICAM_TRUE;
 #endif
 #endif
@@ -2192,17 +2192,25 @@ static void make_startup_connection_decision(void)
 
     }
 
-    /* Wake-capture fast-fail: on the single-required-netif path, if no type was
-     * selected (all unavailable) or the connect attempt failed, signal
-     * all-failed so the upload-coordinator's network wait aborts immediately
-     * instead of timing out. On normal full boots (required_type == NONE) we
-     * do NOT raise this — the user may configure the network manually. */
-    if (g_communication_service.required_type != COMM_TYPE_NONE) {
+    /* Fast-fail: if no type was selected (all unavailable) or the connect
+     * attempt failed, signal all-failed so the upload-coordinator's network
+     * wait aborts immediately instead of timing out 30s for MQTT that can
+     * never connect.
+     *   - On the single-required-netif wake path (required_type != NONE), always.
+     *   - On ANY low-power wake (time-optimized mode), also - the device means
+     *     to sleep soon, so a netif failure should abort fast (covers the
+     *     "default" upload-network case where required_type stayed NONE but
+     *     the wake still wants fast sleep).
+     *   - On normal full boots, do NOT raise - the user may configure the
+     *     network manually (device isn't sleeping). */
+    aicam_bool_t low_power_wake = system_service_requires_time_optimized_mode(
+        system_service_get_wakeup_source_type());
+    if (g_communication_service.required_type != COMM_TYPE_NONE || low_power_wake) {
         if (target_type == COMM_TYPE_NONE) {
-            LOG_SVC_WARN("Wake fast path: no netif available — signalling all-failed");
+            LOG_SVC_WARN("Wake fast path: no netif available - signalling all-failed");
             (void)service_set_netif_all_failed(AICAM_TRUE);
         } else if (connect_result != AICAM_OK) {
-            LOG_SVC_WARN("Wake fast path: %s connect failed — signalling all-failed",
+            LOG_SVC_WARN("Wake fast path: %s connect failed - signalling all-failed",
                          communication_type_to_string(target_type));
             (void)service_set_netif_all_failed(AICAM_TRUE);
         }
@@ -2335,7 +2343,7 @@ static void update_type_info_cache(void)
     }
 
 #if NETIF_WIFI_HALOW_IS_ENABLE
-    // HaLow type — mark unavailable when init failed / module absent
+    // HaLow type - mark unavailable when init failed / module absent
     g_communication_service.type_info[COMM_TYPE_HALOW].type = COMM_TYPE_HALOW;
     g_communication_service.type_info[COMM_TYPE_HALOW].priority = 3;
     g_communication_service.type_info[COMM_TYPE_HALOW].available = g_communication_service.halow_available;
@@ -2369,7 +2377,7 @@ static void update_type_info_cache(void)
 #endif
     
 #if NETIF_4G_CAT1_IS_ENABLE
-    // Cellular type — dynamically recheck hardware availability
+    // Cellular type - dynamically recheck hardware availability
     if (g_communication_service.cellular_available && g_communication_service.startup_decision_made) {
         netif_state_t cell_hw_state = nm_get_netif_state(NETIF_NAME_4G_CAT1);
         if (cell_hw_state == NETIF_STATE_DEINIT) {
@@ -2412,7 +2420,7 @@ static void update_type_info_cache(void)
 #endif
 
 #if NETIF_ETH_WAN_IS_ENABLE
-    // PoE type — only mark unavailable when hardware is truly gone (DEINIT)
+    // PoE type - only mark unavailable when hardware is truly gone (DEINIT)
     if (g_communication_service.poe_available && g_communication_service.startup_decision_made) {
         netif_state_t poe_hw_state = nm_get_netif_state(NETIF_NAME_ETH_WAN);
         if (poe_hw_state == NETIF_STATE_DEINIT) {
@@ -2522,7 +2530,7 @@ static void check_and_handle_hardware_change(void)
         return;
     }
 
-    // Case 2: Hardware present but connection lost — auto-switch to a connected type
+    // Case 2: Hardware present but connection lost - auto-switch to a connected type
     //         Keep preferred_type and available so user can manually switch back
     if (sel_status != COMM_STATUS_CONNECTED && sel_status != COMM_STATUS_CONNECTING) {
         communication_type_t connected = g_communication_service.active_type;
@@ -2781,7 +2789,7 @@ static void on_halow_ready(const char *if_name, aicam_result_t result)
         }
 
 #if NETIF_4G_CAT1_IS_ENABLE
-        /* HaLow succeeded — skip cellular init */
+        /* HaLow succeeded - skip cellular init */
         g_communication_service.cellular_ready = AICAM_TRUE;
 #endif
 

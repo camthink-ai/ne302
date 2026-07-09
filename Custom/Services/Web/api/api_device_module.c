@@ -24,6 +24,7 @@
 #include "ota_service.h"
 #include "ota_header.h"
 #include "storage.h"
+#include "upload_coordinator.h"
 #include "version.h"
 #include "fsbl_app_common.h"
 
@@ -233,6 +234,8 @@ aicam_result_t device_storage_handler(http_handler_context_t *ctx) {
 
     // ── Internal Flash (LittleFS) storage ──
     cJSON_AddBoolToObject(response_json, "flash_fs_mounted", storage_info.flash_fs_mounted);
+    cJSON_AddBoolToObject(response_json, "flash_fs_error", storage_info.flash_fs_error);
+    cJSON_AddStringToObject(response_json, "flash_error", storage_info.flash_error);
     cJSON_AddNumberToObject(response_json, "flash_total_capacity_mb", storage_info.flash_total_capacity_mb);
     cJSON_AddNumberToObject(response_json, "flash_available_capacity_mb", storage_info.flash_available_capacity_mb);
     cJSON_AddNumberToObject(response_json, "flash_used_capacity_mb", storage_info.flash_used_capacity_mb);
@@ -1247,7 +1250,7 @@ aicam_result_t system_time_handler(http_handler_context_t *ctx) {
     // Set system time using RTC
     rtc_setup_by_timestamp(timestamp, timezone_offset_hours);
 
-    /* RTC stepped — invalidate wake_scheduler's last-handled-at state so
+    /* RTC stepped - invalidate wake_scheduler's last-handled-at state so
      * we don't accidentally suppress freshly-due events on the new clock. */
     wake_scheduler_reset_state();
 
@@ -2130,6 +2133,38 @@ static aicam_result_t firmware_versions_handler(http_handler_context_t *ctx)
     return api_response_success(ctx, json_str, "Firmware versions retrieved successfully");
 }
 
+/**
+ * @brief POST /api/v1/device/storage/format - Format internal flash LittleFS.
+ * @details Destructive: erases ALL files on the internal flash LittleFS volume
+ *          (logs, captures, uploaded assets). NVS (device config) lives in a
+ *          separate partition and is unaffected. Requires auth (route-level).
+ *          After formatting, the captures tree is rebuilt and the record-count
+ *          cache invalidated. The caller is expected to re-fetch storage info.
+ */
+aicam_result_t device_storage_format_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+    if (!web_api_verify_method(ctx, "POST")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only POST method is allowed");
+    }
+    if (!is_device_service_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Device service is not running");
+    }
+
+    LOG_SVC_WARN("device: formatting internal flash LittleFS (all flash data erased)");
+    storage_format();
+    /* Rebuild the captures directory tree and invalidate the (now-empty)
+     * record-count cache. */
+    upload_coordinator_reload_config();
+
+    cJSON *resp = cJSON_CreateObject();
+    if (!resp) return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    cJSON_AddBoolToObject(resp, "success", 1);
+    char *json = cJSON_Print(resp);
+    cJSON_Delete(resp);
+    if (!json) return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Serialize failed");
+    return api_response_success(ctx, json, "Flash formatted");
+}
+
 /* ==================== Route Registration ==================== */
 
 /**
@@ -2161,6 +2196,13 @@ static const api_route_t device_module_routes[] = {
         .method = "POST",
         .path = API_PATH_PREFIX "/device/storage/config",
         .handler = device_storage_config_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "POST",
+        .path = API_PATH_PREFIX "/device/storage/format",
+        .handler = device_storage_format_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

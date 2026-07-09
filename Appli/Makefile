@@ -195,6 +195,7 @@ C_SOURCES += ../Custom/Services/System/system_service.c
 # Custom - Services/Web
 C_SOURCES += ../Custom/Services/Web/web_api.c
 C_SOURCES += ../Custom/Services/Web/web_assets.c
+C_SOURCES += ../Custom/Services/Web/web_recovery.c
 C_SOURCES += ../Custom/Services/Web/web_server.c
 C_SOURCES += ../Custom/Services/Web/web_service.c
 C_SOURCES += ../Custom/Services/Web/websocket_stream_server.c

@@ -47,8 +47,11 @@ static int rotate_file(const char *filename, int max_files)
 
     if (max_files <= 0) return 0;
 
-    char old_path[256];
-    char new_path[256];
+    static char old_path[256];
+    static char new_path[256];
+
+    memset(old_path, 0, sizeof(old_path));
+    memset(new_path, 0, sizeof(new_path));
 
     /* Drop the oldest slot if present (may not exist yet — benign). */
     snprintf(old_path, sizeof(old_path), "%s.%d", filename, max_files);
@@ -65,6 +68,68 @@ static int rotate_file(const char *filename, int max_files)
      * max_size), so this rename must succeed — failure means the FS is broken. */
     snprintf(new_path, sizeof(new_path), "%s.1", filename);
     return (ops->rename(filename, new_path) == 0) ? 0 : -1;
+}
+
+/* Persist one already-formatted, ANSI-stripped line to every enabled OUTPUT_FILE
+ * output, performing size-check rotation + circuit-breaker handling.
+ *
+ * Concurrency: does NOT take log_mutex. In async mode the only caller is the
+ * drain task (log_message enqueues instead of writing); in sync mode the only
+ * caller is log_message itself (which already holds log_mutex). Either way the
+ * file-output config and rotate_file's static path buffers are single-writer.
+ * The slow LittleFS I/O thus runs WITHOUT log_mutex held, so log_message
+ * callers never block on a file write — the whole point of the async path.
+ * The file_ops themselves take storage_lock internally. */
+void log_file_flush_line(const char *line, int len)
+{
+    if (!log_manager || !log_manager->file_ops || !line || len <= 0) return;
+    log_file_ops_t *ops = log_manager->file_ops;
+
+    for (size_t i = 0; i < log_manager->output_count; i++) {
+        log_output_t *output = &log_manager->outputs[i];
+        if (output->type != OUTPUT_FILE) continue;
+        if (!output->enabled) continue;
+        if (output->config.file.disabled) continue;
+        const char *filename = output->config.file.filename;
+
+        size_t current_size = 0;
+        struct stat st;
+        if (ops->fstat && ops->fstat(filename, &st) == 0) {
+            current_size = st.st_size;
+        }
+        size_t new_size = current_size + (size_t)len;
+        if (output->config.file.max_size > 0 && new_size > output->config.file.max_size) {
+            if (rotate_file(filename, output->config.file.max_files) != 0) {
+                output->config.file.disabled = true;
+                fprintf(stderr, "[LOG] file logging disabled: rotation failed\r\n");
+                continue;
+            }
+        }
+        void *file = ops->fopen(filename, "a");
+        if (!file) {
+            output->config.file.disabled = true;
+            fprintf(stderr, "[LOG] file logging disabled: open failed\r\n");
+            continue;
+        }
+        size_t written = ops->fwrite(file, line, (size_t)len);
+        if (written != (size_t)len) {
+            ops->fclose(file);
+            output->config.file.disabled = true;
+            fprintf(stderr, "[LOG] file logging disabled: write failed\r\n");
+            continue;
+        }
+        ops->fflush(file);
+        ops->fclose(file);
+    }
+}
+
+void log_set_async_file(bool enable, log_enqueue_cb_t cb)
+{
+    if (!log_manager) return;
+    LOCK(log_manager);
+    log_manager->async_file = enable;
+    log_manager->enqueue_cb = enable ? cb : NULL;
+    UNLOCK(log_manager);
 }
 
 int log_register_module(const char *name, LogLevel level, LogLevel file_level)
@@ -233,12 +298,15 @@ void log_message(LogLevel level, const char *module_name, const char *format, ..
 
     LOCK(log_manager);
 
-    char log_buffer[LOG_MAX_LINE];
-    char msg_buffer[LOG_MAX_LINE];
+    static char log_buffer[LOG_MAX_LINE];
+    static char msg_buffer[LOG_MAX_LINE];
     LogLevel module_level = LOG_INFO;
     LogLevel file_level = LOG_INFO;
     char timestamp[20] = {0};
     int found = 0;
+
+    memset(log_buffer, 0, sizeof(log_buffer));
+    memset(msg_buffer, 0, sizeof(msg_buffer));
     for (size_t i = 0; i < log_manager->module_count; i++) {
         if (strcmp(log_manager->modules[i].name, module_name) == 0) {
             module_level = log_manager->modules[i].level;
@@ -265,7 +333,11 @@ void log_message(LogLevel level, const char *module_name, const char *format, ..
     int msg_len = vsnprintf(msg_buffer, LOG_MAX_LINE, format, args);
     va_end(args);
     if (msg_len < 0) msg_len = 0;
-    if (msg_len >= LOG_MAX_LINE - 2) msg_len = LOG_MAX_LINE - 2;
+    // Reserve 3 bytes for the trailing "\r\n\0" so the writes below can never
+    // run past msg_buffer. With LOG_MAX_LINE-2 this wrote msg_buffer[256] (1 byte
+    // out of bounds) on long lines, corrupting the adjacent g_ops.flash_read
+    // pointer in fsbl_app_common.o and crashing the sys-clk config read.
+    if (msg_len >= LOG_MAX_LINE - 3) msg_len = LOG_MAX_LINE - 3;
     msg_buffer[msg_len] = '\r';
     msg_buffer[msg_len + 1] = '\n';
     msg_buffer[msg_len + 2] = '\0';
@@ -300,47 +372,26 @@ void log_message(LogLevel level, const char *module_name, const char *format, ..
                 if (level < file_level || level == LOG_SIMPLE) break;
                 /* Circuit breaker: once a prior write/open/rename failed (or
                  * registration found free space too low), skip all file output
-                 * for the rest of this run — stops the "Failed to write log
-                 * file" retry storm on a full or broken FS. Free space is
-                 * checked once at registration (log_add_output), not here, so
-                 * the per-line cost is just this single bool. Not re-enabled
-                 * by log_set_output_enabled. */
+                 * for the rest of this run. See log_file_flush_line() for the
+                 * write/rotate/breaker logic. */
                 if (output->config.file.disabled) break;
-                log_file_ops_t *ops = log_manager->file_ops;
-                const char *filename = output->config.file.filename;
 
+                /* Strip ANSI once here so the drain task receives clean text
+                 * and doesn't re-strip. */
                 char clean_buffer[LOG_MAX_LINE];
                 int clean_len = strip_ansi_sequences(log_buffer, clean_buffer, sizeof(clean_buffer));
                 if (clean_len < 0) clean_len = 0;
+                if (clean_len == 0) break;
 
-                size_t current_size = 0;
-                struct stat st;
-                if (ops->fstat && ops->fstat(filename, &st) == 0) {
-                    current_size = st.st_size;
+                if (log_manager->async_file && log_manager->enqueue_cb) {
+                    /* Async: hand the line to the drain task (non-blocking).
+                     * The caller never blocks on LittleFS file I/O. */
+                    log_manager->enqueue_cb(clean_buffer, clean_len);
+                } else {
+                    /* Sync fallback (pre-async behavior): write inline. We
+                     * already hold log_mutex; flush_line takes none. */
+                    log_file_flush_line(clean_buffer, clean_len);
                 }
-                size_t new_size = current_size + (size_t)clean_len;
-                if (output->config.file.max_size > 0 && new_size > output->config.file.max_size) {
-                    if (rotate_file(filename, output->config.file.max_files) != 0) {
-                        output->config.file.disabled = true;
-                        fprintf(stderr, "[LOG] file logging disabled: rotation failed\r\n");
-                        break;
-                    }
-                }
-                void *file = ops->fopen(filename, "a");
-                if (!file) {
-                    output->config.file.disabled = true;
-                    fprintf(stderr, "[LOG] file logging disabled: open failed\r\n");
-                    break;
-                }
-                size_t written = ops->fwrite(file, clean_buffer, (size_t)clean_len);
-                if (written != (size_t)clean_len) {
-                    ops->fclose(file);
-                    output->config.file.disabled = true;
-                    fprintf(stderr, "[LOG] file logging disabled: write failed\r\n");
-                    break;
-                }
-                ops->fflush(file);
-                ops->fclose(file);
                 break;
             }
             case OUTPUT_CUSTOM:
@@ -398,6 +449,8 @@ int log_init(log_manager_t *mgr, log_lock_func_t lock, log_unlock_func_t unlock,
     log_manager->output_count = 0;
     log_manager->file_ops = file_ops;
     log_manager->get_time_func = get_time_func;
+    log_manager->async_file = false;
+    log_manager->enqueue_cb = NULL;
     if (lock && unlock) {
         mgr->lock = lock;
         mgr->unlock = unlock;

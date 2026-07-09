@@ -2,14 +2,21 @@
  * @file upload_coordinator.c
  * @brief Capture persistence, upload dispatch, retry, cleanup.
  *
- * On-disk layout (root is /captures/ on the chosen FS):
- *   /captures/data/cap_<unix_ts>_<seq>_p.jpg          primary image
- *   /captures/data/cap_<unix_ts>_<seq>_i.jpg          inference image (optional)
- *   /captures/data/cap_<unix_ts>_<seq>_a.json         AI result (optional)
- *   /captures/pending/cap_<unix_ts>_<seq>.json        record metadata, awaiting upload
- *   /captures/sent/cap_<unix_ts>_<seq>.json           record metadata, uploaded ok
- *   /captures/failed/cap_<unix_ts>_<seq>.json         record metadata, retry budget spent
- *   /captures/local/cap_<unix_ts>_<seq>.json          record metadata, LOCAL_ONLY mode
+ * On-disk layout (root is /captures/ on the chosen FS). Records are partitioned
+ * by date+hour so no single directory ever holds more than ~60 files (1/min):
+ *   /captures/meta/<YYYY-MM-DD>/<HH>/cap_<ts>_<seq>.json   record metadata
+ *   /captures/data/<YYYY-MM-DD>/<HH>/cap_<ts>_<seq>_p.jpg  primary image
+ *   /captures/data/<YYYY-MM-DD>/<HH>/cap_<ts>_<seq>_i.jpg  inference image (opt)
+ *   /captures/data/<YYYY-MM-DD>/<HH>/cap_<ts>_<seq>_a.json AI result (opt)
+ *   /captures/index/<YYYY-MM-DD>.idx                        manifest (append-only)
+ *
+ * Record STATE (pending/sent/failed/local) lives ONLY in the manifest, NOT in
+ * the directory path - the metadata .json never moves between state directories.
+ * State transitions append a new 32-byte entry to the day's manifest; the
+ * current state of a record is its latest non-tombstone entry. This makes
+ * count/list O(days) file reads instead of O(records) opendir, and eliminates
+ * expensive LittleFS renames on every upload. The .json retains a `state`
+ * field only so the index can be rebuilt from disk if the manifest is lost.
  */
 
 #include "upload_coordinator.h"
@@ -37,7 +44,7 @@
 #include <inttypes.h>
 #include <time.h>
 
-/* Verbose [UPLOAD] diagnostic logs. Default OFF — set to 1 to trace init,
+/* Verbose [UPLOAD] diagnostic logs. Default OFF - set to 1 to trace init,
  * space checks, enqueue/dispatch, network waits, and flush passes. Key
  * operational info still goes through LOG_SVC_* (the log system) regardless. */
 #define UPLOAD_DEBUG 0
@@ -53,15 +60,63 @@
 #define UPLOAD_TASK_PRIORITY    osPriorityBelowNormal
 #define UPLOAD_QUEUE_DEPTH      8
 
+/* Flush time budget. Instead of capping the record count (which fights the
+ * user's configured batch size and doesn't adapt), the flush runs serially
+ * (publish+ack+move-to-SENT per record) until a DEADLINE that scales with the
+ * pending count. Each fully-acked record is moved to SENT → no duplicate next
+ * wake. If the deadline hits, remaining records stay PENDING (un-published) →
+ * also no duplicate. The sleep path (wait_upload_before_sleep) asks
+ * upload_coordinator_get_flush_budget_ms() for the same scaled timeout so it
+ * waits long enough for the flush to finish, but no longer than necessary.
+ *
+ *   budget(N) = min(FLUSH_MAX_BUDGET_MS, N*FLUSH_PER_RECORD_MS + FLUSH_BASE_MS)
+ *
+ * Tune PER_RECORD to your typical publish+ack latency. MAX is the hard cap on
+ * a single wake's upload time (low-power budget). */
+#define FLUSH_PER_RECORD_MS    3000u   /* publish + ack estimate per record    */
+#define FLUSH_BASE_MS          3000u   /* channel wait + overhead              */
+#define FLUSH_MAX_BUDGET_MS    60000u  /* hard cap on one flush pass           */
+#define FLUSH_ACK_TIMEOUT_MS   3000u   /* per-ack wait in the sliding window   */
+#define FLUSH_WINDOW_MAX       16u     /* cap on in-flight parallel publishes  */
+#define CLEANUP_MAX_MS         5000u   /* bound cleanup_for_space (full-FS removes are slow) */
+
 #define CAPTURES_ROOT           "/captures"
 #define CAPTURES_DIR_DATA       CAPTURES_ROOT "/data"
-#define CAPTURES_DIR_PENDING    CAPTURES_ROOT "/pending"
-#define CAPTURES_DIR_SENT       CAPTURES_ROOT "/sent"
-#define CAPTURES_DIR_FAILED     CAPTURES_ROOT "/failed"
-#define CAPTURES_DIR_LOCAL      CAPTURES_ROOT "/local"
+#define CAPTURES_DIR_META       CAPTURES_ROOT "/meta"    /* metadata .json (never moved) */
+#define CAPTURES_DIR_INDEX      CAPTURES_ROOT "/index"   /* daily manifest .idx files  */
 
-/* Cleanup watermark (bytes) — keep this much head-room when wrapping. */
-#define CLEANUP_HEADROOM_BYTES  (512u * 1024u)
+/* Manifest entry: fixed 32 bytes, append-only. LittleFS file content is
+ * crash-safe (block-level COW), so a power loss mid-append at most drops the
+ * trailing partial entry - readers validate filesize % 32 == 0 and skip the
+ * tail. State transitions append a fresh entry; deletes append a tombstone. */
+#pragma pack(push, 1)
+typedef struct {
+    char     id[24];      /* "cap_<ts>_<seq>" - ts is 10 digits until 2286, seq 5
+                           * digits → 20 chars + NUL = 21. [20] was too small and
+                           * manifest_append truncated the last seq digit, so the
+                           * .idx entry id never matched the actual file name
+                           * (e.g. stored cap_<ts>_0000, file cap_<ts>_00001) →
+                           * every record orphaned, nothing uploaded. [24] fits. */
+    uint8_t  state;       /* record_state_t, or IDX_STATE_DELETED */
+    uint8_t  _pad[3];
+    uint32_t timestamp;   /* unix seconds */
+    uint32_t size;        /* primary image bytes */
+} cap_idx_entry_t;        /* 24 + 1 + 3 + 4 + 4 = 36 bytes */
+#pragma pack(pop)
+#define IDX_ENTRY_SIZE      (sizeof(cap_idx_entry_t))
+#define IDX_STATE_DELETED   0xFFu
+/* Sanity: catch any toolchain packing surprise at compile time. */
+_Static_assert(IDX_ENTRY_SIZE == 36, "cap_idx_entry_t must be 36 bytes");
+
+/* Cleanup watermark (bytes) - keep this much head-room when wrapping. */
+#define CLEANUP_HEADROOM_BYTES  (2 * 1024u * 1024u)
+
+/* Persisted "storage full" flag (NVS_USER). Set when a capture write failed
+ * for lack of space; cleared once a write succeeds. Persists across wakes so
+ * the FIRST capture of a low-power wake runs proactive cleanup BEFORE writing
+ * (avoiding the write-fail→cleanup→retry cycle and the lfs_file_write-on-full
+ * hang every wake). Written only on state change (infrequent → negligible wear). */
+#define NVS_KEY_UPLOAD_STORAGE_FULL  "up_stor_full"
 
 /* Max wait for SD media to finish opening before a capture-store attempt.
  * sdProcess opens the media asynchronously; on a cold boot the first capture
@@ -71,7 +126,7 @@
 /* Minimum free bytes required before calling ensure_dirs at init time.
  * Creating 6 directories on littlefs requires metadata-pair allocations
  * (~8 KB per dir + parent commits). We add margin so lfs GC never spins. */
-#define ENSURE_DIRS_MIN_FREE_BYTES (512u * 1024u)
+#define ENSURE_DIRS_MIN_FREE_BYTES (2 * 1024u * 1024u)
 
 /* Event message types delivered to the worker queue. */
 typedef enum {
@@ -81,7 +136,7 @@ typedef enum {
     EV_SHUTDOWN     = 4,
 } upload_event_kind_t;
 
-/* Queue carries a single ULONG per slot (matches webhook_service's pattern —
+/* Queue carries a single ULONG per slot (matches webhook_service's pattern -
  * avoids -fshort-enums shrinking an enum-typed struct and breaking the
  * mq_size >= count*msg_size check in the CMSIS-RTOS2 wrapper). */
 typedef uint32_t upload_event_t;
@@ -95,7 +150,7 @@ typedef struct {
     osMutexId_t        mutex;            /* protects do_flush_pass re-entrancy */
     osMessageQueueId_t queue;
     osThreadId_t       task_handle;
-    volatile aicam_bool_t flush_active;  /* true while do_flush_pass is running — lets the
+    volatile aicam_bool_t flush_active;  /* true while do_flush_pass is running - lets the
                                           * sleep path wait for an in-progress flush to finish
                                           * before cutting power (avoids abandoning an upload) */
 
@@ -105,6 +160,35 @@ typedef struct {
 } upload_state_t;
 
 static upload_state_t g_up;
+
+/* RAM count cache for get_status - rebuilt from the manifest when dirty (set
+ * on every create/state-change/delete). Avoids a full manifest sweep on every
+ * web status poll. Lost on wake (cold boot) → first query rebuilds. */
+static uint32_t g_count_cache[4];
+static volatile bool g_count_cache_dirty = true;
+
+/* Per-FS "captures tree already created this wake" cache for ensure_dirs().
+ * Reset to FS_MAX by reload_config so a post-format re-init recreates the
+ * tree on the wiped volume (see ensure_dirs). */
+static FS_Type_t s_ensured_fs = FS_MAX;
+
+/* Persisted storage_full helpers (NVS_USER). */
+static void storage_full_persist(aicam_bool_t v) {
+    uint8_t b = v ? 1u : 0u;
+    (void)storage_nvs_write(NVS_USER, NVS_KEY_UPLOAD_STORAGE_FULL, &b, sizeof(b));
+}
+static aicam_bool_t storage_full_load(void) {
+    uint8_t b = 0;
+    if (storage_nvs_read(NVS_USER, NVS_KEY_UPLOAD_STORAGE_FULL, &b, sizeof(b)) <= 0)
+        return AICAM_FALSE;
+    return b ? AICAM_TRUE : AICAM_FALSE;
+}
+/* Set g_up.storage_full and persist ONLY on change (avoids per-capture NVS wear). */
+static void storage_full_set(aicam_bool_t v) {
+    if (g_up.storage_full == v) return;
+    g_up.storage_full = v;
+    storage_full_persist(v);
+}
 
 static uint8_t upload_task_stack[UPLOAD_TASK_STACK] __attribute__((aligned(32))) IN_PSRAM;
 
@@ -126,9 +210,11 @@ static void        ensure_dirs_with_space_check(FS_Type_t fs);
 static FS_Type_t   resolve_storage_target(capture_storage_t cs);
 static const char *trigger_str(aicam_capture_trigger_t t);
 static const char *wakeup_src_str(wakeup_source_type_t w);
-static const char *state_dir(record_state_t s);
-static void        path_for_record(char *out, size_t n, const char *dir, const char *id);
+static void        path_for_meta(char *out, size_t n, const char *id);
 static void        path_for_data(char *out, size_t n, const char *id, char suffix);
+static aicam_result_t ensure_record_dirs(FS_Type_t fs, const char *id);
+static aicam_result_t manifest_append(FS_Type_t fs, const char *id,
+                                      uint8_t state, uint32_t ts, uint32_t size);
 static aicam_result_t persist_record(FS_Type_t fs, const char *id,
                                       const uint8_t *jpeg, uint32_t jpeg_size,
                                       const uint8_t *inf, uint32_t inf_size,
@@ -137,14 +223,18 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
                                       aicam_capture_trigger_t trigger,
                                       wakeup_source_type_t wakeup_src,
                                       record_state_t state);
+/* move_record() now changes state in place (rewrite .json state + manifest
+ * append) - `from` is retained only for signature stability at call sites. */
 static aicam_result_t move_record(FS_Type_t fs, const char *id,
                                    record_state_t from, record_state_t to);
 static aicam_result_t parse_meta_file(FS_Type_t fs, const char *path, cJSON **out_json);
 static aicam_result_t upload_one_record(FS_Type_t fs, const char *id);
 static aicam_result_t cleanup_for_space(FS_Type_t fs, uint64_t need_bytes);
 static aicam_result_t purge_old_sent(FS_Type_t fs);
-static uint32_t      count_in_dir(FS_Type_t fs, const char *dir);
+static uint32_t      count_state(FS_Type_t fs, record_state_t state);
+static void          manifest_counts_all(FS_Type_t fs, uint32_t counts[4]);
 static aicam_result_t get_storage_free_bytes(FS_Type_t fs, uint64_t *out_free, uint64_t *out_total);
+static aicam_result_t wait_for_upload_channel(uint32_t timeout_ms);
 
 /* ==================== Helpers ==================== */
 
@@ -155,10 +245,10 @@ static uint64_t now_unix(void)
 
 static uint32_t next_seq(void)
 {
-    /* RAM-only counter — resets to 0 on each cold boot (wake). Different wakes
+    /* RAM-only counter - resets to 0 on each cold boot (wake). Different wakes
      * have different timestamps (minutes apart), so cross-boot id collision is
      * impossible. Within a single wake, the counter increments for same-second
-     * captures (e.g. PIR + button simultaneously). No NVS write — eliminates
+     * captures (e.g. PIR + button simultaneously). No NVS write - eliminates
      * per-capture flash wear that the previous NVS-persisted counter caused. */
     static uint32_t s = 0;
     return ++s;
@@ -193,18 +283,7 @@ static const char *wakeup_src_str(wakeup_source_type_t w)
     }
 }
 
-static const char *state_dir(record_state_t s)
-{
-    switch (s) {
-    case RECORD_STATE_PENDING: return CAPTURES_DIR_PENDING;
-    case RECORD_STATE_SENT:    return CAPTURES_DIR_SENT;
-    case RECORD_STATE_FAILED:  return CAPTURES_DIR_FAILED;
-    case RECORD_STATE_LOCAL:   return CAPTURES_DIR_LOCAL;
-    default:                   return CAPTURES_DIR_PENDING;
-    }
-}
-
-/* ==================== Date-partitioned paths ==================== */
+/* ==================== Date/hour-partitioned paths ==================== */
 
 /* Parse the unix-timestamp field from a record id ("cap_<ts>_<seq>"). The ts
  * is zero-padded for lexicographic sort. Returns 0 on parse failure. */
@@ -230,6 +309,19 @@ static void date_dir_from_id(const char *id, char *out, size_t n)
     strftime(out, n, "%Y-%m-%d", tmv);
 }
 
+/* Format a record id's timestamp as a UTC hour directory "HH" (zero-padded so
+ * lexicographic readdir order == chronological). "unknown" on parse failure. */
+static void hour_dir_from_id(const char *id, char *out, size_t n)
+{
+    if (!out || n == 0) return;
+    unsigned long ts = ts_from_id(id);
+    if (ts == 0) { snprintf(out, n, "unknown"); return; }
+    time_t t = (time_t)ts;
+    struct tm *tmv = gmtime(&t);
+    if (!tmv) { snprintf(out, n, "unknown"); return; }
+    strftime(out, n, "%H", tmv);
+}
+
 /* Format an arbitrary unix timestamp as "YYYY-MM-DD" (UTC). */
 static void date_str_from_ts(uint64_t ts, char *out, size_t n)
 {
@@ -241,33 +333,97 @@ static void date_str_from_ts(uint64_t ts, char *out, size_t n)
     strftime(out, n, "%Y-%m-%d", tmv);
 }
 
-/* Ensure "<top_dir>/<date>/" exists, deriving date from id. stat-first to
- * avoid lfs_mkdir's expensive lfs_fs_forceconsistency() on the common path
- * (date dir usually already exists from a prior capture that day). */
-static void ensure_date_dir(FS_Type_t fs, const char *top_dir, const char *id)
+/* stat-first mkdir: lfs_mkdir is NOT cheaply idempotent (every call runs
+ * lfs_fs_forceconsistency()), so only mkdir when the dir is actually missing. */
+static aicam_result_t ensure_dir_exists(FS_Type_t fs, const char *path)
 {
-    char date[16];
-    date_dir_from_id(id, date, sizeof(date));
-    char path[96];
-    snprintf(path, sizeof(path), "%s/%s", top_dir, date);
     struct stat st = {0};
-    if (disk_file_stat(fs, path, &st) == 0) return;  /* date dir exists */
-    (void)disk_file_mkdir(fs, path);
+    if (disk_file_stat(fs, path, &st) == 0) return AICAM_OK;  /* exists */
+    if (disk_file_mkdir(fs, path) != 0) {
+        LOG_SVC_ERROR("ensure_dir_exists: mkdir failed path=%s", path);
+        return AICAM_ERROR;
+    }
+    return AICAM_OK;
 }
 
-static void path_for_record(char *out, size_t n, const char *dir, const char *id)
+/* Ensure the meta/ and data/ <date>/<hour> subdirs exist for a record (derived
+ * from id). Replaces the old per-state ensure_date_dir - state no longer
+ * affects the path. */
+static aicam_result_t ensure_record_dirs(FS_Type_t fs, const char *id)
 {
-    char date[16];
+    char date[16], hour[8];
     date_dir_from_id(id, date, sizeof(date));
-    snprintf(out, n, "%s/%s/%s.json", dir, date, id);
+    hour_dir_from_id(id, hour, sizeof(hour));
+
+    char path[96];
+    /* meta/<date>/<hour> */
+    snprintf(path, sizeof(path), "%s/%s", CAPTURES_DIR_META, date);
+    if (ensure_dir_exists(fs, path) != AICAM_OK) return AICAM_ERROR;
+    snprintf(path, sizeof(path), "%s/%s/%s", CAPTURES_DIR_META, date, hour);
+    if (ensure_dir_exists(fs, path) != AICAM_OK) return AICAM_ERROR;
+
+    /* data/<date>/<hour> */
+    snprintf(path, sizeof(path), "%s/%s", CAPTURES_DIR_DATA, date);
+    if (ensure_dir_exists(fs, path) != AICAM_OK) return AICAM_ERROR;
+    snprintf(path, sizeof(path), "%s/%s/%s", CAPTURES_DIR_DATA, date, hour);
+    if (ensure_dir_exists(fs, path) != AICAM_OK) return AICAM_ERROR;
+
+    return AICAM_OK;
 }
 
+/* Metadata .json path - fixed location regardless of state. */
+static void path_for_meta(char *out, size_t n, const char *id)
+{
+    char date[16], hour[8];
+    date_dir_from_id(id, date, sizeof(date));
+    hour_dir_from_id(id, hour, sizeof(hour));
+    snprintf(out, n, "%s/%s/%s/%s.json", CAPTURES_DIR_META, date, hour, id);
+}
+
+/* Data file path (primary/inference/ai) under data/<date>/<hour>/. */
 static void path_for_data(char *out, size_t n, const char *id, char suffix)
 {
+    char date[16], hour[8];
+    date_dir_from_id(id, date, sizeof(date));
+    hour_dir_from_id(id, hour, sizeof(hour));
+    snprintf(out, n, "%s/%s/%s/%s_%c.%s", CAPTURES_DIR_DATA, date, hour, id, suffix,
+             suffix == 'a' ? "json" : "jpg");
+}
+
+/* ==================== Manifest (append-only index) ==================== */
+
+/* Path to a day's manifest file: /captures/index/<YYYY-MM-DD>.idx */
+static void manifest_path_for_id(char *out, size_t n, const char *id)
+{
     char date[16];
     date_dir_from_id(id, date, sizeof(date));
-    snprintf(out, n, "%s/%s/%s_%c.%s", CAPTURES_DIR_DATA, date, id, suffix,
-             suffix == 'a' ? "json" : "jpg");
+    snprintf(out, n, "%s/%s.idx", CAPTURES_DIR_INDEX, date);
+}
+
+/* Append one entry to the record's day manifest. Idempotent at the FS level
+ * (open "a", write 32B, close). The caller passes the post-transition state. */
+static aicam_result_t manifest_append(FS_Type_t fs, const char *id,
+                                      uint8_t state, uint32_t ts, uint32_t size)
+{
+    char mpath[96];
+    manifest_path_for_id(mpath, sizeof(mpath), id);
+    cap_idx_entry_t e;
+    memset(&e, 0, sizeof(e));
+    size_t idlen = strlen(id);
+    if (idlen >= sizeof(e.id)) idlen = sizeof(e.id) - 1;
+    memcpy(e.id, id, idlen);
+    e.state = state;
+    e.timestamp = ts;
+    e.size = size;
+
+    void *fd = disk_file_fopen(fs, mpath, "a");
+    if (!fd) {
+        LOG_SVC_ERROR("manifest_append: fopen failed path=%s", mpath);
+        return AICAM_ERROR;
+    }
+    int wn = disk_file_fwrite(fs, fd, &e, IDX_ENTRY_SIZE);
+    disk_file_fclose(fs, fd);
+    return (wn == (int)IDX_ENTRY_SIZE) ? AICAM_OK : AICAM_ERROR;
 }
 
 /* ==================== Storage selection ==================== */
@@ -289,7 +445,7 @@ static FS_Type_t resolve_storage_target(capture_storage_t cs)
 }
 
 /* Non-blocking FS readiness check for ensure_dirs. Returns true only when the
- * backing FS is actually mounted/open — so the init-time call (SD media may
+ * backing FS is actually mounted/open - so the init-time call (SD media may
  * still be opening asynchronously in sdProcess) does NOT cache a failed mkdir
  * run and block the real mkdir from happening later in persist_record. */
 static bool fs_ready_for_dirs(FS_Type_t fs)
@@ -298,7 +454,7 @@ static bool fs_ready_for_dirs(FS_Type_t fs)
         return sd_is_media_open() ? true : false;
     }
     if (fs == FS_FLASH) {
-        /* Just read the RAM mounted flag — do NOT call storage_get_disk_info
+        /* Just read the RAM mounted flag - do NOT call storage_get_disk_info
          * (that runs lfs_fs_size, a full 8192-block traverse, just to read a
          * boolean). The caller (ensure_dirs_with_space_check / enqueue_capture)
          * already did a real space probe, so the volume is known accessible. */
@@ -317,15 +473,16 @@ static aicam_result_t ensure_dirs(FS_Type_t fs)
     if (!fs_ready_for_dirs(fs)) return AICAM_OK;
 
     /* mkdir is expensive on SD (166ms+ per call). Once we've created the
-     * captures tree on a given filesystem this wake, skip — the dirs persist
+     * captures tree on a given filesystem this wake, skip - the dirs persist
      * across sleeps anyway. Track per-filesystem so switching storage (e.g.
-     * SD→FLASH via web) still creates dirs on the new target. */
-    static FS_Type_t s_ensured_fs = FS_MAX;
+     * SD→FLASH via web) still creates dirs on the new target.
+     * Invalidated (set to FS_MAX) by upload_coordinator_reload_config() so a
+     * post-format re-init actually recreates the tree on the wiped volume. */
     if (s_ensured_fs == fs) return AICAM_OK;
 
     /* NOTE: the caller (ensure_dirs_with_space_check or enqueue_capture) has
      * already verified free space against the ENSURE_DIRS_MIN_FREE_BYTES /
-     * CLEANUP_HEADROOM threshold. Do NOT re-probe here — a second
+     * CLEANUP_HEADROOM threshold. Do NOT re-probe here - a second
      * storage_get_disk_info would run another full lfs_fs_size traverse
      * (~120 ms holding the storage mutex) and contend with the log task. */
 
@@ -333,77 +490,44 @@ static aicam_result_t ensure_dirs(FS_Type_t fs)
     const char *dirs[] = {
         CAPTURES_ROOT,
         CAPTURES_DIR_DATA,
-        CAPTURES_DIR_PENDING,
-        CAPTURES_DIR_SENT,
-        CAPTURES_DIR_FAILED,
-        CAPTURES_DIR_LOCAL,
+        CAPTURES_DIR_META,
+        CAPTURES_DIR_INDEX,
     };
+    aicam_result_t ret = AICAM_OK;
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
-        /* stat first: lfs_mkdir is NOT cheaply idempotent — every call runs
+        /* stat first: lfs_mkdir is NOT cheaply idempotent - every call runs
          * lfs_fs_forceconsistency() (a full deorphan traverse) before checking
          * existence, so calling it on already-existing dirs is expensive and
          * can hang if the FS has a borderline state (deorphan loops with
          * LFS_ASSERT disabled). Only mkdir when the dir is actually missing. */
         struct stat st = {0};
         if (disk_file_stat(fs, dirs[i], &st) == 0) continue;  /* exists */
-        (void)disk_file_mkdir(fs, dirs[i]);
+        if (disk_file_mkdir(fs, dirs[i]) != 0) {
+            /* mkdir failed (e.g. NOSPC on a full FS, or parent missing). Do NOT
+             * mark s_ensured_fs - otherwise persist_record would skip ensure_dirs
+             * on retry and the date-subdir mkdir would fail forever (NOENT), making
+             * cleanup_for_space + retry futile (a ~30s hang on a full FS). Leaving
+             * s_ensured_fs unset lets the retry re-create the tree once cleanup
+             * has freed space. */
+            LOG_SVC_ERROR("ensure_dirs: mkdir failed path=%s", dirs[i]);
+            ret = AICAM_ERROR;
+        }
     }
-    s_ensured_fs = fs;
+    if (ret == AICAM_OK) s_ensured_fs = fs;   /* only mark ensured if ALL created */
     uint64_t dt = rtc_get_uptime_ms() - te;
     if (dt > 5) {
         UPLOAD_LOG("ensure_dirs time=%lu ms\r\n", (unsigned long)dt);
     }
-    return AICAM_OK;
+    return ret;
 }
 
-/* Check free space, run WRAP-policy cleanup if needed, and call ensure_dirs
- * only when it's safe.  Shared by init, reload_config (sync), and EV_RELOAD. */
+/* Call ensure_dirs. The proactive lfs_fs_size-based space check was removed -
+ * it ran a full-FS traverse (O(file count), 3-4 s with thousands of records)
+ * on every boot, tripping the watchdog. Instead, space is checked reactively
+ * in enqueue_capture on write failure (cleanup_for_space is only called then).
+ * Shared by init, reload_config (sync), and EV_RELOAD. */
 static void ensure_dirs_with_space_check(FS_Type_t fs)
 {
-    uint64_t free_bytes = 0, total = 0;
-    if (get_storage_free_bytes(fs, &free_bytes, &total) == AICAM_OK) {
-        UPLOAD_LOG("ensure_dirs_with_space_check: free=%lu KB total=%lu KB "
-               "policy=%d\r\n",
-               (unsigned long)(free_bytes / 1024),
-               (unsigned long)(total / 1024),
-               (int)g_up.cfg.policy);
-
-        if (free_bytes < ENSURE_DIRS_MIN_FREE_BYTES) {
-            UPLOAD_LOG("ensure_dirs_with_space_check: low space "
-                   "(%lu KB < %lu KB min)\r\n",
-                   (unsigned long)(free_bytes / 1024),
-                   (unsigned long)(ENSURE_DIRS_MIN_FREE_BYTES / 1024));
-
-            if (g_up.cfg.policy == STORAGE_POLICY_WRAP) {
-                uint64_t need = ENSURE_DIRS_MIN_FREE_BYTES - free_bytes
-                                + CLEANUP_HEADROOM_BYTES;
-                UPLOAD_LOG("ensure_dirs_with_space_check: WRAP policy, "
-                       "cleaning up (need=%lu KB)...\r\n",
-                       (unsigned long)(need / 1024));
-                if (cleanup_for_space(fs, need) == AICAM_OK) {
-                    get_storage_free_bytes(fs, &free_bytes, &total);
-                    UPLOAD_LOG("ensure_dirs_with_space_check: "
-                           "after cleanup free=%lu KB\r\n",
-                           (unsigned long)(free_bytes / 1024));
-                } else {
-                    UPLOAD_LOG("ensure_dirs_with_space_check: "
-                           "cleanup insufficient\r\n");
-                }
-            }
-
-            if (free_bytes < ENSURE_DIRS_MIN_FREE_BYTES) {
-                UPLOAD_LOG("ensure_dirs_with_space_check: "
-                       "still low on space — skipping ensure_dirs, "
-                       "storage marked full\r\n");
-                g_up.storage_full = AICAM_TRUE;
-                return;
-            }
-        }
-    } else {
-        UPLOAD_LOG("ensure_dirs_with_space_check: "
-               "get_storage_free_bytes failed, proceeding anyway\r\n");
-    }
-
     ensure_dirs(fs);
 }
 
@@ -487,12 +611,14 @@ static cJSON *build_record_meta_json(const char *id,
                                      const char *primary_name,
                                      const char *inference_name,
                                      const char *ai_name,
-                                     upload_proto_t protocol)
+                                     upload_proto_t protocol,
+                                     record_state_t state)
 {
     cJSON *r = cJSON_CreateObject();
     if (!r) return NULL;
     cJSON_AddNumberToObject(r, "version", 1);
     cJSON_AddStringToObject(r, "id", id);
+    cJSON_AddNumberToObject(r, "state", (double)state);
     cJSON_AddStringToObject(r, "image_id", meta->image_id);
     cJSON_AddNumberToObject(r, "timestamp", (double)meta->timestamp);
     cJSON_AddNumberToObject(r, "width", meta->width);
@@ -512,7 +638,7 @@ static cJSON *build_record_meta_json(const char *id,
     cJSON_AddStringToObject(r, "last_error", "");
 
     /* battery snapshot (best-effort).
-     * Only need battery %, device name, serial — do NOT call
+     * Only need battery %, device name, serial - do NOT call
      * device_service_get_info() which internally calls update_storage_info()
      * → storage_get_disk_info() → lfs_fs_size() (230 ms on 8189-block flash).
      * These fields are updated at boot and change rarely. */
@@ -568,17 +694,20 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
     if (fs == FS_MAX) return AICAM_ERROR_INVALID_PARAM;
     if (ensure_dirs(fs) != AICAM_OK) return AICAM_ERROR;
 
-    /* Ensure the per-date subdirectories exist for this record's capture date
-     * (derived from id). Created on demand rather than in ensure_dirs() so the
-     * top-level tree stays small and old date dirs are never pre-created. */
-    ensure_date_dir(fs, state_dir(state), id);
-    ensure_date_dir(fs, CAPTURES_DIR_DATA, id);
+    /* Ensure the per-date/per-hour subdirectories exist for this record's
+     * capture date+hour (derived from id). State no longer affects the path.
+     * If mkdir fails (e.g. FS is mid-recovery, forceconsistency error), bail
+     * early - otherwise lfs_file_open fails on a non-existent parent dir and
+     * we'd log "fopen failed" with no clear cause. */
+    if (ensure_record_dirs(fs, id) != AICAM_OK) {
+        return AICAM_ERROR;
+    }
 
     char pri_path[128], inf_path[128], ai_path[128], meta_path[128];
     path_for_data(pri_path, sizeof(pri_path), id, 'p');
     path_for_data(inf_path, sizeof(inf_path), id, 'i');
     path_for_data(ai_path,  sizeof(ai_path),  id, 'a');
-    path_for_record(meta_path, sizeof(meta_path), state_dir(state), id);
+    path_for_meta(meta_path, sizeof(meta_path), id);
 
     aicam_result_t r = write_file(fs, pri_path, jpeg, jpeg_size);
     if (r != AICAM_OK) {
@@ -607,77 +736,125 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
     cJSON *j = build_record_meta_json(id, meta, trigger, wakeup_src,
                                        pri_name, inf ? inf_name : "",
                                        ai_json ? ai_name : "",
-                                       g_up.cfg.upload_protocol);
+                                       g_up.cfg.upload_protocol, state);
     if (!j) return AICAM_ERROR_NO_MEMORY;
     aicam_result_t rr = write_meta_json(fs, meta_path, j);
     cJSON_Delete(j);
-    return rr;
+    if (rr != AICAM_OK) return rr;
+
+    /* Append the create entry to the day's manifest so count/list can find
+     * this record without opendir-ing thousands of files. */
+    uint32_t ts = (uint32_t)(meta->timestamp ? meta->timestamp : now_unix());
+    (void)manifest_append(fs, id, (uint8_t)state, ts, jpeg_size);
+    g_count_cache_dirty = true;
+    return AICAM_OK;
 }
 
 static aicam_result_t move_record(FS_Type_t fs, const char *id,
                                    record_state_t from, record_state_t to)
 {
-    char from_path[128], to_path[128];
-    path_for_record(from_path, sizeof(from_path), state_dir(from), id);
-    path_for_record(to_path,   sizeof(to_path),   state_dir(to),   id);
+    /* State change is now in-place: the metadata .json never moves between
+     * directories. We rewrite its `state` field and append a manifest entry
+     * with the new state. `from` is unused (kept for call-site stability). */
+    (void)from;
+    char meta_path[128];
+    path_for_meta(meta_path, sizeof(meta_path), id);
 
-    /* Target date subdir (same capture date as source) may not exist yet on
-     * the destination state tree — create it before rename. */
-    ensure_date_dir(fs, state_dir(to), id);
-
-    /* FileX fx_file_rename returns FX_ALREADY_CREATED (0x0B) if the target
-     * exists — this happens when a prior flush renamed the record to sent/
-     * but a later enqueue (pre-id-fix bug) overwrote pending/ with the same
-     * id. Remove the stale target first so the rename succeeds. */
-    struct stat st = {0};
-    if (disk_file_stat(fs, to_path, &st) == 0) {
-        (void)disk_file_remove(fs, to_path);
-    }
-
-    if (disk_file_rename(fs, from_path, to_path) != 0) {
-        /* Fallback: copy content + delete source (handles FS that can't
-         * rename across directories atomically). Metadata is small JSON. */
-        char *content = NULL;
-        uint32_t size = 0;
-        if (read_text_file(fs, from_path, &content, &size) == AICAM_OK) {
-            aicam_result_t wr = write_file(fs, to_path, (const uint8_t *)content, size);
-            buffer_free(content);
-            if (wr == AICAM_OK) {
-                (void)disk_file_remove(fs, from_path);
-                if (to == RECORD_STATE_SENT) LOG_SVC_INFO("upload ok: %s", id);
-                return AICAM_OK;
-            }
-        }
+    cJSON *meta = NULL;
+    if (parse_meta_file(fs, meta_path, &meta) != AICAM_OK) {
         return AICAM_ERROR;
     }
+    cJSON_ReplaceItemInObject(meta, "state", cJSON_CreateNumber((double)to));
+    uint32_t ts = 0;
+    cJSON *t = cJSON_GetObjectItem(meta, "timestamp");
+    if (t) ts = (uint32_t)t->valuedouble;
+    uint32_t size = 0;
+    t = cJSON_GetObjectItem(meta, "size");
+    if (t) size = (uint32_t)t->valueint;
+
+    /* Rewrite the .json via a temp file + atomic rename, so a power cut
+     * (sleep) mid-rewrite leaves the original .json intact instead of a
+     * truncated/empty file. The manifest entry is appended only after the
+     * rename succeeds, so .json and .idx stay consistent. */
+    char tmp_path[136];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", meta_path);
+    aicam_result_t r = write_meta_json(fs, tmp_path, meta);
+    cJSON_Delete(meta);
+    if (r != AICAM_OK) {
+        (void)disk_file_remove(fs, tmp_path);
+        return AICAM_ERROR;
+    }
+    if (disk_file_rename(fs, tmp_path, meta_path) != 0) {
+        (void)disk_file_remove(fs, tmp_path);
+        return AICAM_ERROR;
+    }
+
+    (void)manifest_append(fs, id, (uint8_t)to, ts, size);
+    g_count_cache_dirty = true;
     if (to == RECORD_STATE_SENT) LOG_SVC_INFO("upload ok: %s", id);
     return AICAM_OK;
 }
 
-static void delete_record_files(FS_Type_t fs, const char *id, record_state_t state)
+/* stat → if present, remove. Returns 0 on success (removed or not present),
+ * -1 on remove failure (file exists but remove failed → FS likely corrupt).
+ * Updates *freed with the content size of successfully removed files. */
+static int stat_and_remove(FS_Type_t fs, const char *path, uint64_t *freed)
 {
-    /* Only remove files that actually exist — calling remove on a non-existent
-     * path makes the SD FileX driver log "fx_file_delete failed: 0x04" for
-     * every absent file (4 states × 4 files = 16 attempts, most miss). */
-    char path[128];
     struct stat st = {0};
+    if (disk_file_stat(fs, path, &st) != 0) return 0;   /* not present - ok */
+    uint64_t sz = (uint64_t)st.st_size;
+    if (disk_file_remove(fs, path) == 0) { *freed += sz; return 0; }
+    LOG_SVC_ERROR("delete_record_files: remove failed path=%s - aborting (FS corrupt?)", path);
+    return -1;
+}
 
-    path_for_record(path, sizeof(path), state_dir(state), id);
-    if (disk_file_stat(fs, path, &st) == 0) (void)disk_file_remove(fs, path);
+static aicam_result_t delete_record_files(FS_Type_t fs, const char *id, record_state_t state,
+                                const char *reason, uint64_t *out_freed)
+{
+    /* Tombstone FIRST, then remove the files. If power is cut between the
+     * tombstone and the removes (e.g. sleep mid-cleanup), the record stays
+     * correctly excluded from counts/lists and the orphaned files are just
+     * wasted space - recoverable on next cleanup. The reverse order (remove
+     * then tombstone) leaves a stale PENDING entry pointing at a gone .json,
+     * which the flush pass retries forever.
+     *
+     * If the tombstone append FAILS, do NOT remove the files - the index would
+     * still list the record as PENDING pointing at gone files (stale). Leave it
+     * for the next cleanup to retry.
+     *
+     * If a remove FAILS (file present but remove returns non-zero), the FS is
+     * likely corrupt - abort the remaining removes and return an error so the
+     * caller stops the whole cleanup (no point deleting more on a broken FS).
+     *
+     * out_freed (optional): content bytes actually removed (lower bound on
+     * blocks freed; littlefs per-file overhead is extra). */
+    (void)state;
+    LOG_SVC_INFO("upload: delete_record_files id=%s reason=%s", id, reason ? reason : "?");
+    if (manifest_append(fs, id, IDX_STATE_DELETED, 0, 0) != AICAM_OK) {
+        LOG_SVC_ERROR("delete_record_files: tombstone failed id=%s - leaving files", id);
+        return AICAM_ERROR;
+    }
+    g_count_cache_dirty = true;
 
+    uint64_t freed = 0;
+    char path[128];
+
+    path_for_meta(path, sizeof(path), id);
+    if (stat_and_remove(fs, path, &freed) != 0) { if (out_freed) *out_freed = freed; return AICAM_ERROR; }
     path_for_data(path, sizeof(path), id, 'p');
-    if (disk_file_stat(fs, path, &st) == 0) (void)disk_file_remove(fs, path);
-
+    if (stat_and_remove(fs, path, &freed) != 0) { if (out_freed) *out_freed = freed; return AICAM_ERROR; }
     path_for_data(path, sizeof(path), id, 'i');
-    if (disk_file_stat(fs, path, &st) == 0) (void)disk_file_remove(fs, path);
-
+    if (stat_and_remove(fs, path, &freed) != 0) { if (out_freed) *out_freed = freed; return AICAM_ERROR; }
     path_for_data(path, sizeof(path), id, 'a');
-    if (disk_file_stat(fs, path, &st) == 0) (void)disk_file_remove(fs, path);
+    if (stat_and_remove(fs, path, &freed) != 0) { if (out_freed) *out_freed = freed; return AICAM_ERROR; }
+
+    if (out_freed) *out_freed = freed;
+    return AICAM_OK;
 }
 
 /* ==================== Directory iteration ==================== */
 
-/* Compatible readdir entry — must be a superset of both lfs_info and sd_info
+/* Compatible readdir entry - must be a superset of both lfs_info and sd_info
  * layouts. type(1) + pad(3) + size(4) + name(256) + mtime(4) + short_name(14).
  */
 typedef struct {
@@ -689,44 +866,149 @@ typedef struct {
     char     short_name[14];
 } dir_entry_t;
 
-/* Iterate records in a state dir. Returns count of records visited (passing offset/limit filter). */
+/* Iterate records currently in a given state. Returns count of records
+ * visited (passing offset/limit filter). */
 typedef aicam_result_t (*record_visitor_t)(FS_Type_t fs, const char *id, void *user);
 
-/* Iterate records in a state dir, traversing per-date subdirectories.
- *
- *   dir        — top-level state dir (e.g. /captures/pending)
- *   offset/limit — pagination (visit mode)
- *   from_ts/to_ts — inclusive time range (exact, per-record); 0 / UINT64_MAX = unbounded
- *   sort_desc  — newest date first
- *   fn/user    — visitor; NULL = count mode (return matching total, no alloc)
- *
- * Records live at "<dir>/<YYYY-MM-DD>/cap_<ts>_<seq>.json". Date subdirs are
- * enumerated once (small set), filtered at day granularity via lexicographic
- * date-string compare, then each is scanned. Visit mode collects at most
- * `limit` ids into a small fixed buffer and stops early once the page is
- * full — no full-volume readdir, no giant alloc. Count mode is single-pass
- * readdir with no allocation.
- *
- * Returns: count mode → matching total; visit mode → records passed to fn. */
-static int iterate_records(FS_Type_t fs, const char *dir,
-                            uint32_t offset, uint32_t limit,
-                            uint64_t from_ts, uint64_t to_ts,
-                            aicam_bool_t sort_desc,
-                            record_visitor_t fn, void *user)
+#define MAX_DATE_FILES 128
+#define IDX_MAX_ENTRIES 65536   /* sanity cap: 2 MB manifest */
+
+/* FNV-1a hash over a record id (NUL-padded, ≤20 bytes). */
+static uint32_t id_hash(const char *id)
 {
-    /* --- Phase 1: enumerate date subdirs (YYYY-MM-DD, 10 chars) --- */
-    #define MAX_DATE_DIRS 128
-    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_DIRS, 12);
-    if (!dates) return 0;
-    int ndates = 0;
-    void *dd = disk_file_opendir(fs, dir);
+    uint32_t h = 0x811c9dc5u;
+    for (int i = 0; i < (int)sizeof(((cap_idx_entry_t *)0)->id) && id[i]; i++) {
+        h ^= (uint8_t)id[i];
+        h *= 0x01000193u;
+    }
+    return h;
+}
+
+/* Comparator: sort cap_idx_entry_t by timestamp ascending. */
+static int idx_entry_cmp_ts(const void *a, const void *b)
+{
+    uint32_t ta = ((const cap_idx_entry_t *)a)->timestamp;
+    uint32_t tb = ((const cap_idx_entry_t *)b)->timestamp;
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+    return 0;
+}
+
+/* Load one day's manifest, dedup to latest-state-per-id (last append wins),
+ * drop tombstones, sort by timestamp ascending. Returns a buffer_calloc'd
+ * array (caller frees via buffer_free) of live entries; *out_n = count.
+ * NULL on failure/empty. Reading one small sequential file per day is what
+ * makes count/list O(days) instead of O(records) opendir. */
+static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *out_n)
+{
+    if (out_n) *out_n = 0;
+    char mpath[96];
+    snprintf(mpath, sizeof(mpath), "%s/%s.idx", CAPTURES_DIR_INDEX, date);
+    struct stat st = {0};
+    if (disk_file_stat(fs, mpath, &st) != 0 || st.st_size < (off_t)IDX_ENTRY_SIZE) {
+        return NULL;
+    }
+    /* Size must be a clean multiple of IDX_ENTRY_SIZE. If not, the .idx has
+     * old-format entries (e.g. 32-byte from a prior build) mixed with 36-byte,
+     * which makes every read after the first misaligned → garbled ids. Delete
+     * the corrupt .idx so rebuild_index_if_needed recreates it from .json. */
+    if ((st.st_size % IDX_ENTRY_SIZE) != 0) {
+        LOG_SVC_ERROR("manifest_load_day: .idx size %lu not multiple of %d - corrupt, deleting %s",
+                      (unsigned long)st.st_size, (int)IDX_ENTRY_SIZE, mpath);
+        (void)disk_file_remove(fs, mpath);
+        return NULL;
+    }
+    int n_raw = (int)(st.st_size / IDX_ENTRY_SIZE);
+    if (n_raw == 0) return NULL;
+    if (n_raw > IDX_MAX_ENTRIES) n_raw = IDX_MAX_ENTRIES;
+
+    cap_idx_entry_t *ent = (cap_idx_entry_t *)buffer_calloc((size_t)n_raw, IDX_ENTRY_SIZE);
+    if (!ent) return NULL;
+    void *fd = disk_file_fopen(fs, mpath, "r");
+    if (!fd) { buffer_free(ent); return NULL; }
+    int rd = disk_file_fread(fs, fd, ent, (size_t)n_raw * IDX_ENTRY_SIZE);
+    disk_file_fclose(fs, fd);
+    if (rd < (int)IDX_ENTRY_SIZE) { buffer_free(ent); return NULL; }
+    int n_read = rd / (int)IDX_ENTRY_SIZE;
+
+    /* Sanity: the first entry's id must start with "cap_". If not, the .idx is
+     * corrupt or an old format (e.g. 33-byte entries from a prior build mixed
+     * with 36-byte entries) - reading at 36-byte offsets produces garbled ids.
+     * Delete the corrupt .idx so rebuild_index_if_needed recreates it from the
+     * .json files (which always hold correct ids). */
+    if (n_read > 0 && strncmp(ent[0].id, "cap_", 4) != 0) {
+        LOG_SVC_ERROR("manifest_load_day: corrupt .idx (first id garbled) - deleting %s", mpath);
+        buffer_free(ent);
+        (void)disk_file_remove(fs, mpath);
+        return NULL;
+    }
+
+    /* Dedup keeping the latest entry per id. Open-addressing hash id→index;
+     * since entries are append-ordered, setting slot=i on each visit leaves
+     * the last occurrence index in the slot. */
+    #define IDX_HASH_SIZE 4096
+    int32_t *hslot = (int32_t *)buffer_calloc(IDX_HASH_SIZE, sizeof(int32_t));
+    if (!hslot) { buffer_free(ent); return NULL; }
+    for (int i = 0; i < IDX_HASH_SIZE; i++) hslot[i] = -1;
+    for (int i = 0; i < n_read; i++) {
+        uint32_t h = id_hash(ent[i].id) & (IDX_HASH_SIZE - 1);
+        for (;;) {
+            int s = hslot[h];
+            if (s < 0) { hslot[h] = i; break; }                /* new id */
+            if (strncmp(ent[s].id, ent[i].id, sizeof(ent[i].id)) == 0) {
+                hslot[h] = i; break;                            /* update latest */
+            }
+            h = (h + 1) & (IDX_HASH_SIZE - 1);
+        }
+    }
+    /* Collect the latest entry per id into a SEPARATE array. In-place
+     * compaction of `ent` is unsafe: a later hash slot may reference a low
+     * index that an earlier compaction step already overwrote, resurrecting a
+     * stale (e.g. pre-tombstone) entry for that id. Copying out avoids that. */
+    int n_uniq = 0;
+    for (int s = 0; s < IDX_HASH_SIZE; s++) if (hslot[s] >= 0) n_uniq++;
+    cap_idx_entry_t *uniq = (cap_idx_entry_t *)buffer_calloc(
+        (size_t)(n_uniq ? n_uniq : 1), IDX_ENTRY_SIZE);
+    if (!uniq) { buffer_free(hslot); buffer_free(ent); return NULL; }
+    int u = 0;
+    for (int s = 0; s < IDX_HASH_SIZE; s++) {
+        int i = hslot[s];
+        if (i < 0) continue;
+        uniq[u++] = ent[i];
+    }
+    buffer_free(hslot);
+    buffer_free(ent);   /* raw array no longer needed */
+    #undef IDX_HASH_SIZE
+
+    /* Drop tombstones (DELETED) - they are not current records. */
+    int n_live = 0;
+    for (int i = 0; i < n_uniq; i++) {
+        if (uniq[i].state == IDX_STATE_DELETED) continue;
+        if (i != n_live) uniq[n_live] = uniq[i];
+        n_live++;
+    }
+    qsort(uniq, (size_t)n_live, IDX_ENTRY_SIZE, idx_entry_cmp_ts);
+    if (out_n) *out_n = n_live;
+    return uniq;
+}
+
+/* Enumerate date manifest files in /captures/index/, filtered to
+ * [from_date, to_date] (lexicographic = chronological for YYYY-MM-DD).
+ * Fills caller-allocated `dates` ([][12]); returns count. sort_desc reverses. */
+static int enumerate_date_files(FS_Type_t fs, char (*dates)[12], int max,
+                                const char *from_date, const char *to_date,
+                                aicam_bool_t sort_desc)
+{
+    int n = 0;
+    void *dd = disk_file_opendir(fs, CAPTURES_DIR_INDEX);
     if (dd) {
         dir_entry_t e;
-        while (ndates < MAX_DATE_DIRS && disk_file_readdir(fs, dd, (char *)&e) > 0) {
+        while (n < max && disk_file_readdir(fs, dd, (char *)&e) > 0) {
             const char *name = e.name;
             if (name[0] == '.') continue;
             size_t nlen = strlen(name);
-            if (nlen != 10) continue;
+            if (nlen != 14) continue;               /* "YYYY-MM-DD.idx" */
+            if (strcmp(name + 10, ".idx") != 0) continue;
             if (name[4] != '-' || name[7] != '-') continue;
             int ok = 1;
             for (int i = 0; i < 10; i++) {
@@ -734,200 +1016,285 @@ static int iterate_records(FS_Type_t fs, const char *dir,
                 if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
             }
             if (!ok) continue;
-            memcpy(dates[ndates], name, 11);
-            ndates++;
+            char dn[12];
+            memcpy(dn, name, 10); dn[10] = 0;
+            if (from_date && strcmp(dn, from_date) < 0) continue;
+            if (to_date && strcmp(dn, to_date) > 0) continue;
+            memcpy(dates[n], dn, 11);
+            n++;
         }
         disk_file_closedir(fs, dd);
     }
-    if (ndates == 0) { buffer_free(dates); return 0; }
-
-    /* Insertion sort lexicographically (= chronological). n is small. */
-    for (int i = 1; i < ndates; i++) {
-        char tmp[12];
-        memcpy(tmp, dates[i], 12);
+    for (int i = 1; i < n; i++) {                    /* insertion sort asc */
+        char tmp[12]; memcpy(tmp, dates[i], 12);
         int j = i - 1;
         while (j >= 0 && strcmp(dates[j], tmp) > 0) {
-            memcpy(dates[j+1], dates[j], 12);
-            j--;
+            memcpy(dates[j+1], dates[j], 12); j--;
         }
         memcpy(dates[j+1], tmp, 12);
     }
     if (sort_desc) {
-        for (int i = 0; i < ndates/2; i++) {
-            char tmp[12];
-            memcpy(tmp, dates[i], 12);
-            memcpy(dates[i], dates[ndates-1-i], 12);
-            memcpy(dates[ndates-1-i], tmp, 12);
+        for (int i = 0; i < n/2; i++) {
+            char tmp[12]; memcpy(tmp, dates[i], 12);
+            memcpy(dates[i], dates[n-1-i], 12);
+            memcpy(dates[n-1-i], tmp, 12);
         }
     }
+    return n;
+}
 
-    /* Day-granularity range filter: compare date dir name to [from_date, to_date]
-     * as strings. Lexicographic = chronological for YYYY-MM-DD. */
+/* Iterate records currently in `filter_state`, reading manifests (NOT opendir).
+ *   offset/limit - pagination (visit mode); limit==0 = unlimited
+ *   from_ts/to_ts - inclusive time range; 0 / UINT64_MAX = unbounded
+ *   sort_desc - newest first
+ *   fn/user - visitor; NULL = count mode (return matching total, no alloc)
+ * The manifest snapshot is in RAM, so the visitor may freely delete/move
+ * records (it touches meta/data files, not the index file we already closed).
+ * Returns: count mode → matching total; visit mode → records passed to fn. */
+static int iterate_records(FS_Type_t fs, record_state_t filter_state,
+                            uint32_t offset, uint32_t limit,
+                            uint64_t from_ts, uint64_t to_ts,
+                            aicam_bool_t sort_desc,
+                            record_visitor_t fn, void *user)
+{
     char from_date[12], to_date[12];
     date_str_from_ts(from_ts > 0 ? from_ts : 0, from_date, sizeof(from_date));
-    if (to_ts == UINT64_MAX) {
-        snprintf(to_date, sizeof(to_date), "9999-99-99");
-    } else {
-        date_str_from_ts(to_ts, to_date, sizeof(to_date));
+    if (to_ts == UINT64_MAX) snprintf(to_date, sizeof(to_date), "9999-99-99");
+    else date_str_from_ts(to_ts, to_date, sizeof(to_date));
+
+    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
+    if (!dates) return 0;
+    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
+                                      from_date, to_date, sort_desc);
+
+    uint32_t collected = 0, emitted = 0;
+    int total = 0;
+    aicam_bool_t stop = AICAM_FALSE;
+
+    for (int di = 0; di < ndates && !stop; di++) {
+        int nent = 0;
+        cap_idx_entry_t *ent = manifest_load_day(fs, dates[di], &nent);
+        if (!ent) continue;
+
+        for (int idx = 0; idx < nent && !stop; idx++) {
+            int k = sort_desc ? (nent - 1 - idx) : idx;
+            if (ent[k].state != (uint8_t)filter_state) continue;
+            uint32_t rts = ent[k].timestamp;
+            if (rts != 0) {
+                if (from_ts > 0 && rts < from_ts) continue;
+                if (to_ts != UINT64_MAX && rts > to_ts) continue;
+            }
+            if (fn == NULL) { total++; continue; }
+            if (collected < offset) { collected++; continue; }
+            if (limit > 0 && emitted >= limit) { stop = AICAM_TRUE; break; }
+            /* id field is NUL-padded (≤24B); copy to a 64B buf for safety. */
+            char idbuf[64];
+            size_t idl = 0;
+            while (idl < sizeof(ent[k].id) && ent[k].id[idl]) idl++;
+            if (idl >= sizeof(idbuf)) idl = sizeof(idbuf) - 1;
+            memcpy(idbuf, ent[k].id, idl); idbuf[idl] = 0;
+            emitted++;
+            if (fn(fs, idbuf, user) != AICAM_OK) { stop = AICAM_TRUE; break; }
+        }
+        buffer_free(ent);
     }
+    buffer_free(dates);
+    return fn ? (int)emitted : total;
+}
 
-    /* --- Visit mode: pre-allocate page buffer (≤ limit ids) --- */
-    char (*page_ids)[64] = NULL;
-    if (fn != NULL) {
-        uint32_t pcap = (limit > 0 && limit <= 200) ? limit : 200;
-        page_ids = (char (*)[64])buffer_calloc(pcap, 64);
-        if (!page_ids) { buffer_free(dates); return 0; }
+static uint32_t count_state(FS_Type_t fs, record_state_t state)
+{
+    if (fs == FS_MAX) return 0;
+    uint64_t tc = rtc_get_uptime_ms();
+    uint32_t n = (uint32_t)iterate_records(fs, state, 0, 0, 0, UINT64_MAX,
+                                           AICAM_FALSE, NULL, NULL);
+    uint64_t dt = rtc_get_uptime_ms() - tc;
+    if (dt > 5) {
+        UPLOAD_LOG("count_state(%d)=%u time=%lu ms\r\n",
+                   (int)state, (unsigned)n, (unsigned long)dt);
     }
+    return n;
+}
 
-    uint32_t collected = 0;   /* matching records seen (for offset) */
-    uint32_t emitted = 0;     /* records passed to fn */
-    int total = 0;            /* count-mode total */
-    int day_page = 0;
-    uint32_t pcap = (limit > 0 && limit <= 200) ? limit : 200;
-
+/* Fill counts for all 4 states in a single manifest sweep (get_status). */
+static void manifest_counts_all(FS_Type_t fs, uint32_t counts[4])
+{
+    counts[0] = counts[1] = counts[2] = counts[3] = 0;
+    if (fs == FS_MAX) return;
+    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
+    if (!dates) return;
+    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
+                                      "0000-00-00", "9999-99-99", AICAM_FALSE);
     for (int di = 0; di < ndates; di++) {
-        const char *dn = dates[di];
-        if (strcmp(dn, from_date) < 0) continue;
-        if (strcmp(dn, to_date) > 0) continue;
+        int nent = 0;
+        cap_idx_entry_t *ent = manifest_load_day(fs, dates[di], &nent);
+        if (!ent) continue;
+        for (int i = 0; i < nent; i++) {
+            uint8_t s = ent[i].state;
+            if (s < 4) counts[s]++;
+        }
+        buffer_free(ent);
+    }
+    buffer_free(dates);
+}
 
-        char subpath[96];
-        snprintf(subpath, sizeof(subpath), "%s/%s", dir, dn);
+/* Repair: rebuild /captures/index/<date>.idx from the metadata .json files
+ * under /captures/meta/. Called at init when the manifest appears lost/empty
+ * while meta/ has records (e.g. volume migrated or index corrupted). Expensive
+ * - reads every .json - but rare. Duplicate-safe: manifest_load_day dedups by
+ * id, so an existing partial .idx would not double-count. We still truncate
+ * each day's .idx first for cleanliness. */
+static aicam_result_t rebuild_index(FS_Type_t fs)
+{
+    char dates[MAX_DATE_FILES][12];
+    int ndates = 0;
+    void *dd = disk_file_opendir(fs, CAPTURES_DIR_META);
+    if (!dd) return AICAM_ERROR;
+    dir_entry_t e;
+    while (ndates < MAX_DATE_FILES && disk_file_readdir(fs, dd, (char *)&e) > 0) {
+        const char *name = e.name;
+        if (name[0] == '.') continue;
+        size_t nlen = strlen(name);
+        if (nlen != 10) continue;
+        if (name[4] != '-' || name[7] != '-') continue;
+        int ok = 1;
+        for (int i = 0; i < 10; i++) {
+            if (i == 4 || i == 7) continue;
+            if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
+        }
+        if (!ok) continue;
+        memcpy(dates[ndates], name, 11);
+        ndates++;
+    }
+    disk_file_closedir(fs, dd);
 
-        /* ---- Pass 1: count matching records in this date dir ---- */
-        int day_count = 0;
-        dd = disk_file_opendir(fs, subpath);
-        if (!dd) continue;
+    for (int d = 0; d < ndates; d++) {
+        char ipath[96];
+        snprintf(ipath, sizeof(ipath), "%s/%s.idx", CAPTURES_DIR_INDEX, dates[d]);
+        (void)disk_file_remove(fs, ipath);   /* truncate existing */
+
+        char mpath[160];
+        snprintf(mpath, sizeof(mpath), "%s/%s", CAPTURES_DIR_META, dates[d]);
+        void *hd = disk_file_opendir(fs, mpath);
+        if (!hd) continue;
+        dir_entry_t he;
+        while (disk_file_readdir(fs, hd, (char *)&he) > 0) {
+            const char *hname = he.name;
+            if (hname[0] == '.') continue;
+            char hpath[448];   /* mpath(≤159) + '/' + name(≤255) + NUL */
+            snprintf(hpath, sizeof(hpath), "%s/%s", mpath, hname);
+            void *fd_dir = disk_file_opendir(fs, hpath);
+            if (!fd_dir) continue;
+            dir_entry_t fe;
+            while (disk_file_readdir(fs, fd_dir, (char *)&fe) > 0) {
+                const char *fname = fe.name;
+                if (fname[0] == '.') continue;
+                size_t fl = strlen(fname);
+                if (fl < 6 || strcmp(fname + fl - 5, ".json") != 0) continue;
+                if (strncmp(fname, "cap_", 4) != 0) continue;
+                char idbuf[64];
+                size_t copy = fl - 5; if (copy >= 63) copy = 63;
+                memcpy(idbuf, fname, copy); idbuf[copy] = 0;
+
+                char jpath[704];   /* hpath(≤447) + '/' + name(≤255) + NUL */
+                snprintf(jpath, sizeof(jpath), "%s/%s", hpath, fname);
+                cJSON *meta = NULL;
+                if (parse_meta_file(fs, jpath, &meta) != AICAM_OK) continue;
+                uint8_t state = RECORD_STATE_PENDING;
+                cJSON *t = cJSON_GetObjectItem(meta, "state");
+                if (t) state = (uint8_t)t->valueint;
+                uint32_t ts = 0;
+                t = cJSON_GetObjectItem(meta, "timestamp");
+                if (t) ts = (uint32_t)t->valuedouble;
+                uint32_t size = 0;
+                t = cJSON_GetObjectItem(meta, "size");
+                if (t) size = (uint32_t)t->valueint;
+                cJSON_Delete(meta);
+                (void)manifest_append(fs, idbuf, state, ts, size);
+            }
+            disk_file_closedir(fs, fd_dir);
+        }
+        disk_file_closedir(fs, hd);
+    }
+    g_count_cache_dirty = true;
+    return AICAM_OK;
+}
+
+/* One-time migration: the id field used to be 20 bytes, which truncated the
+ * last seq digit of "cap_<ts>_<seq>" ids - every .idx entry pointed at a
+ * non-existent file. Now it's 24 bytes (36-byte entries). Old 32-byte .idx
+ * files are unreadable correctly (and 3168 is divisible by both 32 and 36, so
+ * a size-modulo check can't detect them). Use a sentinel: if absent, delete
+ * all *.idx so rebuild_index recreates them from the .json files (which always
+ * held the correct full ids). Runs once. */
+static void migrate_idx_format_if_needed(FS_Type_t fs)
+{
+    if (fs == FS_MAX) return;
+    char spath[64];
+    snprintf(spath, sizeof(spath), "%s/.v36", CAPTURES_DIR_INDEX);
+    struct stat st = {0};
+    if (disk_file_stat(fs, spath, &st) == 0) return;  /* already migrated */
+
+    LOG_SVC_INFO("upload: migrating index format (old 32B → 36B entries)");
+    void *dd = disk_file_opendir(fs, CAPTURES_DIR_INDEX);
+    if (dd) {
         dir_entry_t e;
         while (disk_file_readdir(fs, dd, (char *)&e) > 0) {
             const char *name = e.name;
             if (name[0] == '.') continue;
             size_t nlen = strlen(name);
-            if (nlen < 6 || strcmp(name + nlen - 5, ".json") != 0) continue;
-            if (strncmp(name, "cap_", 4) != 0) continue;
-            char idbuf[64];
-            size_t copy = nlen - 5; if (copy >= 63) copy = 63;
-            memcpy(idbuf, name, copy); idbuf[copy] = 0;
-            unsigned long rts = ts_from_id(idbuf);
-            if (rts != 0) {
-                if (from_ts > 0 && rts < from_ts) continue;
-                if (to_ts != UINT64_MAX && rts > to_ts) continue;
+            if (nlen > 4 && strcmp(name + nlen - 4, ".idx") == 0) {
+                char path[288];
+                snprintf(path, sizeof(path), "%s/%s", CAPTURES_DIR_INDEX, name);
+                (void)disk_file_remove(fs, path);
             }
-            day_count++;
         }
         disk_file_closedir(fs, dd);
-
-        if (day_count == 0) continue;
-
-        /* Count mode: done with this dir */
-        if (fn == NULL) { total += day_count; continue; }
-
-        /* ---- Pass 2: collect matching ids into a per-day array ---- */
-        char (*day_ids)[64] = (char (*)[64])buffer_calloc(day_count, 64);
-        if (!day_ids) continue;
-        int j = 0;
-        dd = disk_file_opendir(fs, subpath);
-        if (dd) {
-            while (disk_file_readdir(fs, dd, (char *)&e) > 0 && j < day_count) {
-                const char *name = e.name;
-                if (name[0] == '.') continue;
-                size_t nlen = strlen(name);
-                if (nlen < 6 || strcmp(name + nlen - 5, ".json") != 0) continue;
-                if (strncmp(name, "cap_", 4) != 0) continue;
-                char idbuf[64];
-                size_t copy = nlen - 5; if (copy >= 63) copy = 63;
-                memcpy(idbuf, name, copy); idbuf[copy] = 0;
-                unsigned long rts = ts_from_id(idbuf);
-                if (rts != 0) {
-                    if (from_ts > 0 && rts < from_ts) continue;
-                    if (to_ts != UINT64_MAX && rts > to_ts) continue;
-                }
-                memcpy(day_ids[j], idbuf, copy + 1);
-                j++;
-            }
-            disk_file_closedir(fs, dd);
-        }
-        day_count = j;
-        if (day_count == 0) { buffer_free(day_ids); continue; }
-
-        /* Sort ascending by id string — lexicographic = chronological for
-         * "cap_<zero-padded-ts>_<zero-padded-seq>". littlefs readdir order is
-         * NOT guaranteed chronological (entries can move during compaction),
-         * so we must sort explicitly. Insertion sort (day_count is typically
-         * small, bounded by one day's captures). */
-        for (int a = 1; a < day_count; a++) {
-            char tmp[64];
-            memcpy(tmp, day_ids[a], 64);
-            int b = a - 1;
-            while (b >= 0 && strcmp(day_ids[b], tmp) > 0) {
-                memcpy(day_ids[b+1], day_ids[b], 64);
-                b--;
-            }
-            memcpy(day_ids[b+1], tmp, 64);
-        }
-        /* For desc (newest-first), reverse within the day. Date dirs are
-         * already reversed above, so the overall order is newest-date /
-         * newest-record first. */
-        if (sort_desc) {
-            for (int a = 0; a < day_count / 2; a++) {
-                char tmp[64];
-                memcpy(tmp, day_ids[a], 64);
-                memcpy(day_ids[a], day_ids[day_count-1-a], 64);
-                memcpy(day_ids[day_count-1-a], tmp, 64);
-            }
-        }
-
-        /* ---- Feed sorted ids to the page buffer with offset/limit + chunked flush ---- */
-        for (int k = 0; k < day_count; k++) {
-            if (collected < offset) { collected++; continue; }
-            if (limit > 0 && emitted >= limit) break;
-
-            if (day_page < (int)pcap) {
-                memcpy(page_ids[day_page], day_ids[k], 64);
-                day_page++;
-            }
-            collected++;
-            emitted++;
-
-            if (day_page >= (int)pcap && (limit == 0 || emitted < limit)) {
-                for (int m = 0; m < day_page; m++) {
-                    if (fn(fs, page_ids[m], user) != AICAM_OK) {
-                        buffer_free(day_ids); buffer_free(page_ids); buffer_free(dates);
-                        return (int)emitted;
-                    }
-                }
-                day_page = 0;
-            }
-        }
-        buffer_free(day_ids);
-
-        /* flush remaining buffered ids for this day */
-        if (day_page > 0) {
-            for (int m = 0; m < day_page; m++) {
-                if (fn(fs, page_ids[m], user) != AICAM_OK) {
-                    buffer_free(page_ids); buffer_free(dates);
-                    return (int)emitted;
-                }
-            }
-            day_page = 0;
-        }
-        if (limit > 0 && emitted >= limit) break;
     }
-
-    buffer_free(page_ids);
-    buffer_free(dates);
-    return fn ? (int)emitted : total;
+    /* Create the sentinel so this never runs again. */
+    void *fd = disk_file_fopen(fs, spath, "w");
+    if (fd) { (void)disk_file_fwrite(fs, fd, (const uint8_t *)"v36", 3); disk_file_fclose(fs, fd); }
 }
 
-static uint32_t count_in_dir(FS_Type_t fs, const char *dir)
+/* At init: if /captures/index has no .idx files but /captures/meta has records,
+ * the manifest is missing - rebuild it once. Cheap when both are empty (fresh
+ * volume): two opendirs that return immediately. */
+static void rebuild_index_if_needed(FS_Type_t fs)
 {
-    if (fs == FS_MAX) return 0;
-    uint64_t tc = rtc_get_uptime_ms();
-    uint32_t n = (uint32_t)iterate_records(fs, dir, 0, 0, 0, UINT64_MAX, AICAM_FALSE, NULL, NULL);
-    uint64_t dt = rtc_get_uptime_ms() - tc;
-    if (dt > 5) {  /* only log if suspiciously slow (>5ms) */
-        UPLOAD_LOG("count_in_dir(%s)=%u time=%lu ms\r\n", dir, (unsigned)n, (unsigned long)dt);
+    if (fs == FS_MAX) return;
+    migrate_idx_format_if_needed(fs);
+    int idx_count = 0;
+    void *dd = disk_file_opendir(fs, CAPTURES_DIR_INDEX);
+    if (dd) {
+        dir_entry_t e;
+        while (disk_file_readdir(fs, dd, (char *)&e) > 0) {
+            const char *name = e.name;
+            if (name[0] == '.') continue;
+            size_t nlen = strlen(name);
+            if (nlen == 14 && strcmp(name + 10, ".idx") == 0) {
+                idx_count++;
+                if (idx_count > 0) break;  /* one is enough to skip rebuild */
+            }
+        }
+        disk_file_closedir(fs, dd);
     }
-    return n;
+    if (idx_count > 0) return;  /* manifest present - trust it */
+
+    int meta_count = 0;
+    dd = disk_file_opendir(fs, CAPTURES_DIR_META);
+    if (dd) {
+        dir_entry_t e;
+        while (disk_file_readdir(fs, dd, (char *)&e) > 0) {
+            if (e.name[0] == '.') continue;
+            meta_count++;
+            if (meta_count > 0) break;
+        }
+        disk_file_closedir(fs, dd);
+    }
+    if (meta_count == 0) return;  /* fresh volume - nothing to rebuild */
+
+    LOG_SVC_INFO("upload: manifest missing, rebuilding index from meta/");
+    rebuild_index(fs);
 }
 
 /* ==================== Cleanup / wrap-around ==================== */
@@ -938,27 +1305,31 @@ typedef struct {
     uint64_t target_freed;
     uint64_t freed_so_far;
     aicam_bool_t enough;
+    aicam_bool_t delete_failed;  /* a remove failed mid-way → FS likely corrupt */
+    uint64_t deadline_ms;   /* rtc uptime ms; stop deleting past this */
 } cleanup_ctx_t;
 
 static aicam_result_t cleanup_visitor(FS_Type_t fs, const char *id, void *user)
 {
     cleanup_ctx_t *ctx = (cleanup_ctx_t *)user;
     if (ctx->enough) return AICAM_ERROR; /* stop iteration */
+    /* On a full littlefs each remove can trigger compaction (~seconds), so
+     * deleting many records to free space can hang the wake. Bound it. */
+    if (ctx->deadline_ms && rtc_get_uptime_ms() >= ctx->deadline_ms) {
+        return AICAM_ERROR; /* stop iteration - out of budget */
+    }
 
-    /* Approximate freed size = sum of primary + inference + ai. We don't bother
-       reading stat for accuracy; the loop terminates by free-space recheck. */
-    char path[128];
-    struct stat st;
+    /* delete_record_files reports the CONTENT bytes actually freed (only counts
+     * successful removes). That's a lower bound on blocks freed (littlefs per-
+     * file overhead is extra), so accumulating it to target_freed is a safe
+     * stop condition - no need to re-probe free space with lfs_fs_size.
+     * If it returns error, a remove failed (FS likely corrupt) - stop the whole
+     * cleanup; continuing would just fail on every other file too. */
     uint64_t freed = 0;
-
-    path_for_data(path, sizeof(path), id, 'p');
-    if (disk_file_stat(fs, path, &st) == 0) freed += st.st_size;
-    path_for_data(path, sizeof(path), id, 'i');
-    if (disk_file_stat(fs, path, &st) == 0) freed += st.st_size;
-    path_for_data(path, sizeof(path), id, 'a');
-    if (disk_file_stat(fs, path, &st) == 0) freed += st.st_size;
-
-    delete_record_files(fs, id, ctx->state);
+    if (delete_record_files(fs, id, ctx->state, "cleanup_for_space", &freed) != AICAM_OK) {
+        ctx->delete_failed = AICAM_TRUE;
+        return AICAM_ERROR;  /* stop iteration */
+    }
 
     ctx->freed_so_far += freed;
     if (ctx->freed_so_far >= ctx->target_freed) ctx->enough = AICAM_TRUE;
@@ -972,30 +1343,30 @@ static aicam_result_t cleanup_for_space(FS_Type_t fs, uint64_t need_bytes)
         RECORD_STATE_SENT, RECORD_STATE_LOCAL, RECORD_STATE_FAILED, RECORD_STATE_PENDING
     };
 
-    cleanup_ctx_t ctx = { .fs = fs, .target_freed = need_bytes };
+    cleanup_ctx_t ctx = { .fs = fs, .target_freed = need_bytes,
+                          .deadline_ms = rtc_get_uptime_ms() + CLEANUP_MAX_MS };
     for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
         ctx.state = order[i];
         /* Oldest date first (sort_desc=false) so wrap policy evicts the
          * oldest records first. limit=0 = unlimited (chunked flush inside
          * iterate keeps memory bounded); visitor stops via return code. */
-        iterate_records(fs, state_dir(order[i]), 0, 0,
+        iterate_records(fs, order[i], 0, 0,
                         0, UINT64_MAX, AICAM_FALSE,
                         cleanup_visitor, &ctx);
         if (ctx.enough) break;
-
-        /* Re-check actual free space — visitor's estimate is approximate */
-        uint64_t free_bytes = 0, total = 0;
-        if (get_storage_free_bytes(fs, &free_bytes, &total) == AICAM_OK &&
-            free_bytes >= need_bytes + CLEANUP_HEADROOM_BYTES) {
-            return AICAM_OK;
-        }
+        if (ctx.delete_failed) break;  /* FS corrupt - stop the whole cleanup */
+        /* No lfs_fs_size re-check here. freed_so_far counts only bytes from
+         * files actually removed (a lower bound on blocks freed - littlefs
+         * per-file overhead is extra), so reaching target_freed by accumulation
+         * guarantees the space is free. This avoids a full-FS traverse
+         * (lfs_fs_size, ~120ms+ and fails on a corrupt FS) on every state pass,
+         * and avoids the lfs_fs_size-failure case entirely. */
     }
-    uint64_t free_bytes = 0, total = 0;
-    if (get_storage_free_bytes(fs, &free_bytes, &total) == AICAM_OK &&
-        free_bytes >= need_bytes + CLEANUP_HEADROOM_BYTES) {
-        return AICAM_OK;
+    if (ctx.delete_failed) {
+        LOG_SVC_ERROR("cleanup_for_space: delete failed - FS may be corrupt, aborting");
+        return AICAM_ERROR;
     }
-    return AICAM_ERROR;
+    return ctx.enough ? AICAM_OK : AICAM_ERROR;
 }
 
 /* Drop sent records older than keep_sent_hours. */
@@ -1007,11 +1378,15 @@ typedef struct {
 static aicam_result_t purge_visitor(FS_Type_t fs, const char *id, void *user)
 {
     purge_ctx_t *ctx = (purge_ctx_t *)user;
-    /* id format: cap_<ts>_<seq> — parse the timestamp portion */
+    /* id format: cap_<ts>_<seq> - parse the timestamp portion */
     unsigned long ts = 0;
     if (sscanf(id, "cap_%lu_", &ts) != 1) return AICAM_OK;
     if (ts < ctx->cutoff_ts) {
-        delete_record_files(fs, id, RECORD_STATE_SENT);
+        /* Stop purge on FS error (remove failed → likely corrupt); continuing
+         * would just fail on every other record too. */
+        if (delete_record_files(fs, id, RECORD_STATE_SENT, "purge_old_sent", NULL) != AICAM_OK) {
+            return AICAM_ERROR;
+        }
     }
     return AICAM_OK;
 }
@@ -1026,7 +1401,7 @@ static aicam_result_t purge_old_sent(FS_Type_t fs)
      * (no readdir of dirs that can't contain purgeable records). */
     uint64_t cutoff_ts = (now > cutoff_secs) ? (now - cutoff_secs) : now;
     purge_ctx_t ctx = { .fs = fs, .cutoff_ts = cutoff_ts };
-    iterate_records(fs, CAPTURES_DIR_SENT, 0, 0,
+    iterate_records(fs, RECORD_STATE_SENT, 0, 0,
                     0, cutoff_ts, AICAM_FALSE,
                     purge_visitor, &ctx);
     return AICAM_OK;
@@ -1048,7 +1423,7 @@ static aicam_result_t record_load(FS_Type_t fs, const char *id,
     *out_meta = NULL; *out_jpeg = NULL; *out_jpeg_size = 0;
 
     char meta_path[128];
-    path_for_record(meta_path, sizeof(meta_path), CAPTURES_DIR_PENDING, id);
+    path_for_meta(meta_path, sizeof(meta_path), id);
     if (parse_meta_file(fs, meta_path, out_meta) != AICAM_OK) return AICAM_ERROR;
 
     char img_path[128];
@@ -1096,7 +1471,7 @@ static aicam_result_t record_load(FS_Type_t fs, const char *id,
 static void record_mark_failed(FS_Type_t fs, const char *id, const char *err)
 {
     char meta_path[128];
-    path_for_record(meta_path, sizeof(meta_path), CAPTURES_DIR_PENDING, id);
+    path_for_meta(meta_path, sizeof(meta_path), id);
     cJSON *meta = NULL;
     if (parse_meta_file(fs, meta_path, &meta) != AICAM_OK) return;
 
@@ -1109,7 +1484,16 @@ static void record_mark_failed(FS_Type_t fs, const char *id, const char *err)
 
     char *str = cJSON_PrintUnformatted(meta);
     if (str) {
-        write_file(fs, meta_path, (const uint8_t *)str, (uint32_t)strlen(str));
+        /* Temp + atomic rename so a power cut mid-rewrite leaves the prior
+         * .json intact instead of a truncated file (which would make the
+         * record unloadable but still listed as PENDING). */
+        char tmp_path[136];
+        snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", meta_path);
+        if (write_file(fs, tmp_path, (const uint8_t *)str, (uint32_t)strlen(str)) == AICAM_OK) {
+            if (disk_file_rename(fs, tmp_path, meta_path) != 0) {
+                (void)disk_file_remove(fs, tmp_path);
+            }
+        }
         cJSON_free(str);
     }
     cJSON_Delete(meta);
@@ -1121,7 +1505,7 @@ static void record_mark_failed(FS_Type_t fs, const char *id, const char *err)
 
 /* MQTT pipeline publish: load + publish (no ack wait). On success returns
  * AICAM_OK and *out_msg_id = the MQTT packet id. On failure bumps retry and
- * returns the error. Caller frees nothing — jpeg is freed internally. */
+ * returns the error. Caller frees nothing - jpeg is freed internally. */
 static aicam_result_t record_publish_mqtt(FS_Type_t fs, const char *id, int *out_msg_id)
 {
     if (out_msg_id) *out_msg_id = -1;
@@ -1214,7 +1598,7 @@ static aicam_result_t upload_one_record_webhook(FS_Type_t fs, const char *id)
 static aicam_result_t upload_one_record(FS_Type_t fs, const char *id)
 {
     char meta_path[128];
-    path_for_record(meta_path, sizeof(meta_path), CAPTURES_DIR_PENDING, id);
+    path_for_meta(meta_path, sizeof(meta_path), id);
 
     cJSON *meta = NULL;
     if (parse_meta_file(fs, meta_path, &meta) != AICAM_OK) return AICAM_ERROR;
@@ -1262,7 +1646,7 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id)
     if (proto == UPLOAD_PROTO_MQTT) {
         /* INSTANT mode may fire before the 4G/WiFi link + MQTT broker
          * connection are fully established. Wait (up to a budget) instead
-         * of failing immediately — the record is already persisted to
+         * of failing immediately - the record is already persisted to
          * pending/ and we'd rather get it out now than leave a retry
          * backlog. Matches the 40 s timeout historically used by
          * system_service for the same purpose.
@@ -1297,7 +1681,7 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id)
                 rc = mqtt_service_publish_image_chunked(NULL, jpeg, m.size, &m, NULL, 100 * 1024);
             }
             if (rc >= 0) {
-                /* publish_image_with_ai just queues the message — wait for the
+                /* publish_image_with_ai just queues the message - wait for the
                  * MQTT puback so we know the broker actually received it.
                  * Without this, the last record of a flush pass can be lost
                  * when we sleep and tear down the network immediately after
@@ -1316,7 +1700,7 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id)
             result = AICAM_ERROR_UNAVAILABLE;
         }
     } else {
-        /* Webhook path — keep MVP simple: call existing async push and wait. */
+        /* Webhook path - keep MVP simple: call existing async push and wait. */
         if (webhook_service_is_enabled()) {
             /* webhook task takes ownership of the buffer, allocate a fresh copy */
             uint8_t *copy = (uint8_t *)buffer_calloc(1, m.size);
@@ -1358,12 +1742,21 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id)
     /* Persist updated meta */
     char *str = cJSON_PrintUnformatted(meta);
     if (str) {
-        write_file(fs, meta_path, (const uint8_t *)str, (uint32_t)strlen(str));
+        /* Temp + atomic rename so a power cut mid-rewrite leaves the prior
+         * .json intact instead of a truncated file (which would make the
+         * record unloadable but still listed as PENDING). */
+        char tmp_path[136];
+        snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", meta_path);
+        if (write_file(fs, tmp_path, (const uint8_t *)str, (uint32_t)strlen(str)) == AICAM_OK) {
+            if (disk_file_rename(fs, tmp_path, meta_path) != 0) {
+                (void)disk_file_remove(fs, tmp_path);
+            }
+        }
         cJSON_free(str);
     }
     cJSON_Delete(meta);
 
-    /* 0 = unlimited retries — never promote to failed/ */
+    /* 0 = unlimited retries - never promote to failed/ */
     if (g_up.cfg.retry_max_attempts > 0 && retry >= g_up.cfg.retry_max_attempts) {
         return move_record(fs, id, RECORD_STATE_PENDING, RECORD_STATE_FAILED);
     }
@@ -1379,8 +1772,15 @@ typedef struct {
     int       failures;
 } flush_ctx_t;
 
+/* One in-flight (published-but-unacked) record in the sliding window. */
+typedef struct {
+    char     id[64];
+    int      msg_id;
+    uint8_t  used;
+} flush_inflight_t;
+
 /* Visitor: collect record ids into an array. Used by do_flush_pass to snapshot
- * pending ids before publishing — iterate_records traverses date subdirs
+ * pending ids before publishing - iterate_records traverses date subdirs
  * (direct readdir of /captures/pending only returns date dirs, not .json). */
 typedef struct { char (*ids)[64]; uint32_t n; uint32_t cap; } collect_ctx_t;
 static aicam_result_t collect_visitor(FS_Type_t fs, const char *id, void *user)
@@ -1404,7 +1804,7 @@ static aicam_result_t flush_visitor(FS_Type_t fs, const char *id, void *user)
 }
 
 /* Check whether the configured upload channel is currently reachable.
- * We only sweep pending/ when this returns true — retrying with the network
+ * We only sweep pending/ when this returns true - retrying with the network
  * down just burns IO and battery for no gain. */
 static aicam_bool_t upload_channel_ready(void)
 {
@@ -1413,6 +1813,39 @@ static aicam_bool_t upload_channel_ready(void)
     }
     /* MQTT: need both the service running and an active broker connection */
     return (mqtt_service_is_running() && mqtt_service_is_connected()) ? AICAM_TRUE : AICAM_FALSE;
+}
+
+/* Self-heal: if a record's metadata .json is gone (deleted externally, lost
+ * after a partial write, or a stale index entry), the manifest's PENDING entry
+ * is unreachable - the flush pass would retry it forever and fail at every
+ * load. Tombstone it so counts/lists exclude it and the loop moves on. Returns
+ * true if the record was healed (missing). */
+static bool record_self_heal_if_missing(FS_Type_t fs, const char *id)
+{
+    char meta_path[128];
+    path_for_meta(meta_path, sizeof(meta_path), id);
+    struct stat st = {0};
+    if (disk_file_stat(fs, meta_path, &st) == 0) return false;  /* meta exists */
+
+    /* Diagnose the loss so we can tell apart "dir gone" vs "json selectively
+     * lost" vs "fully deleted": check the parent dir and the primary image. */
+    char pri_path[128];
+    path_for_data(pri_path, sizeof(pri_path), id, 'p');
+    bool pri_exists = (disk_file_stat(fs, pri_path, &st) == 0);
+    /* parent dir /captures/meta/<date>/<hour> */
+    char dir_path[96];
+    {
+        char date[16], hour[8];
+        date_dir_from_id(id, date, sizeof(date));
+        hour_dir_from_id(id, hour, sizeof(hour));
+        snprintf(dir_path, sizeof(dir_path), "%s/%s/%s", CAPTURES_DIR_META, date, hour);
+    }
+    bool dir_exists = (disk_file_stat(fs, dir_path, &st) == 0);
+    LOG_SVC_WARN("upload: record %s meta missing (dir=%d jpg=%d) - tombstoning stale index entry",
+                 id, (int)dir_exists, (int)pri_exists);
+    (void)manifest_append(fs, id, IDX_STATE_DELETED, 0, 0);
+    g_count_cache_dirty = true;
+    return true;
 }
 
 static void do_flush_pass(void)
@@ -1426,11 +1859,10 @@ static void do_flush_pass(void)
     g_up.flush_active = AICAM_TRUE;
     FS_Type_t fs = g_up.active_fs;
 
-    /* Phase 1: collect all pending record ids into an array WITHOUT touching
-     * the directory. FileX's readdir cursor gets corrupted if the directory is
-     * modified (rename/remove) mid-iteration, causing later entries to be
-     * skipped — that's why we previously saw pending=7 but attempts=1. */
-    uint32_t cap = count_in_dir(fs, CAPTURES_DIR_PENDING);
+    /* Phase 1: collect all pending record ids. No count cap - the flush is
+     * bounded by a time deadline (below), not a record count, so it respects
+     * the user's configured batch semantics and adapts to the backlog size. */
+    uint32_t cap = count_state(fs, RECORD_STATE_PENDING);
     if (cap == 0) {
         purge_old_sent(fs);
         return;
@@ -1440,102 +1872,141 @@ static void do_flush_pass(void)
         purge_old_sent(fs);
         return;
     }
-    /* Collect pending ids via iterate_records — it traverses date subdirs
-     * (direct readdir of /captures/pending returns date dirs, not .json files,
-     * so the old approach collected 0 records after the date-subdir refactor). */
+    /* Collect pending ids via iterate_records - it reads the manifest (no
+     * opendir of record directories), collecting current-state PENDING ids. */
     collect_ctx_t cctx = { .ids = ids, .n = 0, .cap = cap };
-    iterate_records(fs, CAPTURES_DIR_PENDING, 0, cap,
+    iterate_records(fs, RECORD_STATE_PENDING, 0, cap,
                     0, UINT64_MAX, AICAM_FALSE,
                     collect_visitor, &cctx);
     uint32_t n = cctx.n;
 
-    /* Phase 2: process each id. Now it's safe to rename/remove — the dir is
-     * closed and we're walking our own snapshot. */
+    /* Deadline scales with the pending count so a small backlog finishes fast
+     * (short wake) and a large backlog gets more time, up to a hard cap. It's a
+     * ceiling, not a target - the flush finishes as soon as all acked. */
+    uint32_t budget_ms = n * FLUSH_PER_RECORD_MS + FLUSH_BASE_MS;
+    if (budget_ms > FLUSH_MAX_BUDGET_MS) budget_ms = FLUSH_MAX_BUDGET_MS;
+    uint64_t deadline = rtc_get_uptime_ms() + budget_ms;
+
     flush_ctx_t ctx = { .fs = fs };
 
     if (g_up.cfg.upload_protocol == UPLOAD_PROTO_MQTT) {
-        /* MQTT pipeline: batch-publish all records (no ack wait), then drain
-         * acks from mqtt_service_get_acked_msg_id and match by msg_id. This
-         * is much faster than serial publish→ack per record, and per-msg_id
-         * tracking means we know exactly which upload failed → retry only
-         * that one next flush. */
-        typedef struct { char id[64]; int msg_id; } pub_entry_t;
-        pub_entry_t *pub = (pub_entry_t *)buffer_calloc(n, sizeof(pub_entry_t));
-        if (pub) {
-            uint32_t n_pub = 0;
-            /* 2a: publish all */
+        /* Sliding window: publish up to W records in flight (pipelined, broker
+         * kept busy), and only block on an ack when the window is full. This
+         * recovers the parallelism of the old batch path while bounding the
+         * published-but-unacked set to W - so a sleep cut can only leave ≤W
+         * records to re-publish (bounded duplicate risk), not the whole batch.
+         * W = the user's configured batch_count (capped), so "批量上传数量"
+         * controls the in-flight parallelism. */
+        uint32_t window = g_up.cfg.batch_count;
+        if (window < 2) window = 2;
+        if (window > FLUSH_WINDOW_MAX) window = FLUSH_WINDOW_MAX;
+
+        flush_inflight_t *inf = (flush_inflight_t *)buffer_calloc(window, sizeof(flush_inflight_t));
+        if (!inf) {
+            /* OOM fallback: serial */
             for (uint32_t i = 0; i < n; i++) {
+                if (rtc_get_uptime_ms() >= deadline) break;
                 ctx.attempts++;
+                if (record_self_heal_if_missing(fs, ids[i])) { ctx.failures++; continue; }
                 int mid = -1;
                 if (record_publish_mqtt(fs, ids[i], &mid) == AICAM_OK) {
-                    snprintf(pub[n_pub].id, sizeof(pub[n_pub].id), "%s", ids[i]);
-                    pub[n_pub].msg_id = mid;
-                    n_pub++;
-                } else {
-                    ctx.failures++;
-                }
+                    int am = 0;
+                    if (mqtt_service_get_acked_msg_id(&am, FLUSH_ACK_TIMEOUT_MS) == AICAM_OK) {
+                        (void)move_record(fs, ids[i], RECORD_STATE_PENDING, RECORD_STATE_SENT);
+                        ctx.successes++;
+                    } else { record_mark_failed(fs, ids[i], "ack_timeout"); ctx.failures++; }
+                } else { ctx.failures++; }
             }
-            /* 2b: drain acks, match by msg_id, move to sent */
-            uint32_t ack_timeout_ms = 10000;  /* per-ack wait; acks usually arrive fast */
-            uint32_t acked = 0;
-            while (acked < n_pub) {
-                int acked_mid = 0;
-                aicam_result_t ar = mqtt_service_get_acked_msg_id(&acked_mid, ack_timeout_ms);
-                if (ar != AICAM_OK) break;   /* no more acks in time */
-                if (acked_mid == -1) {
-                    /* QoS 0: all publishes are considered confirmed */
-                    for (uint32_t i = 0; i < n_pub; i++) {
-                        if (pub[i].id[0] != '\0') {
-                            (void)move_record(fs, pub[i].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
-                            ctx.successes++;
-                            pub[i].id[0] = '\0';
-                            acked++;
+        } else {
+            uint32_t inflight = 0, next = 0;
+            while (next < n || inflight > 0) {
+                bool dlup = (rtc_get_uptime_ms() >= deadline);
+                /* Fill the window while there's room and budget remains. */
+                while (!dlup && inflight < window && next < n) {
+                    ctx.attempts++;
+                    if (record_self_heal_if_missing(fs, ids[next])) { ctx.failures++; next++; dlup = (rtc_get_uptime_ms() >= deadline); continue; }
+                    int mid = -1;
+                    if (record_publish_mqtt(fs, ids[next], &mid) == AICAM_OK) {
+                        for (uint32_t s = 0; s < window; s++) {
+                            if (!inf[s].used) {
+                                snprintf(inf[s].id, sizeof(inf[s].id), "%s", ids[next]);
+                                inf[s].msg_id = mid; inf[s].used = 1; inflight++;
+                                break;
+                            }
+                        }
+                    } else { ctx.failures++; }
+                    next++;
+                    dlup = (rtc_get_uptime_ms() >= deadline);
+                }
+                if (inflight == 0) {  /* nothing in flight: done or deadline */
+                    break;
+                }
+                /* Block on an ack (window full, no more to publish, or draining). */
+                int am = 0;
+                aicam_result_t ar = mqtt_service_get_acked_msg_id(&am, FLUSH_ACK_TIMEOUT_MS);
+                if (ar == AICAM_OK) {
+                    if (am == -1) {  /* QoS 0: all in-flight confirmed */
+                        for (uint32_t s = 0; s < window; s++) {
+                            if (inf[s].used) {
+                                (void)move_record(fs, inf[s].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
+                                ctx.successes++; inf[s].used = 0; inflight--;
+                            }
+                        }
+                    } else {
+                        for (uint32_t s = 0; s < window; s++) {
+                            if (inf[s].used && inf[s].msg_id == am) {
+                                (void)move_record(fs, inf[s].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
+                                ctx.successes++; inf[s].used = 0; inflight--;
+                                break;
+                            }
+                        }
+                    }
+                } else if (dlup) {
+                    /* Budget exhausted - bounded drain (one more ack window) for
+                     * acks that already arrived, then fail the rest so the retry
+                     * budget applies. Duplicates bounded to ≤W records. */
+                    uint64_t ddl = rtc_get_uptime_ms() + FLUSH_ACK_TIMEOUT_MS;
+                    while (inflight > 0) {
+                        uint64_t now = rtc_get_uptime_ms();
+                        if (now >= ddl) break;
+                        int am2 = 0;
+                        if (mqtt_service_get_acked_msg_id(&am2, (uint32_t)(ddl - now)) != AICAM_OK) break;
+                        if (am2 == -1) {
+                            for (uint32_t s = 0; s < window; s++) {
+                                if (inf[s].used) {
+                                    (void)move_record(fs, inf[s].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
+                                    ctx.successes++; inf[s].used = 0; inflight--;
+                                }
+                            }
+                        } else {
+                            for (uint32_t s = 0; s < window; s++) {
+                                if (inf[s].used && inf[s].msg_id == am2) {
+                                    (void)move_record(fs, inf[s].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
+                                    ctx.successes++; inf[s].used = 0; inflight--;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    for (uint32_t s = 0; s < window; s++) {
+                        if (inf[s].used) {
+                            record_mark_failed(fs, inf[s].id, "ack_timeout");
+                            ctx.failures++; inf[s].used = 0; inflight--;
                         }
                     }
                     break;
                 }
-                /* find the published record with this msg_id */
-                for (uint32_t i = 0; i < n_pub; i++) {
-                    if (pub[i].msg_id == acked_mid && pub[i].id[0] != '\0') {
-                        (void)move_record(fs, pub[i].id, RECORD_STATE_PENDING, RECORD_STATE_SENT);
-                        ctx.successes++;
-                        pub[i].id[0] = '\0';  /* consumed */
-                        acked++;
-                        break;
-                    }
-                }
+                /* else: ack timeout but window not full, deadline not hit → loop,
+                 * the fill loop will publish more (pipelining) or re-wait. */
             }
-            /* 2c: published but not acked within timeout → mark failed (retry) */
-            for (uint32_t i = 0; i < n_pub; i++) {
-                if (pub[i].id[0] != '\0') {
-                    record_mark_failed(fs, pub[i].id, "ack_timeout");
-                    ctx.failures++;
-                }
-            }
-            buffer_free(pub);
-        } else {
-            /* OOM fallback: serial */
-            for (uint32_t i = 0; i < n; i++) {
-                ctx.attempts++;
-                int mid = -1;
-                if (record_publish_mqtt(fs, ids[i], &mid) == AICAM_OK) {
-                    int am = 0;
-                    if (mqtt_service_get_acked_msg_id(&am, 10000) == AICAM_OK) {
-                        (void)move_record(fs, ids[i], RECORD_STATE_PENDING, RECORD_STATE_SENT);
-                        ctx.successes++;
-                    } else {
-                        record_mark_failed(fs, ids[i], "ack_timeout");
-                        ctx.failures++;
-                    }
-                } else {
-                    ctx.failures++;
-                }
-            }
+            buffer_free(inf);
         }
     } else {
         /* Webhook: serial (push + wait_pending + move per record) */
         for (uint32_t i = 0; i < n; i++) {
+            if (rtc_get_uptime_ms() >= deadline) break;
             ctx.attempts++;
+            if (record_self_heal_if_missing(fs, ids[i])) { ctx.failures++; continue; }
             if (upload_one_record_webhook(fs, ids[i]) == AICAM_OK) ctx.successes++;
             else ctx.failures++;
         }
@@ -1568,9 +2039,21 @@ static void upload_task(void *arg)
         switch ((upload_event_kind_t)ev) {
         case EV_KICK:
             /* Flush pass is mutex-guarded so it won't race with a synchronous
-             * upload_coordinator_drain() call from the sleep path. */
+             * upload_coordinator_drain() call from the sleep path. Wait for
+             * the channel first - on a BATCH-threshold or scheduled-flush wake,
+             * the network was just brought up async and MQTT may still be
+             * connecting. Without this wait, do_flush_pass sees channel-not-ready
+             * and skips, so the upload never fires. If the service isn't running
+             * (skip_network wake), wait_for_upload_channel returns immediately.
+             *
+             * Set flush_active BEFORE the wait so the sleep path
+             * (wait_upload_before_sleep) knows we're busy and doesn't cut
+             * power mid-wait. */
             if (osMutexAcquire(g_up.mutex, osWaitForever) == osOK) {
-                do_flush_pass();
+                g_up.flush_active = AICAM_TRUE;
+                if (wait_for_upload_channel(30000) == AICAM_OK) {
+                    do_flush_pass();
+                }
                 g_up.flush_active = AICAM_FALSE;
                 osMutexRelease(g_up.mutex);
             }
@@ -1588,7 +2071,7 @@ static void upload_task(void *arg)
             g_up.running = AICAM_FALSE;
             break;
         case EV_DRAIN:
-            /* Handled synchronously by upload_coordinator_drain() — no queue path. */
+            /* Handled synchronously by upload_coordinator_drain() - no queue path. */
             break;
         default: break;
         }
@@ -1604,6 +2087,9 @@ aicam_result_t upload_coordinator_init(void *config)
     uint64_t t0 = rtc_get_uptime_ms();
     memset(&g_up, 0, sizeof(g_up));
     g_up.state = SERVICE_STATE_UNINITIALIZED;
+    /* Restore the persisted storage_full flag so the first capture of this wake
+     * runs proactive cleanup if the volume was full when we slept. */
+    g_up.storage_full = storage_full_load();
 
     g_up.mutex = osMutexNew(NULL);
     if (!g_up.mutex) {
@@ -1628,6 +2114,7 @@ aicam_result_t upload_coordinator_init(void *config)
 
     if (g_up.active_fs != FS_MAX) {
         ensure_dirs_with_space_check(g_up.active_fs);
+        rebuild_index_if_needed(g_up.active_fs);
     }
     uint64_t t4 = rtc_get_uptime_ms();
 
@@ -1658,7 +2145,7 @@ aicam_result_t upload_coordinator_start(void)
     UPLOAD_LOG("osThreadNew returned %p\r\n", (void*)g_up.task_handle);
     if (!g_up.task_handle) {
         g_up.running = AICAM_FALSE;
-        UPLOAD_LOG("start FAILED — osThreadNew returned NULL\r\n");
+        UPLOAD_LOG("start FAILED - osThreadNew returned NULL\r\n");
         return AICAM_ERROR;
     }
     g_up.state = SERVICE_STATE_RUNNING;
@@ -1729,20 +2216,20 @@ aicam_bool_t upload_coordinator_needs_network(void)
 
     /* Counting pending/failed is only needed for the BATCH threshold decision.
      * INSTANT always uploads, LOCAL_ONLY never, SCHEDULED only at the flush
-     * node (wake_scheduler decides) — skip the directory traverses for those
+     * node (wake_scheduler decides) - skip the directory traverses for those
      * modes to cut wake latency. */
     capture_mode_t mode = g_up.cfg.mode;
     uint32_t pending = 0, failed = 0;
     if (mode == CAPTURE_MODE_BATCH) {
-        pending = count_in_dir(g_up.active_fs, CAPTURES_DIR_PENDING);
-        failed  = count_in_dir(g_up.active_fs, CAPTURES_DIR_FAILED);
+        pending = count_state(g_up.active_fs, RECORD_STATE_PENDING);
+        failed  = count_state(g_up.active_fs, RECORD_STATE_FAILED);
     }
     uint64_t tn1 = rtc_get_uptime_ms();
     aicam_bool_t decision = AICAM_TRUE;
 
     switch (mode) {
     case CAPTURE_MODE_LOCAL_ONLY:
-        /* Never uploads — no network needed. */
+        /* Never uploads - no network needed. */
         decision = AICAM_FALSE;
         break;
 
@@ -1754,7 +2241,7 @@ aicam_bool_t upload_coordinator_needs_network(void)
     case CAPTURE_MODE_BATCH:
         /* Bring up network only when this capture would cross the threshold
          * (pending + 1 >= batch_count) or there's a failed backlog to retry.
-         * Otherwise just enqueue and go back to sleep — saves the multi-second
+         * Otherwise just enqueue and go back to sleep - saves the multi-second
          * network bring-up. */
         if (failed > 0) {
             decision = AICAM_TRUE;
@@ -1765,7 +2252,7 @@ aicam_bool_t upload_coordinator_needs_network(void)
 
     case CAPTURE_MODE_SCHEDULED: {
         /* Network ONLY at the scheduled upload-flush node. pending/failed
-         * backlog waits for the next flush node — bringing the network up on
+         * backlog waits for the next flush node - bringing the network up on
          * every capture-only wake just because there's a backlog wastes multi-
          * seconds of bring-up time + battery. A pure capture wake (timer only,
          * no upload node due) just enqueues and sleeps. */
@@ -1795,11 +2282,12 @@ aicam_bool_t upload_coordinator_needs_network(void)
 }
 
 /* Wait for the upload channel (MQTT broker connection or webhook link) to be
- * ready, with fast-fail on all-netifs-failed. Used by drain before flushing —
- * on a wake, wifi is brought up async in service_start, and by the time drain
- * runs (after capture) MQTT may still be connecting. Without this wait,
- * do_flush_pass sees channel-not-ready and skips, so the scheduled upload
- * never fires. Mirrors the wait in upload_one_record/direct_publish_capture. */
+ * ready, with fast-fail on all-netifs-failed. Used by drain AND the upload
+ * task's EV_KICK handler before flushing - on a wake, wifi is brought up async
+ * in service_start, and by the time the flush runs MQTT may still be connecting.
+ * Without this wait, do_flush_pass sees channel-not-ready and skips, so the
+ * upload never fires. If the MQTT/webhook service isn't running at all (e.g.
+ * skip_network_services wake), returns immediately without blocking. */
 static aicam_result_t wait_for_upload_channel(uint32_t timeout_ms)
 {
     if (g_up.cfg.upload_protocol == UPLOAD_PROTO_WEBHOOK) {
@@ -1813,15 +2301,17 @@ static aicam_result_t wait_for_upload_channel(uint32_t timeout_ms)
         }
         return AICAM_OK;
     }
-    /* MQTT */
-    if (mqtt_service_is_running() && mqtt_service_is_connected()) return AICAM_OK;
-    UPLOAD_LOG("drain: MQTT not ready, waiting up to %lu ms...\r\n",
+    /* MQTT: if the service isn't running (skip_network_services), don't wait
+     * - there's no network coming up to wait for. */
+    if (!mqtt_service_is_running()) return AICAM_ERROR_UNAVAILABLE;
+    if (mqtt_service_is_connected()) return AICAM_OK;
+    UPLOAD_LOG("wait_channel: MQTT not ready, waiting up to %lu ms...\r\n",
            (unsigned long)timeout_ms);
     (void)service_wait_for_ready(
         SERVICE_READY_STA | SERVICE_READY_NETIF_ALL_FAILED,
         AICAM_FALSE, timeout_ms);
     if (service_get_ready_flags() & SERVICE_READY_NETIF_ALL_FAILED) {
-        UPLOAD_LOG("drain: all netifs failed, aborting\r\n");
+        UPLOAD_LOG("wait_channel: all netifs failed, aborting\r\n");
         return AICAM_ERROR_UNAVAILABLE;
     }
     if (mqtt_service_is_running()) {
@@ -1841,9 +2331,11 @@ aicam_result_t upload_coordinator_drain(uint32_t timeout_ms)
     if (osMutexAcquire(g_up.mutex, timeout_ms) != osOK) {
         return AICAM_ERROR_TIMEOUT;
     }
-    /* Wait for the channel before flushing — wifi is brought up async and may
-     * still be connecting. Without this, do_flush_pass skips on "channel not
-     * ready" and the scheduled upload is silently dropped. */
+    /* Set flush_active BEFORE the channel wait so the sleep path
+     * (wait_upload_before_sleep) sees we're busy and doesn't cut power
+     * mid-wait. Without this, the upload task could be waiting for MQTT
+     * while the main task sleeps and abandons it. */
+    g_up.flush_active = AICAM_TRUE;
     if (wait_for_upload_channel(timeout_ms) == AICAM_OK) {
         do_flush_pass();
     } else {
@@ -1859,9 +2351,44 @@ aicam_bool_t upload_coordinator_is_flushing(void)
     return g_up.flush_active;
 }
 
+/* Time the current pending backlog needs for a flush pass, so the sleep path
+ * (system_service_wait_upload_before_sleep) can wait an adaptive amount: small
+ * backlog → short wait (short wake), large backlog → longer wait, up to a cap.
+ * Mirrors the deadline computed inside do_flush_pass. Uses the RAM count cache
+ * when fresh to avoid a manifest sweep on the sleep path. */
+uint32_t upload_coordinator_get_flush_budget_ms(void)
+{
+    if (!g_up.initialized || g_up.active_fs == FS_MAX) return 0;
+    uint32_t pending = 0;
+    if (!g_count_cache_dirty) {
+        pending = g_count_cache[RECORD_STATE_PENDING];
+    } else {
+        /* Cache cold - compute from the manifest (one sweep), then it's cached. */
+        manifest_counts_all(g_up.active_fs, g_count_cache);
+        g_count_cache_dirty = false;
+        pending = g_count_cache[RECORD_STATE_PENDING];
+    }
+    uint32_t budget = pending * FLUSH_PER_RECORD_MS + FLUSH_BASE_MS;
+    if (budget > FLUSH_MAX_BUDGET_MS) budget = FLUSH_MAX_BUDGET_MS;
+    return budget;
+}
+
 aicam_result_t upload_coordinator_reload_config(void)
 {
     if (!g_up.initialized) return AICAM_ERROR_NOT_INITIALIZED;
+    /* A reload (storage switch, or post-format re-init) may change which
+     * records are visible - invalidate the RAM count cache so get_status
+     * rebuilds from the manifest on next query. Also invalidate the
+     * "dirs already created" cache: after a format the captures tree was
+     * wiped, so ensure_dirs() must recreate it on the next call (otherwise
+     * it would skip and mkdir of /captures/meta/<date> would fail with
+     * LFS_ERR_NOENT - missing parent). */
+    g_count_cache_dirty = true;
+    s_ensured_fs = FS_MAX;
+    /* A format (or storage switch) clears the volume → not full anymore. Clear
+     * the persisted flag too, so the next capture doesn't pointlessly run
+     * proactive cleanup on the freshly-empty FS. */
+    storage_full_set(AICAM_FALSE);
     if (!g_up.running) {
         /* Apply synchronously when worker isn't running */
         json_config_get_capture_upload_config(&g_up.cfg);
@@ -1956,7 +2483,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
 
     /* Build record id: cap_<timestamp>_<seq>, both zero-padded for correct
      * lexicographic ordering (cleanup deletes oldest by filename sort).
-     * Avoid PRIu64 — on this toolchain it prints "lu" literally; %lu with
+     * Avoid PRIu64 - on this toolchain it prints "lu" literally; %lu with
      * (unsigned long) is safe for timestamps < 2038. */
     uint64_t ts = meta_in->timestamp ? meta_in->timestamp : now_unix();
     uint32_t seq = next_seq();
@@ -1973,7 +2500,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
 
     /* All persistent modes (LOCAL_ONLY / BATCH / SCHEDULED / INSTANT-with-storage)
      * need a real FS and a space budget check. We MUST check free space BEFORE
-     * writing — otherwise littlefs on a full flash will trigger GC/compact
+     * writing - otherwise littlefs on a full flash will trigger GC/compact
      * internally and hang for tens of seconds trying to make room. */
     if (fs == FS_MAX) {
         return AICAM_ERROR_INVALID_PARAM;
@@ -1992,52 +2519,55 @@ aicam_result_t upload_coordinator_enqueue_capture(
         }
     }
 
-    {
-        uint64_t need = (uint64_t)jpeg_size + (uint64_t)inference_jpeg_size +
-                        (ai_result_json ? strlen(ai_result_json) : 0) + 2048u;
-        uint64_t free_bytes = 0, total = 0;
-        if (get_storage_free_bytes(fs, &free_bytes, &total) == AICAM_OK &&
-            free_bytes < need + CLEANUP_HEADROOM_BYTES) {
-            if (g_up.cfg.policy == STORAGE_POLICY_WRAP) {
-                if (cleanup_for_space(fs, need + CLEANUP_HEADROOM_BYTES) != AICAM_OK) {
-                    UPLOAD_LOG("storage full (free=%luKB need=%luKB)\r\n",
-                           (unsigned long)(free_bytes / 1024),
-                           (unsigned long)((need + CLEANUP_HEADROOM_BYTES) / 1024));
-                    g_up.storage_full = AICAM_TRUE;
-                    /* INSTANT = 即拍即传: even with no space to persist, the JPEG
-                     * is still in RAM — attempt a direct upload rather than dropping
-                     * the capture. Failure is final (no retry without persistence). */
-                    if (mode == CAPTURE_MODE_INSTANT) {
-                        UPLOAD_LOG("storage full — INSTANT fallback to direct publish\r\n");
-                        return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in);
-                    }
-                    return AICAM_ERROR_NO_MEMORY;
-                }
-            } else {
-                UPLOAD_LOG("storage full (STOP policy)\r\n");
-                g_up.storage_full = AICAM_TRUE;
-                if (mode == CAPTURE_MODE_INSTANT) {
-                    UPLOAD_LOG("storage full (STOP) — INSTANT fallback to direct publish\r\n");
-                    return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in);
-                }
-                return AICAM_ERROR_NO_MEMORY;
-            }
-        }
-        g_up.storage_full = AICAM_FALSE;
+    /* Proactive cleanup: if a PRIOR write failed (storage_full flag set), free
+     * space BEFORE writing this capture. This avoids the lfs_file_write-on-full
+     * hang (littlefs GC/compact can block tens of seconds on a near-full FS)
+     * and the write-fail→cleanup→retry cycle. cleanup_for_space does NOT call
+     * lfs_fs_size (it accumulates deleted bytes), so this is cheap and bounded
+     * by CLEANUP_MAX_MS. The flag is cleared once a write succeeds. */
+    uint64_t need = (uint64_t)jpeg_size + (uint64_t)inference_jpeg_size +
+                    (ai_result_json ? strlen(ai_result_json) : 0) + 2048u;
+    if (g_up.storage_full && g_up.cfg.policy == STORAGE_POLICY_WRAP) {
+        UPLOAD_LOG("storage_full flag set - proactive cleanup before write\r\n");
+        (void)cleanup_for_space(fs, need + CLEANUP_HEADROOM_BYTES);
     }
 
-    /* LOCAL_ONLY → persist into local/, no upload (space already checked above) */
-    if (mode == CAPTURE_MODE_LOCAL_ONLY) {
-        return persist_record(fs, id, jpeg_buffer, jpeg_size,
-                              inference_jpeg, inference_jpeg_size,
-                              ai_result_json, meta_in, trigger, wakeup_src,
-                              RECORD_STATE_LOCAL);
-    }
+    /* Try to persist. On failure (likely FS full), do WRAP cleanup + retry
+     * (reactive fallback for the first failure that sets storage_full). No
+     * proactive lfs_fs_size traverse on the normal hot path - it's a full-FS
+     * traverse that grows with file count and hit seconds/watchdog with
+     * thousands of files. */
     aicam_result_t pr = persist_record(fs, id, jpeg_buffer, jpeg_size,
                                         inference_jpeg, inference_jpeg_size,
                                         ai_result_json, meta_in, trigger, wakeup_src,
-                                        RECORD_STATE_PENDING);
-    if (pr != AICAM_OK) return pr;
+                                        (mode == CAPTURE_MODE_LOCAL_ONLY)
+                                            ? RECORD_STATE_LOCAL : RECORD_STATE_PENDING);
+    if (pr != AICAM_OK) {
+        UPLOAD_LOG("persist failed (%d), trying WRAP cleanup\r\n", (int)pr);
+        if (g_up.cfg.policy == STORAGE_POLICY_WRAP &&
+            cleanup_for_space(fs, need + CLEANUP_HEADROOM_BYTES) == AICAM_OK) {
+            pr = persist_record(fs, id, jpeg_buffer, jpeg_size,
+                                inference_jpeg, inference_jpeg_size,
+                                ai_result_json, meta_in, trigger, wakeup_src,
+                                (mode == CAPTURE_MODE_LOCAL_ONLY)
+                                    ? RECORD_STATE_LOCAL : RECORD_STATE_PENDING);
+        }
+        if (pr != AICAM_OK) {
+            storage_full_set(AICAM_TRUE);
+            /* INSTANT = 即拍即传: JPEG still in RAM - attempt direct upload. */
+            if (mode == CAPTURE_MODE_INSTANT) {
+                UPLOAD_LOG("storage full - INSTANT fallback to direct publish\r\n");
+                return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in);
+            }
+            return AICAM_ERROR_NO_MEMORY;
+        }
+    }
+    storage_full_set(AICAM_FALSE);
+
+    /* LOCAL_ONLY → persist into local/, no upload. */
+    if (mode == CAPTURE_MODE_LOCAL_ONLY) {
+        return AICAM_OK;
+    }
 
     UPLOAD_LOG("enqueue id=%s mode=%d storage=%d fs=%d\r\n",
            id, mode, g_up.cfg.storage, fs);
@@ -2045,7 +2575,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
     /* Dispatch */
     switch (mode) {
     case CAPTURE_MODE_INSTANT:
-        /* Sync attempt. Only on success do we kick a sweep of pending/ —
+        /* Sync attempt. Only on success do we kick a sweep of pending/ -
          * a successful upload means the channel is up, so earlier-failed
          * records are worth retrying now. On failure the channel is down
          * and a sweep would just waste IO; leave pending/ untouched. */
@@ -2059,7 +2589,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
         return AICAM_OK;
 
     case CAPTURE_MODE_BATCH: {
-        uint32_t pending = count_in_dir(fs, CAPTURES_DIR_PENDING);
+        uint32_t pending = count_state(fs, RECORD_STATE_PENDING);
         UPLOAD_LOG("BATCH pending=%u batch_count=%u\r\n",
                (unsigned)pending, (unsigned)g_up.cfg.batch_count);
         if (pending >= g_up.cfg.batch_count) {
@@ -2090,10 +2620,17 @@ aicam_result_t upload_coordinator_get_status(upload_coordinator_status_t *out)
 
     FS_Type_t fs = g_up.active_fs;
     if (fs != FS_MAX) {
-        out->pending_count = count_in_dir(fs, CAPTURES_DIR_PENDING);
-        out->sent_count    = count_in_dir(fs, CAPTURES_DIR_SENT);
-        out->failed_count  = count_in_dir(fs, CAPTURES_DIR_FAILED);
-        out->local_count   = count_in_dir(fs, CAPTURES_DIR_LOCAL);
+        /* Use the RAM count cache; rebuild from the manifest only when dirty
+         * (after a create/state-change/delete, or on first query after wake).
+         * Avoids a full manifest sweep on every web status poll. */
+        if (g_count_cache_dirty) {
+            manifest_counts_all(fs, g_count_cache);
+            g_count_cache_dirty = false;
+        }
+        out->pending_count = g_count_cache[RECORD_STATE_PENDING];
+        out->sent_count    = g_count_cache[RECORD_STATE_SENT];
+        out->failed_count  = g_count_cache[RECORD_STATE_FAILED];
+        out->local_count   = g_count_cache[RECORD_STATE_LOCAL];
         uint64_t free_b = 0, total_b = 0;
         if (get_storage_free_bytes(fs, &free_b, &total_b) == AICAM_OK) {
             out->bytes_used_kb = (total_b - free_b) / 1024u;
@@ -2120,7 +2657,7 @@ static aicam_result_t list_visitor(FS_Type_t fs, const char *id, void *user)
     if (ctx->written >= ctx->max) return AICAM_ERROR;
 
     char path[128];
-    path_for_record(path, sizeof(path), state_dir(ctx->state), id);
+    path_for_meta(path, sizeof(path), id);
     cJSON *meta = NULL;
     if (parse_meta_file(fs, path, &meta) != AICAM_OK) {
         /* Diagnose WHY parse failed: file absent / empty / corrupt content */
@@ -2164,7 +2701,7 @@ int upload_coordinator_list_records(record_state_t filter,
     if (!out || max <= 0 || g_up.active_fs == FS_MAX) return 0;
     list_ctx_t ctx = { .out = out, .max = max, .written = 0, .skipped = 0,
                        .state = filter, .fs = g_up.active_fs };
-    iterate_records(g_up.active_fs, state_dir(filter), offset, limit,
+    iterate_records(g_up.active_fs, filter, offset, limit,
                     from_ts, to_ts, sort_desc, list_visitor, &ctx);
     UPLOAD_LOG("list_records state=%d ok=%d skipped=%d\r\n",
            (int)filter, ctx.written, ctx.skipped);
@@ -2175,8 +2712,9 @@ uint32_t upload_coordinator_count_records(record_state_t filter,
                                           uint64_t from_ts, uint64_t to_ts)
 {
     if (g_up.active_fs == FS_MAX) return 0;
-    /* Count mode: no visitor, no alloc; iterate skips date dirs outside range. */
-    return (uint32_t)iterate_records(g_up.active_fs, state_dir(filter),
+    /* Count mode: no visitor, no alloc; iterate reads manifest files only and
+     * skips date files outside the requested time range. */
+    return (uint32_t)iterate_records(g_up.active_fs, filter,
                                      0, 0, from_ts, to_ts, AICAM_FALSE, NULL, NULL);
 }
 
@@ -2186,7 +2724,7 @@ aicam_result_t upload_coordinator_retry_record(const char *id)
     if (g_up.active_fs == FS_MAX) return AICAM_ERROR_INVALID_PARAM;
 
     char from[128];
-    path_for_record(from, sizeof(from), CAPTURES_DIR_FAILED, id);
+    path_for_meta(from, sizeof(from), id);
     cJSON *meta = NULL;
     if (parse_meta_file(g_up.active_fs, from, &meta) != AICAM_OK) return AICAM_ERROR;
     cJSON_ReplaceItemInObject(meta, "retry_count", cJSON_CreateNumber(0));
@@ -2212,7 +2750,7 @@ int upload_coordinator_retry_all_failed(void)
 {
     if (g_up.active_fs == FS_MAX) return 0;
     retry_all_ctx_t ctx = { .reset = 0, .fs = g_up.active_fs };
-    iterate_records(g_up.active_fs, CAPTURES_DIR_FAILED, 0, 0,
+    iterate_records(g_up.active_fs, RECORD_STATE_FAILED, 0, 0,
                     0, UINT64_MAX, AICAM_FALSE, retry_all_visitor, &ctx);
     return ctx.reset;
 }
@@ -2221,12 +2759,8 @@ aicam_result_t upload_coordinator_delete_record(const char *id)
 {
     if (!id) return AICAM_ERROR_INVALID_PARAM;
     if (g_up.active_fs == FS_MAX) return AICAM_ERROR_INVALID_PARAM;
-    /* Try each state dir — only one should hit */
-    const record_state_t order[] = {
-        RECORD_STATE_PENDING, RECORD_STATE_SENT, RECORD_STATE_FAILED, RECORD_STATE_LOCAL
-    };
-    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
-        delete_record_files(g_up.active_fs, id, order[i]);
-    }
-    return AICAM_OK;
+    /* Paths are state-independent now (state lives in the manifest), so a single
+     * call covers the record regardless of its current state. Returns error if a
+     * remove failed (FS likely corrupt) so the web UI can surface it. */
+    return delete_record_files(g_up.active_fs, id, RECORD_STATE_PENDING, "web_delete", NULL);
 }

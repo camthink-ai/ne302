@@ -12,7 +12,16 @@
 
 static storage_t g_storage = {0};
 static uint8_t old_data[4096] ALIGN_32 = {0};
-static uint8_t storage_tread_stack[1024 * 4] ALIGN_32 IN_PSRAM;
+/* Static buffers for littlefs caches/lookahead — provided via lfs_config so
+ * littlefs doesn't allocate on the stack (which risks overflow with larger
+ * cache sizes). cache_size=1024 → 1KB read+prog caches; lookahead_size=256
+ * → 256-block free-block bitmap (32 bytes). The old config used cache/lookahead
+ * =16 with NULL buffers, causing a full-FS traverse (lfs_fs_traverse) every 16
+ * block allocations → seconds of hang with thousands of files. */
+static uint8_t s_lfs_read_buffer[FS_LFS_CACHE_SIZE] ALIGN_32;
+static uint8_t s_lfs_prog_buffer[FS_LFS_CACHE_SIZE] ALIGN_32;
+static uint8_t s_lfs_lookahead_buffer[FS_LFS_LOOKAHEAD_SIZE / 8];
+static uint8_t storage_tread_stack[1024 * 8] ALIGN_32;
 const osThreadAttr_t storageTask_attributes = {
     .name = "storageTask",
     .priority = (osPriority_t) osPriorityNormal,
@@ -37,12 +46,16 @@ static int mem_block_read(const struct lfs_config *cfg, lfs_block_t block,
 {
     mem_block_dev_t *dev = (mem_block_dev_t *)cfg->context;
     uint32_t addr = dev->start_addr + block * dev->block_size + off;
+    storage_lock();
     XSPI_NOR_DisableMemoryMappedMode();
     if (XSPI_NOR_Read((uint8_t *)buffer, addr, size) != 0) {
         XSPI_NOR_EnableMemoryMappedMode();
         return LFS_ERR_IO;
     }
     XSPI_NOR_EnableMemoryMappedMode();
+    // uint8_t *ptr_addr = (uint8_t *)(addr + FLASH_BASE);
+    // memcpy(buffer, ptr_addr, size);
+    storage_unlock();
     return LFS_ERR_OK;
 }
 
@@ -57,7 +70,8 @@ static int mem_block_prog(const struct lfs_config *cfg, lfs_block_t block,
     if (size > sizeof(old_data)) {
         return LFS_ERR_IO;
     }
-    
+
+    storage_lock();
     XSPI_NOR_DisableMemoryMappedMode();
     if (XSPI_NOR_Read(old_data, addr, size) != 0) {
         ret = LFS_ERR_IO;
@@ -74,6 +88,7 @@ static int mem_block_prog(const struct lfs_config *cfg, lfs_block_t block,
 
 out:
     XSPI_NOR_EnableMemoryMappedMode();
+    storage_unlock();
     return ret;
 }
 
@@ -86,6 +101,8 @@ static int mem_block_erase(const struct lfs_config *cfg, lfs_block_t block)
     if (dev->erase_counts[block] >= dev->max_erase) {
         return LFS_ERR_IO;
     }
+
+    storage_lock();
     XSPI_NOR_DisableMemoryMappedMode();
     uint32_t block_addr = dev->start_addr + block * dev->block_size;
     if (XSPI_NOR_Erase4K(block_addr) != 0) {
@@ -96,6 +113,7 @@ static int mem_block_erase(const struct lfs_config *cfg, lfs_block_t block)
 
 out:
     XSPI_NOR_EnableMemoryMappedMode();
+    storage_unlock();
     return ret;
 }
 
@@ -107,11 +125,14 @@ static int mem_block_sync(const struct lfs_config *cfg)
 static void *storage_lfs_opendir(void *context, const char *path)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
+    if (!sys || !sys->mounted) return NULL;
     LFS_LOCK(sys);
-    if (!sys->mounted) return NULL;
 
     lfs_dir_handle_t *dh = hal_mem_alloc_fast(sizeof(lfs_dir_handle_t));
-    if (!dh) return NULL;
+    if (!dh) {
+        LFS_UNLOCK(sys);
+        return NULL;
+    }
 
     int err = lfs_dir_open(&sys->lfs, &dh->dir, path);
     if (err) {
@@ -158,11 +179,14 @@ static int storage_lfs_closedir(void *context, void *dd)
 static void * storage_lfs_fopen(void *context, const char *path, const char *mode) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
+    if (!sys || !sys->mounted) return NULL;
     LFS_LOCK(sys);
-    if (!sys->mounted) return NULL;
 
     lfs_file_handle_t *fh = hal_mem_alloc_fast(sizeof(lfs_file_handle_t));
-    if (!fh) return NULL;
+    if (!fh) {
+        LFS_UNLOCK(sys); 
+        return NULL;
+    }
 
     int flags = 0;
 
@@ -239,6 +263,7 @@ static int storage_lfs_fwrite(void *context, void *fd, const void *buf, size_t s
 static int storage_lfs_remove(void *context, const char *path) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
+    if (!sys || !sys->mounted) return -1;
     LFS_LOCK(sys);
     int res = lfs_remove(&sys->lfs, path);
     LFS_UNLOCK(sys);
@@ -248,6 +273,7 @@ static int storage_lfs_remove(void *context, const char *path)
 static int storage_lfs_rename(void *context, const char *oldpath, const char *newpath) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
+    if (!sys || !sys->mounted) return -1;
     LFS_LOCK(sys);
     int res = lfs_rename(&sys->lfs, oldpath, newpath);
     LFS_UNLOCK(sys);
@@ -290,7 +316,7 @@ static int storage_lfs_fseek(void *context, void *fd, long offset, int whence)
 static int storage_lfs_stat(void *context, const char *filename, struct stat *st)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys) return -1;
+    if (!sys || !sys->mounted) return -1;
     LFS_LOCK(sys);
 
     struct lfs_info info;
@@ -311,7 +337,7 @@ static int storage_lfs_stat(void *context, const char *filename, struct stat *st
 static int storage_lfs_mkdir(void *context, const char *path)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys) return -1;
+    if (!sys || !sys->mounted) return -1;
     LFS_LOCK(sys);
 
     int res = lfs_mkdir(&sys->lfs, path);
@@ -446,25 +472,19 @@ static int lfs_mem_init(lfs_mem_system_t *sys,
         .erase = mem_block_erase,
         .sync  = mem_block_sync,
 
-        .read_size = 16,
-        .prog_size = 16,
+        .read_size = FS_LFS_CACHE_SIZE,
+        .prog_size = FS_LFS_CACHE_SIZE,
         .block_size = block_size,
         .block_count = sys->mem_dev.block_count,
-        .cache_size = 16,
-        .lookahead_size = 16,
+        .cache_size = FS_LFS_CACHE_SIZE,
+        .lookahead_size = FS_LFS_LOOKAHEAD_SIZE,
+        .read_buffer = s_lfs_read_buffer,
+        .prog_buffer = s_lfs_prog_buffer,
+        .lookahead_buffer = s_lfs_lookahead_buffer,
         .block_cycles = max_erase_cycles
     };
 
-    // Mount filesystem
-    int err = lfs_mount(&sys->lfs, &sys->config);
-    if (err) {
-        lfs_format(&sys->lfs, &sys->config);
-        err = lfs_mount(&sys->lfs, &sys->config);
-    }
-    
-    sys->mounted = (err == LFS_ERR_OK);
-
-        // Thread safety
+    // Thread safety
     if (lock && unlock) {
         sys->lock = lock;
         sys->unlock = unlock;
@@ -473,6 +493,16 @@ static int lfs_mem_init(lfs_mem_system_t *sys,
         sys->thread_safe = false;
     }
 
+    // Mount filesystem
+    LFS_LOCK(sys);
+    int err = lfs_mount(&sys->lfs, &sys->config);
+    if (err) {
+        lfs_format(&sys->lfs, &sys->config);
+        err = lfs_mount(&sys->lfs, &sys->config);
+    }
+    LFS_UNLOCK(sys);
+
+    sys->mounted = (err == LFS_ERR_OK);
     return err;
 }
 
@@ -697,10 +727,10 @@ static int sysclk_nor_flash_read(uint32_t address, void *data, size_t size)
     if (data == (void *)0 || size == 0U)
         return -1;
 
-    volatile const uint8_t *src = (volatile const uint8_t *)(uintptr_t)address;
-    uint8_t *dst = (uint8_t *)data;
-    for (size_t i = 0; i < size; i++)
-        dst[i] = src[i];
+    storage_lock();
+    memcpy(data, (const void *)address, size);
+    storage_unlock();
+    
     return 0;
 }
 
@@ -765,10 +795,26 @@ static int storage_nvs_init(nvs_fs_t *nvs, uint32_t flash_offset, size_t sector_
     return ret;
 }
 
+void lfs_lock(void)
+{
+    osMutexAcquire(g_storage.lfs_mtx_id, osWaitForever);
+}
+
+void lfs_unlock(void)
+{
+    osMutexRelease(g_storage.lfs_mtx_id);
+}
+
 static void storageProcess(void *argument)
 {
     storage_t *storage = (storage_t *)argument;
-    LOG_DRV_DEBUG("storageProcess start\r\n");
+
+    int ret = lfs_mem_init(&storage->lfs_sys, FS_FLASH_OFFSET, FS_FLASH_SIZE , FS_FLASH_BLK, 10000, lfs_lock, lfs_unlock);
+    if (ret != 0) printf("lfs_mem_init failed(ret = %d)...\r\n", ret);
+
+    storage->file_ops_handle = file_ops_register(FS_FLASH, &lfs_file_ops, &storage->lfs_sys);
+    if (storage->file_ops_handle != -1) file_ops_switch(storage->file_ops_handle);
+    
     while (storage->is_init) {
         if (osSemaphoreAcquire(storage->sem_id, osWaitForever) == osOK) {
         
@@ -782,7 +828,9 @@ int storage_init(void *priv)
     int ret;
     storage_t *storage = (storage_t *)priv;
     storage->mtx_id = osMutexNew(NULL);
+    storage->lfs_mtx_id = osMutexNew(NULL);
     storage->sem_id = osSemaphoreNew(1, 0, NULL);
+    storage->file_ops_handle = -1;
     
     common_flash_ops_t ops = {
         .flash_read = sysclk_nor_flash_read,
@@ -824,18 +872,8 @@ int storage_init(void *priv)
         return ret;
     }
 
-    ret = lfs_mem_init(&storage->lfs_sys, FS_FLASH_OFFSET, FS_FLASH_SIZE , FS_FLASH_BLK, 10000, storage_lock, storage_unlock);
-    if(ret !=0){
-        printf("lfs_mem_init failed...\r\n");
-        return ret;
-    }
-
-    storage->file_ops_handle = file_ops_register(FS_FLASH, &lfs_file_ops, &storage->lfs_sys);
-    if(storage->file_ops_handle != -1){
-        file_ops_switch(storage->file_ops_handle);
-    }
-    storage->storage_processId = osThreadNew(storageProcess, storage, &storageTask_attributes);
     storage->is_init = true;
+    storage->storage_processId = osThreadNew(storageProcess, storage, &storageTask_attributes);
     return 0;
 }
 

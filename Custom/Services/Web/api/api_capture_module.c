@@ -215,7 +215,7 @@ static aicam_result_t upload_config_set(http_handler_context_t *ctx)
         } else {
             communication_type_t t = communication_type_from_string(item->valuestring);
             /* communication_type_from_string returns COMM_TYPE_NONE on no match;
-             * but user explicitly set a non-"default" value — validate it's a
+             * but user explicitly set a non-"default" value - validate it's a
              * real type (not NONE) to avoid silently falling back to default. */
             if (t != COMM_TYPE_NONE) cfg.upload_comm_type = (uint32_t)t;
         }
@@ -306,7 +306,13 @@ static aicam_result_t records_get(http_handler_context_t *ctx)
     int n = upload_coordinator_list_records(st, offset, limit,
                                             from_ts, to_ts, sort_desc,
                                             recs, (int)limit);
-    uint32_t total = upload_coordinator_count_records(st, from_ts, to_ts);
+    /* Skip the full-count traverse (upload_coordinator_count_records) - it's
+     * O(all records) and causes web timeouts with thousands of files. Instead,
+     * estimate total from the page result: if the page is full (n == limit),
+     * there's at least one more → total = offset + n + 1 (enables "Next"). If
+     * not full, total = offset + n (exact, last page). This gives correct
+     * pagination without traversing the entire directory tree. */
+    uint32_t total = offset + (uint32_t)n + ((uint32_t)n >= limit ? 1 : 0);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "state", state_str(st));

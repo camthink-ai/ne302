@@ -52,6 +52,15 @@ uint64_t wake_scheduler_next_event(uint64_t now_unix_sec,
                                    wake_event_t *out);
 
 /**
+ * @brief Next scheduled upload-flush time only (not capture).
+ *        Returns a fixed time-of-day (anchored to midnight), so using it as an
+ *        alarm does NOT drift (unlike compute_next_capture's now+interval).
+ *        Used by enter_sleep_mode to wake for flush nodes that fall between
+ *        capture intervals. 0 if SCHEDULED mode not active or no nodes.
+ */
+uint64_t wake_scheduler_next_flush(uint64_t now_unix_sec);
+
+/**
  * @brief Collect all distinct (by duty) events in [from, to].
  *        Skips events whose due_unix_sec <= last_handled_at[duty].
  * @param from_unix_sec  inclusive start

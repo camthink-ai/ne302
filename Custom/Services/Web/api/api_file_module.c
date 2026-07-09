@@ -8,6 +8,7 @@
 #include "api_file_module.h"
 #include "web_server.h"
 #include "generic_file.h"
+#include "storage.h"
 #include "device_service.h"
 #include "debug.h"
 #include "auth_mgr.h"
@@ -29,7 +30,7 @@
 #define MAX_ENTRIES_PER_DIR    256
 
 /**
- * @brief Flash readdir buffer — must match lfs_info exactly
+ * @brief Flash readdir buffer - must match lfs_info exactly
  *        type(1) + pad(3) + size(4) + name(256) = 264 bytes
  */
 typedef struct {
@@ -40,7 +41,7 @@ typedef struct {
 } flash_entry_t;
 
 /**
- * @brief SD readdir buffer — must match sd_info exactly
+ * @brief SD readdir buffer - must match sd_info exactly
  *        type(1) + pad(3) + size(4) + name(256) + mtime(4) + short_name(14) ≈ 282 bytes
  */
 typedef struct {
@@ -62,6 +63,23 @@ static FS_Type_t parse_fs_type(const char *fs_str)
     if (!fs_str) return FS_FLASH;
     if (strcmp(fs_str, "sd") == 0) return FS_SD;
     return FS_FLASH;
+}
+
+/* Shared pre-check for file handlers: verifies the backing FS is ready. On
+ * failure, sends an error response (so the frontend can show a format prompt
+ * for flash) and returns false. */
+static bool file_handler_check_fs(http_handler_context_t *ctx, FS_Type_t fs_type)
+{
+    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
+        (void)api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
+        return false;
+    }
+    if (fs_type == FS_FLASH && !storage_is_lfs_mounted()) {
+        (void)api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE,
+                                 "Flash FS not mounted, format required");
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -242,7 +260,7 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
         return;
     }
 
-    /* ====== Phase 1 — MG_EV_HTTP_HDRS: initialise ====== */
+    /* ====== Phase 1 - MG_EV_HTTP_HDRS: initialise ====== */
     if (ev == MG_EV_HTTP_HDRS) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
@@ -289,6 +307,11 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
             file_upload_send_response(c, API_ERROR_SERVICE_UNAVAILABLE, "SD not available");
             return;
         }
+        if (fst == FS_FLASH && !storage_is_lfs_mounted()) {
+            file_upload_send_response(c, API_ERROR_SERVICE_UNAVAILABLE,
+                                      "Flash FS not mounted, format required");
+            return;
+        }
 
         char fpath[MAX_PATH_LEN];
         build_full_path(dir, fn, fpath, sizeof(fpath));
@@ -318,7 +341,7 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
         return;
     }
 
-    /* ====== Phase 2 — write body data to file (one chunk per event) ====== */
+    /* ====== Phase 2 - write body data to file (one chunk per event) ====== */
     if (ctx && ctx->initialized && !ctx->failed && c->recv.len > 0) {
         size_t len = c->recv.len;
         size_t rem = ctx->content_length - ctx->total_received;
@@ -456,9 +479,7 @@ aicam_result_t file_list_handler(http_handler_context_t *ctx)
     FS_Type_t fs_type = parse_fs_type(fs_str);
 
     // Verify SD is available if requesting SD
-    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
-        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
-    }
+    if (!file_handler_check_fs(ctx, fs_type)) return AICAM_OK;
 
     cJSON *response_json = cJSON_CreateObject();
     cJSON *entries_array = cJSON_CreateArray();
@@ -482,7 +503,7 @@ aicam_result_t file_list_handler(http_handler_context_t *ctx)
         return ret;
     }
 
-    // Read directory entries — use correct struct per FS type
+    // Read directory entries - use correct struct per FS type
     int count = 0;
 
     if (fs_type == FS_SD) {
@@ -551,9 +572,7 @@ aicam_result_t file_download_handler(http_handler_context_t *ctx)
     FS_Type_t fs_type = parse_fs_type(fs_str);
 
     // Verify SD is available
-    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
-        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
-    }
+    if (!file_handler_check_fs(ctx, fs_type)) return AICAM_OK;
 
     // Get file stat first
     struct stat st;
@@ -583,7 +602,7 @@ aicam_result_t file_download_handler(http_handler_context_t *ctx)
               "\r\n",
               get_mime_type(filename), filename, (unsigned long)st.st_size);
 
-    // Event-driven download — follows OTA export pattern
+    // Event-driven download - follows OTA export pattern
     file_download_ctx_t *dc = (file_download_ctx_t *)buffer_calloc(1, sizeof(*dc));
     if (!dc) { disk_file_fclose(fs_type, fd);
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "OOM"); }
@@ -624,9 +643,7 @@ aicam_result_t file_upload_handler(http_handler_context_t *ctx)
     FS_Type_t fs_type = parse_fs_type(fs_str);
 
     // Verify SD is available
-    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
-        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
-    }
+    if (!file_handler_check_fs(ctx, fs_type)) return AICAM_OK;
 
     // Check body
     if (!ctx->request.body || ctx->request.content_length == 0) {
@@ -685,9 +702,7 @@ aicam_result_t file_delete_handler(http_handler_context_t *ctx)
     FS_Type_t fs_type = parse_fs_type(fs_str);
 
     // Verify SD is available
-    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
-        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
-    }
+    if (!file_handler_check_fs(ctx, fs_type)) return AICAM_OK;
 
     // Verify file exists
     struct stat st;
@@ -755,6 +770,11 @@ aicam_result_t file_rename_handler(http_handler_context_t *ctx)
         cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
     }
+    if (fs_type == FS_FLASH && !storage_is_lfs_mounted()) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE,
+                                  "Flash FS not mounted, format required");
+    }
 
     int result = disk_file_rename(fs_type, old_item->valuestring, new_item->valuestring);
     cJSON_Delete(request_json);
@@ -794,9 +814,7 @@ aicam_result_t file_preview_handler(http_handler_context_t *ctx)
 
     FS_Type_t fs_type = parse_fs_type(fs_str);
 
-    if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
-        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
-    }
+    if (!file_handler_check_fs(ctx, fs_type)) return AICAM_OK;
 
     struct stat st;
     if (disk_file_stat(fs_type, file_path, &st) != 0) {
@@ -827,7 +845,7 @@ aicam_result_t file_preview_handler(http_handler_context_t *ctx)
     size_t file_size = (size_t)st.st_size;
 
     if (is_previewable_image(fname)) {
-        // Send image binary — Content-Length + mg_send loop, no malloc
+        // Send image binary - Content-Length + mg_send loop, no malloc
         mg_printf(ctx->conn,
                   "HTTP/1.1 200 OK\r\n"
                   "Content-Type: %s\r\n"
@@ -921,6 +939,11 @@ aicam_result_t file_edit_handler(http_handler_context_t *ctx)
     if (fs_type == FS_SD && !device_service_storage_is_sd_connected()) {
         cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "SD card not available");
+    }
+    if (fs_type == FS_FLASH && !storage_is_lfs_mounted()) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE,
+                                  "Flash FS not mounted, format required");
     }
 
     // Safety: only allow editing text files

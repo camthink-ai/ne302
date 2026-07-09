@@ -5,18 +5,20 @@
  *         Integrated with json_config_mgr for configuration management
  */
 
- #include "system_service.h"
- #include "buffer_mgr.h"
- #include "debug.h"
- #include "drtc.h"
- #include "json_config_mgr.h"
- #include "device_service.h"
- #include "u0_module.h"
- #include "ms_bridging.h"
- #include "mqtt_service.h"
- #include <string.h>
- #include <stdlib.h>
- #include <time.h>
+#include "system_service.h"
+#include "buffer_mgr.h"
+#include "debug.h"
+#include "drtc.h"
+#include "json_config_mgr.h"
+#include "device_service.h"
+#if ENABLE_U0_MODULE
+#include "u0_module.h"
+#endif
+#include "ms_bridging.h"
+#include "mqtt_service.h"
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
 #include "ai_service.h"
 #include "device_service.h"
 #include "service_init.h"
@@ -26,6 +28,7 @@
 #include "web_service.h"
 #include "ai_draw_service.h"
 #include "nn.h"
+#include "drtc.h"
 #include "quick_snapshot.h"
 #include "cJSON.h"
 #include "webhook_service.h"
@@ -954,7 +957,7 @@ static uint32_t calculate_next_scheduled_interval_trigger(
 }
 
 /**
- * @brief Scheduled interval timer callback — fires capture, then re-registers next
+ * @brief Scheduled interval timer callback - fires capture, then re-registers next
  * @note Called from within scheduler_handle_event which holds the scheduler lock,
  *       so we must use _locked variants and skip unregister (REPEAT_ONCE auto-deletes).
  */
@@ -977,7 +980,7 @@ static void scheduled_interval_timer_callback(void *user_data)
     uint32_t now_sec = now_rtc.hour * 3600 + now_rtc.minute * 60 + now_rtc.second;
     uint32_t next = calculate_next_scheduled_interval_trigger(tc->start_time, tc->interval_sec, now_sec);
 
-    // REPEAT_ONCE job is already auto-deleted by process_wakeup_jobs — no unregister needed.
+    // REPEAT_ONCE job is already auto-deleted by process_wakeup_jobs - no unregister needed.
     // Use unique name for the new job to avoid collisions.
     snprintf(controller->timer_task_name, sizeof(controller->timer_task_name),
              "tiv_%lu", (unsigned long)rtc_get_timeStamp() % 100000);
@@ -1355,7 +1358,7 @@ aicam_result_t system_controller_get_next_capture_at(
             if (earliest != UINT32_MAX) {
                 *next_capture_at = now_ts - now_sec + earliest;
             } else {
-                // All past today — first node tomorrow
+                // All past today - first node tomorrow
                 *next_capture_at = now_ts - now_sec + 86400 + tc->time_node[0];
             }
         }
@@ -1476,7 +1479,7 @@ aicam_result_t system_controller_register_io_trigger(system_controller_t *contro
 
      /* RTC wake (timing or alarm): use wake_scheduler to determine whether
       * a capture, an upload-flush, or both are due now. Pure flush wakes
-      * don't trigger a capture — they just drain pending uploads and sleep. */
+      * don't trigger a capture - they just drain pending uploads and sleep. */
      if (wakeup_flag & (PWR_WAKEUP_FLAG_RTC_TIMING |
                         PWR_WAKEUP_FLAG_RTC_ALARM_A |
                         PWR_WAKEUP_FLAG_RTC_ALARM_B)) {
@@ -1512,12 +1515,16 @@ aicam_result_t system_controller_register_io_trigger(system_controller_t *contro
              /* When capture + flush coincide (e.g. 3-min interval landing on the
               * upload node), the kick above is async and would be abandoned when
               * the device sleeps after the capture. Drain synchronously so the
-              * flush completes before sleep. */
+              * flush completes before sleep. Timeout scales with the backlog so
+              * a large backlog isn't cut short (the flush self-limits to the same
+              * budget internally). */
              if (need_flush) {
-                 (void)upload_coordinator_drain(30000);
+                 uint32_t fb = upload_coordinator_get_flush_budget_ms();
+                 (void)upload_coordinator_drain(fb > 30000 ? fb + 2000 : 30000);
              }
          } else {
-             (void)upload_coordinator_drain(30000);
+             uint32_t fb = upload_coordinator_get_flush_budget_ms();
+             (void)upload_coordinator_drain(fb > 30000 ? fb + 2000 : 30000);
              system_service_task_completed();
          }
      }
@@ -2004,24 +2011,35 @@ static aicam_result_t prepare_for_sleep(void)
     if (!g_system_service_ctx.is_initialized || !g_system_service_ctx.controller) {
         return AICAM_ERROR_NOT_INITIALIZED;
     }
-    
+
     system_controller_t *controller = g_system_service_ctx.controller;
     aicam_result_t result;
 
     LOG_SVC_INFO("Preparing system for sleep mode...");
 
+    /* Wait for any in-progress upload flush to finish BEFORE tearing anything
+     * down. Without this, a sleep triggered mid-flush (e.g. AP 90s timeout, a
+     * button, or task_completed from another path) cuts power while
+     * delete_record_files / move_record are between "remove .json" and "write
+     * tombstone" - leaving .idx entries pointing at gone .json (stale PENDING,
+     * upload retried forever). flush_active is set by do_flush_pass/drain. */
+    (void)system_service_wait_upload_before_sleep(30000);
+
     // Stop web/WebSocket server before any network teardown to avoid MG_EV_CLOSE
     // running while the stack is being deinited (which can cause hang).
+    // NOT_INITIALIZED is benign: on a low-power essential-only wake web_service
+    // init is skipped, so there is nothing to stop.
     result = web_service_stop();
-    if (result != AICAM_OK && result != AICAM_ERROR_UNAVAILABLE) {
+    if (result != AICAM_OK && result != AICAM_ERROR_UNAVAILABLE
+        && result != AICAM_ERROR_NOT_INITIALIZED) {
         LOG_SVC_WARN("Web service stop before sleep: %d", result);
     }
     
     // Update RTC time to U0 chip before sleep
-    int ret = u0_module_update_rtc_time();
-    if (ret != 0) {
-        LOG_SVC_ERROR("Failed to update RTC time to U0: %d", ret);
-    }
+    // int ret = u0_module_update_rtc_time();
+    // if (ret != 0) {
+    //     LOG_SVC_ERROR("Failed to update RTC time to U0: %d", ret);
+    // }
     
     // Configure PIR sensor if PIR wakeup is enabled
     result = configure_pir_sensor(controller);
@@ -2129,28 +2147,32 @@ static aicam_result_t prepare_for_sleep(void)
          }
      }
 
-     /* The RTC scheduler (rtc_get_next_wakeup_time) only knows about capture
-      * timer jobs — it does NOT include the scheduled upload nodes (those live
-      * in wake_scheduler, driven by capture_upload_config.schedule_minutes).
-      * Without this, the alarm is set to the next capture interval, missing an
-      * earlier upload node (e.g. capture at 11:30:53 but upload node at 11:30:00
-      * → device wakes 53s late). Query wake_scheduler_next_event (which covers
-      * both capture AND upload) and override alarm_a if it's earlier. */
+     /* Flush-only alarm override: the RTC scheduler only has capture timer jobs.
+      * Upload-flush nodes (SCHEDULED mode) live in wake_scheduler. Wake for the
+      * next flush node IF it's earlier than the RTC capture alarm, so flush
+      * nodes between captures aren't missed. Flush nodes are fixed
+      * time-of-day (anchored to midnight), so this does NOT drift (unlike the
+      * old wake_scheduler capture override which used now+interval).
+      *
+      * IMPORTANT: wake_scheduler_next_flush returns UTC, but rtc_earliest
+      * (next_wakeup_a/b) is LOCAL (rtc_get_timeStamp + tz). Convert t_flush
+      * to LOCAL (add tz) so both the comparison and localtime() match the
+      * rtc path — otherwise the flush appears one-timezone earlier and the
+      * override fires when it shouldn't. */
      {
-         wake_event_t wev = {0};
-         uint64_t wake_evt = wake_scheduler_next_event(rtc_get_timeStamp(),
-                                                        24 * 3600, &wev);
-         if (wake_evt > 0) {
+         uint64_t t_flush = wake_scheduler_next_flush(rtc_get_timeStamp());
+         if (t_flush > 0) {
+             int32_t tz = rtc_get_timezone();
+             uint64_t t_flush_local = t_flush + (uint64_t)((int64_t)tz * 3600);
              uint64_t rtc_earliest = next_wakeup_a;
              if (next_wakeup_b > 0 && (rtc_earliest == 0 || next_wakeup_b < rtc_earliest)) {
                  rtc_earliest = next_wakeup_b;
              }
-             if (rtc_earliest == 0 || wake_evt < rtc_earliest) {
-                 const char *dname = (wev.duty == WAKE_DUTY_CAPTURE) ? "CAPTURE"
-                                   : (wev.duty == WAKE_DUTY_UPLOAD_FLUSH) ? "FLUSH" : "?";
-                 LOG_SVC_INFO("[WAKE] alarm override: wake_scheduler %s at %lu earlier than RTC alarm %lu",
-                             dname, (unsigned long)wake_evt, (unsigned long)rtc_earliest);
-                 time_t wake_time = (time_t)wake_evt;
+            // printf("[WAKE] flush alarm: %lu (local: %lu), RTC earliest: %lu\n", 
+            //     (unsigned long)t_flush, (unsigned long)t_flush_local, 
+            //     (unsigned long)rtc_earliest);
+             if (rtc_earliest == 0 || t_flush_local < rtc_earliest) {
+                 time_t wake_time = (time_t)t_flush_local;
                  struct tm *tm_info = localtime(&wake_time);
                  if (tm_info) {
                      alarm_a.is_valid = 1;
@@ -2160,6 +2182,9 @@ static aicam_result_t prepare_for_sleep(void)
                      alarm_a.minute = tm_info->tm_min;
                      alarm_a.second = tm_info->tm_sec;
                      wakeup_flags |= PWR_WAKEUP_FLAG_RTC_ALARM_A;
+                     LOG_SVC_INFO("[WAKE] flush alarm override: %02d:%02d:%02d earlier than RTC %lu",
+                                 alarm_a.hour, alarm_a.minute, alarm_a.second,
+                                 (unsigned long)rtc_earliest);
                  }
              }
          }
@@ -2169,7 +2194,7 @@ static aicam_result_t prepare_for_sleep(void)
                   wakeup_flags, switch_bits, sleep_sec);
      
      // Enter sleep mode via U0 module with RTC alarms
-     int ret = u0_module_enter_sleep_mode_ex(wakeup_flags, switch_bits, sleep_sec, 
+     int ret = u0_module_enter_sleep_mode_ex(wakeup_flags, switch_bits, sleep_sec,
                                              alarm_a.is_valid ? &alarm_a : NULL,
                                              alarm_b.is_valid ? &alarm_b : NULL);
      if (ret != 0) {
@@ -2253,13 +2278,18 @@ static aicam_result_t prepare_for_sleep(void)
      g_system_service_ctx.task_completed = false;
      g_system_service_ctx.sleep_pending = false;
      
-     // Sync RTC time from U0 on startup
-     int ret = u0_module_sync_rtc_time();
-     if (ret == 0) {
-         LOG_SVC_INFO("RTC time synchronized from U0");
-     } else {
-         LOG_SVC_WARN("Failed to sync RTC time from U0: %d", ret);
+     int ret = 0;
+#if ENABLE_U0_MODULE
+     //  Sync RTC time from U0 on startup
+     if (rtc_get_wakeup_timeStamp() == 0) {
+        ret = u0_module_sync_rtc_time();
+        if (ret == 0) {
+            LOG_SVC_INFO("RTC time synchronized from U0");
+        } else {
+            LOG_SVC_WARN("Failed to sync RTC time from U0: %d", ret);
+        }
      }
+#endif
      
      // Check and store wakeup flag from U0 (but don't process yet)
      uint32_t wakeup_flag = 0;
@@ -3163,7 +3193,10 @@ aicam_result_t system_service_poll_scheduled_flush(void)
             LOG_SVC_INFO("[WAKE] scheduled flush due (awake poll) at=%lu",
                          (unsigned long)evs[i].due_unix_sec);
             wake_scheduler_mark_handled(WAKE_DUTY_UPLOAD_FLUSH, evs[i].due_unix_sec);
-            (void)upload_coordinator_drain(30000);
+            {
+                uint32_t fb = upload_coordinator_get_flush_budget_ms();
+                (void)upload_coordinator_drain(fb > 30000 ? fb + 2000 : 30000);
+            }
             return AICAM_OK;
         }
     }
@@ -3172,11 +3205,15 @@ aicam_result_t system_service_poll_scheduled_flush(void)
 
 /**
  * @brief Wait for an in-progress upload flush to finish before sleeping.
- *        Does NOT start a new flush — pending that hasn't started waits for
- *        the next wake. Only protects an upload already in flight.
+ *        Does NOT start a new flush - pending that hasn't started waits for
+ *        the next wake. Only protects an upload already in flight. The timeout
+ *        scales with the pending backlog (via upload_coordinator_get_flush_budget_ms)
+ *        so a small backlog → short wait, large backlog → longer wait, capped.
  */
 aicam_result_t system_service_wait_upload_before_sleep(uint32_t timeout_ms)
 {
+    uint32_t budget = upload_coordinator_get_flush_budget_ms();
+    if (budget > timeout_ms) timeout_ms = budget;   /* scale up to the flush's need */
     uint64_t t0 = rtc_get_uptime_ms();
     while (upload_coordinator_is_flushing() && (rtc_get_uptime_ms() - t0) < timeout_ms) {
         osDelay(50);
@@ -3532,7 +3569,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             }
         }
 
-        /* AI inference JPEG (bounding-box overlay) — get from quick_snapshot
+        /* AI inference JPEG (bounding-box overlay) - get from quick_snapshot
          * (pre-generated during fast capture) or generate on the fly. */
         uint8_t *inf_jpeg = NULL;
         uint32_t inf_jpeg_size = 0;
@@ -3558,7 +3595,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             ai_json,
             &metadata, trigger_type, ws);
 
-        /* Free inference JPEG (owned by quick_snapshot/jpegc — use camera free) */
+        /* Free inference JPEG (owned by quick_snapshot/jpegc - use camera free) */
         if (inf_jpeg) {
             device_service_camera_free_jpeg_buffer(inf_jpeg);
         }
@@ -3809,10 +3846,10 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
     step_start_time = rtc_get_uptime_ms();
 
     if (!mqtt_available) {
-        LOG_SVC_INFO("[TIMING] Step 3.1 SKIPPED: MQTT service not running — skip to webhook/SD");
+        LOG_SVC_INFO("[TIMING] Step 3.1 SKIPPED: MQTT service not running - skip to webhook/SD");
     } else if (g_fast_fail_mqtt_policy) {
         if (!mqtt_service_is_connected()) {
-            LOG_SVC_INFO("[TIMING] Step 3.1 FAST-FAIL: MQTT not connected — skip MQTT, try webhook/SD");
+            LOG_SVC_INFO("[TIMING] Step 3.1 FAST-FAIL: MQTT not connected - skip MQTT, try webhook/SD");
             mqtt_available = AICAM_FALSE;
         }
     } else {
@@ -3822,7 +3859,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                      current_flags, (current_flags & MQTT_NET_CONNECTED) ? "YES" : "NO");
         aicam_result_t result = service_wait_for_ready(MQTT_NET_CONNECTED, AICAM_TRUE, 40000);
         if (result != AICAM_OK) {
-            LOG_SVC_INFO("[TIMING] Step 3.1 FAILED: MQTT network not ready: %d — skip MQTT, try webhook/SD", result);
+            LOG_SVC_INFO("[TIMING] Step 3.1 FAILED: MQTT network not ready: %d - skip MQTT, try webhook/SD", result);
             LOG_SVC_INFO("[TIMING] Step 3.1: Final service flags: 0x%08X", service_get_ready_flags());
             mqtt_available = AICAM_FALSE;
         }
@@ -3937,7 +3974,7 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
                     jpeg_buffer, (uint32_t)jpeg_size, &metadata, ai_result_ptr);
                 LOG_SVC_INFO("[TIMING] Step 4.5: push_capture returned %d", wh_ret);
                 if (wh_ret == AICAM_OK) {
-                    // Ownership transferred to webhook task — skip cleanup in Step 5
+                    // Ownership transferred to webhook task - skip cleanup in Step 5
                     jpeg_buffer = NULL;
                     upload_result = AICAM_OK;
                     webhook_succeeded = AICAM_TRUE;

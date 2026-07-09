@@ -28,6 +28,7 @@
 #include "system_service.h"
 #include "device_service.h"
 #include "ai_service.h"
+#include "web_recovery.h"
 
 #define OTA_WRITE_BUF_SIZE 1024
 #define OTA_PRECHECK_DATA_SIZE 2048  // 2KB: 1KB OTA header + 1KB model package header
@@ -789,6 +790,14 @@ void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data)
             // Update json config
             if (ctx->fw_type_param == FIRMWARE_AI_2) {
                 json_config_set_ai_1_active(AICAM_TRUE);
+            }
+
+            // Web firmware lives in a single-slot partition at WEB_BASE, so the
+            // freshly written asset.bin is already addressable. Reload the web
+            // assets now so the new UI is live immediately (and exit recovery
+            // mode if we were serving the built-in recovery page).
+            if (ctx->fw_type_param == FIRMWARE_WEB) {
+                web_recovery_reload_assets();
             }
 
             LOG_SVC_INFO("OTA Success!");

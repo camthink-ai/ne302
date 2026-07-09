@@ -1,6 +1,6 @@
 /**
  * @file api_capture_module.h
- * @brief Capture Settings API Module — capture-mode/storage/retry/schedule config + record listing
+ * @brief Capture Settings API Module - capture-mode/storage/retry/schedule config + record listing
  */
 
 #ifndef API_CAPTURE_MODULE_H

@@ -8,14 +8,14 @@
  * coordinator persists it, attaches metadata, and dispatches according to
  * capture_upload_config_t.mode:
  *
- *   INSTANT     — Upload synchronously inside enqueue_capture(); on failure,
+ *   INSTANT     - Upload synchronously inside enqueue_capture(); on failure,
  *                 the record stays in pending/ for retry. With storage=NONE,
  *                 nothing is persisted and failure is final.
- *   BATCH       — Persist only; flush is triggered when pending_count reaches
+ *   BATCH       - Persist only; flush is triggered when pending_count reaches
  *                 batch_count, or on the next wake_scheduler tick.
- *   SCHEDULED   — Persist only; flush is triggered by wake_scheduler at the
+ *   SCHEDULED   - Persist only; flush is triggered by wake_scheduler at the
  *                 configured minutes-of-day.
- *   LOCAL_ONLY  — Persist into local/ and never upload.
+ *   LOCAL_ONLY  - Persist into local/ and never upload.
  */
 
 #ifndef UPLOAD_COORDINATOR_H
@@ -82,7 +82,7 @@ communication_type_t upload_coordinator_get_required_comm_type(void);
  * @brief Decide whether this wake cycle needs the network stack up.
  *
  * Called by the boot/wake flow BEFORE service_start() to skip bringing up
- * communication/mqtt/webhook when this wake won't actually upload anything —
+ * communication/mqtt/webhook when this wake won't actually upload anything -
  * saves the multi-second network bring-up time and battery.
  *
  *   LOCAL_ONLY  → never
@@ -100,9 +100,15 @@ aicam_result_t upload_coordinator_kick(void);
 /** Block until the worker finishes its current pass or timeout expires. */
 aicam_result_t upload_coordinator_drain(uint32_t timeout_ms);
 
-/** True while a flush pass (do_flush_pass) is running — the sleep path polls
+/** True while a flush pass (do_flush_pass) is running - the sleep path polls
  *  this to avoid cutting power mid-upload. */
 aicam_bool_t upload_coordinator_is_flushing(void);
+
+/** Time (ms) the current pending backlog needs for a flush pass, scaling with
+ *  the pending count and capped at FLUSH_MAX_BUDGET_MS. The sleep path uses this
+ *  as an adaptive wait timeout so a small backlog → short wake, large backlog →
+ *  longer wake, but never over the cap. */
+uint32_t upload_coordinator_get_flush_budget_ms(void);
 
 /** Re-read capture_upload_config_t from NVS, propagate to runtime state. */
 aicam_result_t upload_coordinator_reload_config(void);

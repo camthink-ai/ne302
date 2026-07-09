@@ -15,27 +15,27 @@
 #include "mem_map.h"
 #include "fsbl_app_common.h"
 
-#define FLASH_BLOCK_SIZE  4096
-#define FS_BASE_MEM_START  FLASH_BASE
+#define FLASH_BLOCK_SIZE        4096
+#define FS_BASE_MEM_START       FLASH_BASE
 
-#define FS_FLASH_BLK    FLASH_BLOCK_SIZE
-#define FS_FLASH_OFFSET  (LITTLEFS_BASE - FLASH_BASE)
-#define FS_FLASH_SIZE   LITTLEFS_SIZE
-#define FS_BLK_OFFSET   (FS_FLASH_OFFSET / FS_FLASH_BLK)
+#define FS_FLASH_BLK            FLASH_BLOCK_SIZE
+#define FS_FLASH_OFFSET         (LITTLEFS_BASE - FLASH_BASE)
+#define FS_FLASH_SIZE           LITTLEFS_SIZE
+#define FS_BLK_OFFSET           (FS_FLASH_OFFSET / FS_FLASH_BLK)
 
-#define FS_LFS_CACHE_SIZE       64
-#define FS_LFS_LOOKAHEAD_SIZE   32
+#define FS_LFS_CACHE_SIZE       1024
+#define FS_LFS_LOOKAHEAD_SIZE   256
  
-#define NVS_FLASH_BLK    FLASH_BLOCK_SIZE
+#define NVS_FLASH_BLK               FLASH_BLOCK_SIZE
 #define NVS_FLASH_WRITE_BLOCK_SIZE 	4	/** Choose TYPEPROGAM from HAL. */
 #define NVS_FLASH_ERASE_VALUE		0xFF
 
-#define NVS_FACT_FLASH_OFFSET  (NVS_BASE - FLASH_BASE)
-#define NVS_FACT_FLASH_SIZE   (32 * 1024)
-#define NVS_FACT_BLK_SIZE    (NVS_FACT_FLASH_SIZE / NVS_FLASH_BLK)
-#define NVS_USER_FLASH_OFFSET  (NVS_FACT_FLASH_OFFSET + NVS_FACT_FLASH_SIZE)
-#define NVS_USER_FLASH_SIZE   (NVS_SIZE - NVS_FACT_FLASH_SIZE)
-#define NVS_USER_BLK_SIZE   (NVS_USER_FLASH_SIZE / NVS_FLASH_BLK)
+#define NVS_FACT_FLASH_OFFSET   (NVS_BASE - FLASH_BASE)
+#define NVS_FACT_FLASH_SIZE     (32 * 1024)
+#define NVS_FACT_BLK_SIZE       (NVS_FACT_FLASH_SIZE / NVS_FLASH_BLK)
+#define NVS_USER_FLASH_OFFSET   (NVS_FACT_FLASH_OFFSET + NVS_FACT_FLASH_SIZE)
+#define NVS_USER_FLASH_SIZE     (NVS_SIZE - NVS_FACT_FLASH_SIZE)
+#define NVS_USER_BLK_SIZE       (NVS_USER_FLASH_SIZE / NVS_FLASH_BLK)
 
 
 typedef void (*storage_lock_func_t)(void);
@@ -99,6 +99,7 @@ typedef struct {
     nvs_fs_t nvs_fact;
     nvs_fs_t nvs_user;
     osMutexId_t mtx_id;
+    osMutexId_t lfs_mtx_id;
     osSemaphoreId_t sem_id;
     osThreadId_t storage_processId;
     int file_ops_handle;

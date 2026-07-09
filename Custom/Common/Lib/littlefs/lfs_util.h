@@ -45,16 +45,10 @@
 #include LFS_STRINGIZE(LFS_DEFINES)
 #endif
 
-// LFS verbose logging. These printf from XIP flash during every littlefs
-// operation; combined with the storage callbacks' memory-mapped-mode toggling
-// this makes mkdir/program/erase pathologically slow and can fault/trip the
-// watchdog. Keep TRACE/DEBUG OFF in normal builds. ERROR/WARN are rare and
-// useful, so they stay on. Define LFS_YES_TRACE locally to debug a specific
-// issue, then turn it back off.
 // #define LFS_YES_TRACE
-// #define LFS_YES_ERROR
-// #define LFS_YES_WARN
-// #define LFS_YES_DEBUG
+#define LFS_YES_ERROR
+#define LFS_YES_WARN
+#define LFS_YES_DEBUG
 
 // System includes
 #include <stdint.h>

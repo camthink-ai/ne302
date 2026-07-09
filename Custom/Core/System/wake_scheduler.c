@@ -270,6 +270,25 @@ static int collect_upload_in_range(uint64_t from_unix_sec, uint64_t to_unix_sec,
 
 /* ==================== Public API ==================== */
 
+uint64_t wake_scheduler_next_flush(uint64_t now_unix_sec)
+{
+    uint64_t t = compute_next_upload_flush(now_unix_sec);
+    if (t > 0) {
+        uint64_t handled = get_handled_at(WAKE_DUTY_UPLOAD_FLUSH);
+        /* If the earliest flush node was already handled THIS wake (e.g. capture
+         * and flush coincided - the wake handler drained the flush), skip it so
+         * we don't redundantly wake for it again on the next sleep. Return 0 so
+         * the rtc capture alarm handles the next wake; the NEXT flush node will
+         * be picked up once its time arrives (compute_next_upload_flush returns
+         * nodes strictly after now, so once this node's time passes, the next
+         * one is returned automatically). */
+        if (handled > 0 && t <= handled) {
+            return 0;
+        }
+    }
+    return t;
+}
+
 uint64_t wake_scheduler_next_event(uint64_t now_unix_sec, uint32_t horizon_sec, wake_event_t *out)
 {
     if (horizon_sec == 0 || horizon_sec > WAKE_SCHED_HORIZON_MAX_SEC) {

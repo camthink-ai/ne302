@@ -43,6 +43,10 @@ export default function CaptureConfig() {
   const [fastResolution, setFastResolution] = useState(0);
   const [fastJpegQuality, setFastJpegQuality] = useState(85);
   const [captureStorageAi, setCaptureStorageAi] = useState(false);
+  /* Snapshot of the camera params as loaded from the device, so saveAll can
+   * tell whether the wake-time params actually changed. Only those need the
+   * "reboot/next wake" warning; the upload config is hot-reloaded live. */
+  const [initCam, setInitCam] = useState({ fastSkipFrames: 0, fastResolution: 0, fastJpegQuality: 85, captureStorageAi: false });
 
   /* Available netifs (mirrors system settings "通讯方式"), fetched once for the
    * "上传网络" dropdown. Each item: { type: 'wifi'|'halow'|'cellular'|'poe', display_name } */
@@ -67,10 +71,17 @@ export default function CaptureConfig() {
       const arr = netRes?.data?.available_comm_types;
       setCommTypes(Array.isArray(arr) ? arr.map((t: any) => ({ type: t.type, display_name: t.display_name })) : []);
       const hw = hwRes.data;
-      if (typeof hw.fast_capture_skip_frames === 'number') setFastSkipFrames(hw.fast_capture_skip_frames);
-      if (typeof hw.fast_capture_resolution === 'number') setFastResolution(hw.fast_capture_resolution);
-      if (typeof hw.fast_capture_jpeg_quality === 'number') setFastJpegQuality(hw.fast_capture_jpeg_quality);
-      if (typeof hw.capture_storage_ai === 'boolean') setCaptureStorageAi(hw.capture_storage_ai);
+      const camInit = {
+        fastSkipFrames: typeof hw.fast_capture_skip_frames === 'number' ? hw.fast_capture_skip_frames : 0,
+        fastResolution: typeof hw.fast_capture_resolution === 'number' ? hw.fast_capture_resolution : 0,
+        fastJpegQuality: typeof hw.fast_capture_jpeg_quality === 'number' ? hw.fast_capture_jpeg_quality : 85,
+        captureStorageAi: typeof hw.capture_storage_ai === 'boolean' ? hw.capture_storage_ai : false,
+      };
+      setFastSkipFrames(camInit.fastSkipFrames);
+      setFastResolution(camInit.fastResolution);
+      setFastJpegQuality(camInit.fastJpegQuality);
+      setCaptureStorageAi(camInit.captureStorageAi);
+      setInitCam(camInit);
       const st: any = stRes.data;
       setSdReady(st?.sd_card_connected === true);
     } catch (e) {
@@ -86,11 +97,16 @@ export default function CaptureConfig() {
     setCfg((prev) => (prev ? { ...prev, [k]: v } : prev));
   };
 
-  /* Global save: commits BOTH upload config and camera params. Camera params
-   * need reboot/wake to take effect (fast_capture_* affect the boot-time
-   * snapshot pipeline), so we warn the user after saving. */
+  /* Global save: commits BOTH upload config and camera params. The upload
+   * config is hot-reloaded (immediate); the wake-time camera params
+   * (fast_capture_* / capture_storage_ai) only take effect on next wake/reboot,
+   * so we warn only when those actually changed. */
   const saveAll = async () => {
     if (!cfg) return;
+    const camChanged = fastSkipFrames !== initCam.fastSkipFrames
+      || fastResolution !== initCam.fastResolution
+      || fastJpegQuality !== initCam.fastJpegQuality
+      || captureStorageAi !== initCam.captureStorageAi;
     setSaving(true);
     try {
       await captureSettings.setUploadConfig(cfg);
@@ -100,7 +116,12 @@ export default function CaptureConfig() {
         fast_capture_jpeg_quality: fastJpegQuality,
         capture_storage_ai: captureStorageAi,
       } as SetHardwareInfoReq);
-      toast.warning(i18n._('sys.capture_settings.saved_reboot_hint'));
+      if (camChanged) {
+        toast.warning(i18n._('sys.capture_settings.saved_reboot_hint'));
+      } else {
+        toast.success(i18n._('sys.capture_settings.saved_immediate_hint'));
+      }
+      setInitCam({ fastSkipFrames, fastResolution, fastJpegQuality, captureStorageAi });
     } catch (e) {
       console.error(e);
       toast.error(i18n._('sys.capture_settings.save_failed') ?? 'Save failed');
@@ -351,16 +372,6 @@ export default function CaptureConfig() {
                 <div className="flex justify-between gap-4 items-center">
                   <div className="flex items-center gap-2">
                     <Label>{i18n._('sys.capture_settings.retry_enable')}</Label>
-                    <Tooltip mbEnhance>
-                      <TooltipTrigger>
-                        <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
-                          <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-80 text-pretty">
-                        <p>{i18n._('sys.capture_settings.retry_hint')}</p>
-                      </TooltipContent>
-                    </Tooltip>
                   </div>
                   <Switch
                     checked={cfg.retry_enable}

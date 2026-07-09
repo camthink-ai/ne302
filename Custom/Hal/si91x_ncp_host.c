@@ -204,6 +204,7 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
     //     printf("%02X ", ((uint8_t *)tx_buffer)[i]);
     // }
     // printf("\r\n");
+    /*
     if (buffer_length < 8) {
         memcpy(spi_tx_buffer, tx_buffer, buffer_length);
         memset(spi_rx_buffer, 0x00, buffer_length);
@@ -228,6 +229,7 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
             return SL_STATUS_ABORT;
         }
     } else {
+     */
 #ifdef DMA_ENABLED
         memcpy(spi_tx_buffer, tx_buffer, buffer_length);
         memset(spi_rx_buffer, 0x00, buffer_length);
@@ -245,13 +247,16 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
         } else {
             printf("HAL_SPI_TransmitReceive_DMA failed(ret = %d)!\r\n", ret);
             HAL_SPI_Abort(&hspi4);
+            sl_si91x_host_enable_high_speed_bus();
             osMutexRelease(mtx_id);
             return SL_STATUS_ABORT;
         }
 #else
         HAL_SPI_TransmitReceive(&hspi4, (uint8_t *)tx_buffer, (uint8_t *)rx_buffer, buffer_length, 10);
 #endif
+/*
     }
+*/
     osMutexRelease(mtx_id);
     // printf("Received data: ");
     // for (uint16_t i = 0; i < buffer_length; i++) {

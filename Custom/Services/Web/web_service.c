@@ -25,6 +25,7 @@
 #include "api_preview_module.h"
 #include "api_isp_module.h"
 #include "api_file_module.h"
+#include "web_recovery.h"
 #include "mem_map.h"
 #include <string.h>
 
@@ -98,8 +99,11 @@ aicam_result_t web_service_init(void *config)
     // Initialize static resources
     result = web_asset_adapter_init((const uint8_t*)WEB_ASSETS_FLASH_ADDRESS);
     if (result != AICAM_OK) {
-        LOG_CORE_ERROR("Failed to initialize static resources: %d", result);
-        return result;
+        // The web asset firmware is missing/corrupt (e.g. after an OTA moved the
+        // web partition address). Don't abort the whole service — fall back to
+        // the built-in recovery page so the user can reflash the web firmware.
+        LOG_CORE_WARN("Failed to initialize static resources: %d, entering recovery mode", result);
+        web_recovery_activate();
     }
     
     // Initialize WebSocket stream server

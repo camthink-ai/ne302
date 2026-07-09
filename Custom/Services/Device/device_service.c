@@ -513,37 +513,33 @@ static void update_storage_info(storage_info_t *info)
     }
 
     // ── Internal Flash (LittleFS) ────────────────────────
-    storage_disk_info_t flash_info;
-    int flash_result = storage_get_disk_info(&flash_info);
-    info->flash_fs_mounted = (flash_result == 0 && flash_info.mounted);
+    /* Only check the mounted flag (RAM, O(1)) — do NOT call storage_get_disk_info()
+     * here. That runs lfs_fs_size(), a full-FS traverse whose cost grows linearly
+     * with file count. With thousands of capture records it takes 3-4 seconds,
+     * tripping the watchdog during boot. The free/total capacity is left at 0
+     * here; the web API (device_service_get_info → storage_get_disk_info with a
+     * 2s cache) fills it in lazily on actual request, not on every boot. */
+    info->flash_fs_mounted = storage_is_lfs_mounted();
+    info->flash_fs_error = AICAM_FALSE;
+    memset(info->flash_error, 0, sizeof(info->flash_error));
 
     if (info->flash_fs_mounted) {
-        info->flash_total_capacity_mb = (uint64_t)flash_info.total_KBytes / 1024;
-        info->flash_available_capacity_mb = (uint64_t)flash_info.free_KBytes / 1024;
-        info->flash_used_capacity_mb = info->flash_total_capacity_mb - info->flash_available_capacity_mb;
-
-        if (info->flash_total_capacity_mb > 0) {
-            info->flash_usage_percent = (float)info->flash_used_capacity_mb / info->flash_total_capacity_mb * 100.0f;
-        } else {
-            info->flash_usage_percent = 0.0f;
-        }
-
-        strncpy(info->flash_fs_type, flash_info.fs_type, sizeof(info->flash_fs_type) - 1);
+        /* total is constant — derive from the known partition size, no traverse. */
+        info->flash_total_capacity_mb = LITTLEFS_SIZE / (1024 * 1024);
+        info->flash_available_capacity_mb = 0;  /* filled lazily by web API */
+        info->flash_used_capacity_mb = 0;
+        info->flash_usage_percent = 0.0f;
+        strncpy(info->flash_fs_type, "littlefs", sizeof(info->flash_fs_type) - 1);
         info->flash_fs_type[sizeof(info->flash_fs_type) - 1] = '\0';
-
-        LOG_SVC_DEBUG("Flash FS Info: Total=%.1fGB, Used=%.1fGB, Free=%.1fGB, FS=%s, Mounted=%d",
-                    info->flash_total_capacity_mb / 1024.0f,
-                    info->flash_used_capacity_mb / 1024.0f,
-                    info->flash_available_capacity_mb / 1024.0f,
-                    info->flash_fs_type, info->flash_fs_mounted);
     } else {
+        /* Not mounted — surface as an error so the web UI can offer a format. */
+        info->flash_fs_error = AICAM_TRUE;
+        strncpy(info->flash_error, "not_mounted", sizeof(info->flash_error) - 1);
         info->flash_total_capacity_mb = 0;
         info->flash_available_capacity_mb = 0;
         info->flash_used_capacity_mb = 0;
         info->flash_usage_percent = 0.0f;
         memset(info->flash_fs_type, 0, sizeof(info->flash_fs_type));
-
-        LOG_SVC_DEBUG("Flash FS: not mounted (result=%d)", flash_result);
     }
 }
 
@@ -992,6 +988,23 @@ aicam_result_t device_service_get_info(device_info_config_t *info)
     // Update dynamic information (requires full service start)
     if (g_device_service.running) {
         update_storage_info(&g_device_service.storage_info);
+        /* Lazily fetch flash free-space — update_storage_info skips this to
+         * avoid lfs_fs_size on the boot path. Here (web API request) the 2s
+         * cache in storage_get_disk_info makes repeated polls cheap; the first
+         * call per cache window does traverse, but that's a user-initiated
+         * request, not the boot hot path. */
+        storage_disk_info_t fi;
+        if (storage_get_disk_info(&fi) == 0 && fi.mounted) {
+            g_device_service.storage_info.flash_available_capacity_mb = (uint64_t)fi.free_KBytes / 1024;
+            g_device_service.storage_info.flash_used_capacity_mb =
+                g_device_service.storage_info.flash_total_capacity_mb -
+                g_device_service.storage_info.flash_available_capacity_mb;
+            if (g_device_service.storage_info.flash_total_capacity_mb > 0) {
+                g_device_service.storage_info.flash_usage_percent =
+                    (float)g_device_service.storage_info.flash_used_capacity_mb /
+                    g_device_service.storage_info.flash_total_capacity_mb * 100.0f;
+            }
+        }
         update_device_name(&g_device_service.device_info);
         //device_service_update_device_mac_address();
     }
@@ -1062,14 +1075,44 @@ aicam_result_t device_service_storage_get_info(storage_info_t *info)
     if (!info) {
         return AICAM_ERROR_INVALID_PARAM;
     }
-    
+
     if (!g_device_service.initialized) {
         return AICAM_ERROR_NOT_INITIALIZED;
     }
-    
+
     update_storage_info(&g_device_service.storage_info);
+    /* Lazily fetch flash free-space — update_storage_info skips this on the boot
+     * path to avoid lfs_fs_size (O(file count), 3-4s with many files → watchdog).
+     * Here it's a web API request; the 2s cache in storage_get_disk_info makes
+     * repeated polls cheap. */
+    storage_disk_info_t fi;
+    int fi_ret = storage_get_disk_info(&fi);
+    if (fi_ret == 0 && fi.mounted) {
+        g_device_service.storage_info.flash_available_capacity_mb = (uint64_t)fi.free_KBytes / 1024;
+        g_device_service.storage_info.flash_used_capacity_mb =
+            g_device_service.storage_info.flash_total_capacity_mb -
+            g_device_service.storage_info.flash_available_capacity_mb;
+        if (g_device_service.storage_info.flash_total_capacity_mb > 0) {
+            g_device_service.storage_info.flash_usage_percent =
+                (float)g_device_service.storage_info.flash_used_capacity_mb /
+                g_device_service.storage_info.flash_total_capacity_mb * 100.0f;
+        }
+    } else {
+        LOG_SVC_WARN("storage_get_info: flash disk info failed (ret=%d, mounted=%d) -- lfs_fs_size may have errored on a corrupt FS",
+                     fi_ret, (int)fi.mounted);
+        /* Surface the failure so the web UI can offer a format. If the FS
+         * reported mounted but lfs_fs_size errored, it's corrupt; otherwise
+         * it's simply not mounted (already flagged by update_storage_info). */
+        g_device_service.storage_info.flash_fs_error = AICAM_TRUE;
+        if (fi.mounted) {
+            strncpy(g_device_service.storage_info.flash_error, "corrupt",
+                    sizeof(g_device_service.storage_info.flash_error) - 1);
+            g_device_service.storage_info.flash_error[
+                sizeof(g_device_service.storage_info.flash_error) - 1] = '\0';
+        }
+    }
     memcpy(info, &g_device_service.storage_info, sizeof(storage_info_t));
-    
+
     return AICAM_OK;
 }
 
