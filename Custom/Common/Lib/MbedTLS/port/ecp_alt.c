@@ -278,13 +278,11 @@ int mbedtls_internal_ecp_add_mixed(const mbedtls_ecp_group *grp,
         return mbedtls_ecp_copy(R, Q);
     }
 
-    if (Q->MBEDTLS_PRIVATE(Z).MBEDTLS_PRIVATE(p) != NULL) {
-        if (mbedtls_mpi_cmp_int(&Q->MBEDTLS_PRIVATE(Z), 0) == 0) {
-            return mbedtls_ecp_copy(R, P);
-        }
-        if (mbedtls_mpi_cmp_int(&Q->MBEDTLS_PRIVATE(Z), 1) != 0) {
-            return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
-        }
+    if (mbedtls_mpi_cmp_int(&Q->MBEDTLS_PRIVATE(Z), 0) == 0) {
+        return mbedtls_ecp_copy(R, P);
+    }
+    if (mbedtls_mpi_cmp_int(&Q->MBEDTLS_PRIVATE(Z), 1) != 0) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }
 
     MBEDTLS_MPI_CHK(ec_group_to_hw_p256(grp, p_buf, gx_buf, gy_buf, n_buf, b_buf));

@@ -70,7 +70,7 @@ typedef funcptr funcptr_NS;
 /* Exported functions prototypes ---------------------------------------------*/
 void _Error_Handler_(void);
 
-#define Error_Handler() {printf("Error_Handler, file: %s line: %d\n", __FILE__, __LINE__);_Error_Handler_();}
+#define Error_Handler() do { printf("Error_Handler, file: %s line: %d\n", __FILE__, __LINE__); _Error_Handler_(); } while(0)
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */

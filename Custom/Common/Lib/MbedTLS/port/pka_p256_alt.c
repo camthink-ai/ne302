@@ -63,11 +63,12 @@ static int pka_session_begin(PKA_HandleTypeDef *hpka, int *locked)
 
 static void pka_session_end(PKA_HandleTypeDef *hpka, int locked)
 {
+    if (locked == 0) {
+        return;
+    }
     HAL_PKA_DeInit(hpka);
     __HAL_RCC_PKA_CLK_DISABLE();
-    if (locked != 0) {
-        pka_hw_unlock();
-    }
+    pka_hw_unlock();
 }
 
 int pka_p256_mpi_fits(const mbedtls_mpi *X)
