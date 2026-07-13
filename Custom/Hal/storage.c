@@ -24,7 +24,7 @@ static uint8_t s_lfs_lookahead_buffer[FS_LFS_LOOKAHEAD_SIZE / 8];
 static uint8_t storage_tread_stack[1024 * 8] ALIGN_32;
 const osThreadAttr_t storageTask_attributes = {
     .name = "storageTask",
-    .priority = (osPriority_t) osPriorityNormal,
+    .priority = (osPriority_t) osPriorityBelowNormal,
     .stack_mem = storage_tread_stack,
     .stack_size = sizeof(storage_tread_stack),
 };
@@ -122,10 +122,16 @@ static int mem_block_sync(const struct lfs_config *cfg)
     return LFS_ERR_OK;
 }
 
+static uint8_t storage_lfs_isready(void)
+{
+    if (!g_storage.lfs_sys.mounted) osSemaphoreAcquire(g_storage.lfs_sem_id, 3000);
+    return g_storage.lfs_sys.mounted;
+}
+
 static void *storage_lfs_opendir(void *context, const char *path)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return NULL;
+    if (!sys || !storage_lfs_isready()) return NULL;
     LFS_LOCK(sys);
 
     lfs_dir_handle_t *dh = hal_mem_alloc_fast(sizeof(lfs_dir_handle_t));
@@ -179,7 +185,7 @@ static int storage_lfs_closedir(void *context, void *dd)
 static void * storage_lfs_fopen(void *context, const char *path, const char *mode) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return NULL;
+    if (!sys || !storage_lfs_isready()) return NULL;
     LFS_LOCK(sys);
 
     lfs_file_handle_t *fh = hal_mem_alloc_fast(sizeof(lfs_file_handle_t));
@@ -263,7 +269,7 @@ static int storage_lfs_fwrite(void *context, void *fd, const void *buf, size_t s
 static int storage_lfs_remove(void *context, const char *path) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return -1;
+    if (!sys || !storage_lfs_isready()) return -1;
     LFS_LOCK(sys);
     int res = lfs_remove(&sys->lfs, path);
     LFS_UNLOCK(sys);
@@ -273,7 +279,7 @@ static int storage_lfs_remove(void *context, const char *path)
 static int storage_lfs_rename(void *context, const char *oldpath, const char *newpath) 
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return -1;
+    if (!sys || !storage_lfs_isready()) return -1;
     LFS_LOCK(sys);
     int res = lfs_rename(&sys->lfs, oldpath, newpath);
     LFS_UNLOCK(sys);
@@ -316,7 +322,7 @@ static int storage_lfs_fseek(void *context, void *fd, long offset, int whence)
 static int storage_lfs_stat(void *context, const char *filename, struct stat *st)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return -1;
+    if (!sys || !storage_lfs_isready()) return -1;
     LFS_LOCK(sys);
 
     struct lfs_info info;
@@ -337,7 +343,7 @@ static int storage_lfs_stat(void *context, const char *filename, struct stat *st
 static int storage_lfs_mkdir(void *context, const char *path)
 {
     lfs_mem_system_t *sys = (lfs_mem_system_t *)context;
-    if (!sys || !sys->mounted) return -1;
+    if (!sys || !storage_lfs_isready()) return -1;
     LFS_LOCK(sys);
 
     int res = lfs_mkdir(&sys->lfs, path);
@@ -811,9 +817,7 @@ static void storageProcess(void *argument)
 
     int ret = lfs_mem_init(&storage->lfs_sys, FS_FLASH_OFFSET, FS_FLASH_SIZE , FS_FLASH_BLK, 10000, lfs_lock, lfs_unlock);
     if (ret != 0) printf("lfs_mem_init failed(ret = %d)...\r\n", ret);
-
-    storage->file_ops_handle = file_ops_register(FS_FLASH, &lfs_file_ops, &storage->lfs_sys);
-    if (storage->file_ops_handle != -1) file_ops_switch(storage->file_ops_handle);
+    osSemaphoreRelease(storage->lfs_sem_id);
     
     while (storage->is_init) {
         if (osSemaphoreAcquire(storage->sem_id, osWaitForever) == osOK) {
@@ -830,6 +834,7 @@ int storage_init(void *priv)
     storage->mtx_id = osMutexNew(NULL);
     storage->lfs_mtx_id = osMutexNew(NULL);
     storage->sem_id = osSemaphoreNew(1, 0, NULL);
+    storage->lfs_sem_id = osSemaphoreNew(1, 0, NULL);
     storage->file_ops_handle = -1;
     
     common_flash_ops_t ops = {
@@ -871,6 +876,9 @@ int storage_init(void *priv)
         HAL_NVIC_SystemReset();
         return ret;
     }
+
+    storage->file_ops_handle = file_ops_register(FS_FLASH, &lfs_file_ops, &storage->lfs_sys);
+    if (storage->file_ops_handle != -1) file_ops_switch(storage->file_ops_handle);
 
     storage->is_init = true;
     storage->storage_processId = osThreadNew(storageProcess, storage, &storageTask_attributes);

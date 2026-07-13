@@ -101,6 +101,7 @@ typedef struct {
     osMutexId_t mtx_id;
     osMutexId_t lfs_mtx_id;
     osSemaphoreId_t sem_id;
+    osSemaphoreId_t lfs_sem_id;
     osThreadId_t storage_processId;
     int file_ops_handle;
 } storage_t;

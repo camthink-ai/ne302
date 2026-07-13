@@ -102,7 +102,8 @@ void MX_XSPI2_Init(void)
            (xspi_nor_chip == XSPI_NOR_CHIP_MX66) ? MFI_MX66 : MFI_GD55);
 #endif
     if (xspi_nor_chip == XSPI_NOR_CHIP_UNKNOWN) {
-        Error_Handler();
+        xspi_nor_chip = XSPI_NOR_CHIP_MX66;
+        // Error_Handler();
     }
 
     /* If MX66 detected, switch MemoryType from MICRON to MACRONIX */
