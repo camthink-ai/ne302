@@ -94,6 +94,20 @@ WEB_VERSION      := $(if $(WEB_VERSION_OVERRIDE),$(WEB_VERSION_OVERRIDE),$(VERSI
 MODEL_VERSION    := $(if $(MODEL_VERSION_OVERRIDE),$(MODEL_VERSION_OVERRIDE),$(VERSION))
 WAKECORE_VERSION := $(if $(WAKECORE_VERSION_OVERRIDE),$(WAKECORE_VERSION_OVERRIDE),$(VERSION))
 
+# Expected firmware versions shipped with this APP release.  Compared at runtime
+# against the versions actually running on the device; the web UI prompts the
+# user to upgrade when a mismatch is detected.
+#
+# NOTE: keep EXPECTED_FSBL_VERSION in sync with FSBL_VERSION_OVERRIDE above.
+EXPECTED_FSBL_VERSION := 1.0.3.0
+
+# Expected WiFi (SiWG917) firmware version.  Must match the .rps bundled under
+# Custom/Common/Lib/SiliconLabs_SDK/firmware/ using the same encoding as the
+# OTA packer: Major.Minor.Patch.(Security*100 + Build)
+# e.g. SiWG917-B.2.15.5.0.0.2  ->  2.15.5.2
+#      SiWG917-B.2.14.5.2.0.7  ->  2.14.5.207
+EXPECTED_WIFI_VERSION := 2.15.5.2
+
 # Determine effective suffix for each component
 # Logic: 
 #   - If set to NONE: no suffix

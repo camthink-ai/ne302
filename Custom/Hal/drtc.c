@@ -692,7 +692,16 @@ int rtc_get_next_wakeup_time(int sched_id, uint64_t *next_wakeup)
     
     rtc_mgr_lock();
     
-    // Find minimum next_trigger for the specified scheduler
+    // Snapshot current time before taking the lock (rtc_get_timeStamp only
+    // reads hardware RTC, no manager lock -> no recursion).
+    uint64_t now = rtc_get_timeStamp();
+
+    // Find minimum next_trigger for the specified scheduler. Only accept
+    // triggers strictly in the future: a trigger at/before now (e.g. a job
+    // whose next_trigger hasn't been advanced past its just-fired time, or one
+    // stranded in the past by an NTP time correction) would arm an RTC alarm
+    // that fires immediately on standby entry -> U0 wakes/resets and the host
+    // never loses power ("never sleeps"). See enter_sleep_mode() alarm path.
     uint64_t min_trigger = UINT64_MAX;
     bool found = false;
     
@@ -700,7 +709,7 @@ int rtc_get_next_wakeup_time(int sched_id, uint64_t *next_wakeup)
     wakeup_job_t *job = g_rtc.sched_manager.wake_jobs;
     while (job) {
         if (job->sched && job->sched->id == sched_id) {
-            if (job->next_trigger < min_trigger) {
+            if (job->next_trigger > (now + 3) && job->next_trigger < min_trigger) {
                 min_trigger = job->next_trigger;
                 found = true;
             }
@@ -712,7 +721,7 @@ int rtc_get_next_wakeup_time(int sched_id, uint64_t *next_wakeup)
     schedule_job_t *sched_job = g_rtc.sched_manager.schedule_jobs;
     while (sched_job) {
         if (sched_job->sched && sched_job->sched->id == sched_id) {
-            if (sched_job->next_trigger < min_trigger) {
+            if (sched_job->next_trigger > (now + 3) && sched_job->next_trigger < min_trigger) {
                 min_trigger = sched_job->next_trigger;
                 found = true;
             }

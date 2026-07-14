@@ -2687,7 +2687,7 @@ int sl_net_netif_ctrl(const char *if_name, netif_cmd_t cmd, void *param)
     //     sl_net_update_strorage_scan_result(3000);
     // }
     // If the firmware is not present and never updated, enter the update mode
-    if (ret == SL_STATUS_VALID_FIRMWARE_NOT_PRESENT && get_wifi_update_times() < 1) {
+    if (ret == SL_STATUS_VALID_FIRMWARE_NOT_PRESENT && get_wifi_update_times() < 3) {
         wifi_enter_update_mode();
     }
     return ret;

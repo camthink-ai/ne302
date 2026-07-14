@@ -13,6 +13,8 @@ import StorageManagement from "@/pages/storageManagement";
 import DeviceInformation from "@/pages/deviceInformation";
 import AuthGuard from "./components/auth-guard";
 import ImportFSBL from "@/pages/ImportFSBL";
+import ImportWifi from "@/pages/ImportWifi";
+import UpgradeWaiting from "@/pages/UpgradeWaiting";
 
 const baseRoutes = [
   {
@@ -61,6 +63,14 @@ const baseRoutes = [
   {
     path: "/import-fsbl",
     element: <ImportFSBL />,
+  },
+  {
+    path: "/import-wifi",
+    element: <ImportWifi />,
+  },
+  {
+    path: "/upgrade-waiting",
+    element: <UpgradeWaiting />,
   },
 ];
 

@@ -404,6 +404,10 @@ void StartMainTask(void *argument)
                 // Execution will restart from main() -> StartMainTask()
                 // This line should not be reached
                 printf("[MAIN] Enter sleep mode successfully!\r\n");
+                osDelay(1000);  
+                // Normally, it wouldn't run over here
+                printf("[MAIN] Resetting system...\r\n");
+                HAL_NVIC_SystemReset();
             } else {
                 printf("[MAIN] Failed to enter sleep mode: %d, continuing...\r\n", result);
                 osDelay(100); // Wait before retry

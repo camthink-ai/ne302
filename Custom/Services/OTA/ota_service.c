@@ -257,6 +257,9 @@ ota_validation_result_t ota_validate_partition_availability(FirmwareType fw_type
         case FIRMWARE_AI_2:
             partition_size = 0x1000000; // 16MB
             break;
+        case FIRMWARE_WIFI:
+            partition_size = WIFI_FW_SIZE; // 3MB
+            break;
         default:
             partition_size = 0x100000;  // 1MB default
             break;

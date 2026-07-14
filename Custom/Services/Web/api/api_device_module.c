@@ -27,7 +27,7 @@
 #include "upload_coordinator.h"
 #include "version.h"
 #include "fsbl_app_common.h"
-
+#include "wifi.h"
 /* ==================== Helper Functions ==================== */
 
 static uint32_t restart_delay_seconds = 3;
@@ -2120,7 +2120,20 @@ static aicam_result_t firmware_versions_handler(http_handler_context_t *ctx)
 #else
     cJSON_AddStringToObject(response, "wakecore", "N/A");
 #endif
-    
+
+    // WiFi (SiWG917) firmware version — flash-stored .rps + running chip fw
+    {
+        char wifi_flash_ver[32] = "N/A";
+        char wifi_running_ver[32] = "N/A";
+        wifi_get_flash_version(wifi_flash_ver, sizeof(wifi_flash_ver));
+        wifi_get_running_version(wifi_running_ver, sizeof(wifi_running_ver));
+        cJSON_AddStringToObject(response, "wifi", wifi_flash_ver);
+        cJSON_AddStringToObject(response, "wifi_running", wifi_running_ver);
+        // Expected versions compiled from version.mk via version.h
+        cJSON_AddStringToObject(response, "expected_fsbl", EXPECTED_FSBL_VERSION_STRING);
+        cJSON_AddStringToObject(response, "expected_wifi", EXPECTED_WIFI_VERSION_STRING);
+    }
+
     // Convert to string
     char *json_str = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
@@ -2131,6 +2144,53 @@ static aicam_result_t firmware_versions_handler(http_handler_context_t *ctx)
     
     // Send response
     return api_response_success(ctx, json_str, "Firmware versions retrieved successfully");
+}
+
+/**
+ * @brief GET /api/v1/device/version-check — compare running versions against
+ *        the EXPECTED_* macros compiled into the APP firmware.
+ *
+ * Returns an object like:
+ *   { "fsbl_mismatch": false, "wifi_mismatch": true,
+ *     "expected_fsbl": "1.0.3.0",    "current_fsbl": "1.0.3.0",
+ *     "expected_wifi": "2.15.5.2",   "current_wifi": "2.14.5.207" }
+ *
+ * The web UI uses this after login to prompt the user to upgrade out-of-date
+ * FSBL or WiFi firmware (FSBL check takes priority).
+ */
+static aicam_result_t version_check_handler(http_handler_context_t *ctx)
+{
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+    if (!web_api_verify_method(ctx, "GET"))
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET");
+
+    // --- FSBL version (from OTA slot) ---
+    SystemState *state = ota_get_system_state();
+    char current_fsbl[32] = "unknown";
+    if (state) {
+        ota_version_to_string(
+            state->slot[FIRMWARE_FSBL][state->active_slot[FIRMWARE_FSBL]].version,
+            current_fsbl, sizeof(current_fsbl));
+    }
+
+    // --- WiFi version (from running chip) ---
+    char current_wifi[32] = "N/A";
+    wifi_get_running_version(current_wifi, sizeof(current_wifi));
+
+    int fsbl_mismatch = (strcmp(current_fsbl, EXPECTED_FSBL_VERSION_STRING) != 0);
+    int wifi_mismatch = (strcmp(current_wifi, EXPECTED_WIFI_VERSION_STRING) != 0);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "fsbl_mismatch", fsbl_mismatch);
+    cJSON_AddBoolToObject(resp, "wifi_mismatch", wifi_mismatch);
+    cJSON_AddStringToObject(resp, "expected_fsbl", EXPECTED_FSBL_VERSION_STRING);
+    cJSON_AddStringToObject(resp, "current_fsbl", current_fsbl);
+    cJSON_AddStringToObject(resp, "expected_wifi", EXPECTED_WIFI_VERSION_STRING);
+    cJSON_AddStringToObject(resp, "current_wifi", current_wifi);
+
+    char *json_str = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_response_success(ctx, json_str, "OK");
 }
 
 /**
@@ -2182,6 +2242,13 @@ static const api_route_t device_module_routes[] = {
         .method = "GET",
         .path = API_PATH_PREFIX "/device/firmware-versions",
         .handler = firmware_versions_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "GET",
+        .path = API_PATH_PREFIX "/device/version-check",
+        .handler = version_check_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

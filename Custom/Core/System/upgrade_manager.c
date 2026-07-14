@@ -12,7 +12,9 @@ static firmware_partition_t g_partitions[FIRMWARE_TYPE_COUNT] = {
     {FIRMWARE_WEB, WEB_MAGIC, WEB_BASE - FLASH_BASE, WEB_BASE - FLASH_BASE, WEB_SIZE},
     {FIRMWARE_AI_1, AI_MAGIC, AI_1_BASE - FLASH_BASE, AI_1_BASE - FLASH_BASE, AI_1_SIZE},
     {FIRMWARE_AI_2, AI_MAGIC, AI_2_BASE - FLASH_BASE, AI_2_BASE - FLASH_BASE, AI_2_SIZE},
-    {FIRMWARE_RESERVED1, 0, 0, 0, 0},
+    // WiFi firmware: single-slot (A==B) at WIFI_FW_BASE. The OTA header is NOT
+    // written to flash for WiFi (only flash_header_t + .rps), mirroring FSBL.
+    {FIRMWARE_WIFI, WIFI_MAGIC, WIFI_FW_BASE - FLASH_BASE, WIFI_FW_BASE - FLASH_BASE, WIFI_FW_SIZE},
     {FIRMWARE_RESERVED2, 0, 0, 0, 0},
 };
 

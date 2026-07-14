@@ -742,7 +742,81 @@ void wifi_enter_update_mode(void)
     HAL_NVIC_SystemReset();
 }
 
-static int wifi_update_cmd(int argc, char* argv[]) 
+void wifi_mark_update_pending(void)
+{
+    storage_nvs_write(NVS_FACTORY, NVS_KEY_WIFI_MODE, WIFI_MODE_UPDATE, strlen(WIFI_MODE_UPDATE));
+    LOG_SIMPLE("wifi update pending, will apply on next reboot\r\n");
+}
+
+int wifi_get_running_version(char *buf, size_t size)
+{
+    if (!buf || size < 16) return -1;
+
+    sl_wifi_firmware_version_t fw;
+    sl_status_t status = sl_wifi_get_firmware_version(&fw);
+    if (status != SL_STATUS_OK) {
+        snprintf(buf, size, "N/A");
+        return -1;
+    }
+
+    // Version encoding matches pack_to_hex.py / ota_packer.py:
+    // Major.Minor.Patch.(Security*100 + Build)
+    // e.g. {2,14,5,2,0,7} -> "2.14.5.207"
+    //
+    // NOTE: the SiWG917 SDK swaps the field names — security_version actually
+    //       holds the patch number, and patch_num holds the security version.
+    //       This mirrors the .rps binary header layout (see wifi_get_flash_version).
+    int encoded_build = (int)fw.patch_num * 100 + (int)fw.build_num;
+    snprintf(buf, size, "%u.%u.%u.%d",
+             fw.major, fw.minor, fw.security_version, encoded_build);
+    return 0;
+}
+
+int wifi_get_flash_version(char *buf, size_t size)
+{
+    if (!buf || size < 16) return -1;
+
+    const uint8_t *flash_addr = (const uint8_t *)WIFI_FLASH_BASE_ADDR;
+    const flash_header_t *hdr = (const flash_header_t *)flash_addr;
+    if (hdr->valid_flags != WIFI_FLASH_VALID_FLAGS) {
+        snprintf(buf, size, "N/A");
+        return -1;
+    }
+
+    // .rps binary immediately follows the 32-byte flash_header_t.  Its first
+    // 64 bytes are a sl_wifi_firmware_header_t.  Version components are split
+    // across two sub-structures within that 64-byte block:
+    //
+    //   offset in .rps   field (SDK struct name)   our mapping
+    //   ───────────────  ─────
+    //   12               fw_version_info:
+    //                      build_num        [7:0]   build
+    //                      security_version [15:8]  patch  ← SDK naming quirk
+    //                      minor           [23:16]  minor
+    //                      major           [31:24]  major
+    //   44               fw_version_ext_info:
+    //                      patch_num        [7:0]   security ← SDK naming quirk
+    storage_lock();
+    const uint8_t *rps = flash_addr + WIFI_FLASH_HEADER_SIZE;
+    uint32_t ver_info = *(const uint32_t *)(rps + 12);
+    uint32_t ver_ext  = *(const uint32_t *)(rps + 44);
+    storage_unlock();
+
+    uint8_t major    = (ver_info >> 24) & 0xFF;
+    uint8_t minor    = (ver_info >> 16) & 0xFF;
+    uint8_t patch    = (ver_info >>  8) & 0xFF;  // SDK: security_version
+    uint8_t security = (ver_ext  >>  0) & 0xFF;  // SDK: patch_num
+    uint8_t build    = (ver_info >>  0) & 0xFF;
+
+    // Encode to 4-part version matching pack_to_hex.py / ota_packer.py:
+    // Major.Minor.Patch.(Security*100 + Build)
+    int encoded_build = (int)security * 100 + (int)build;
+    snprintf(buf, size, "%u.%u.%u.%d",
+             major, minor, patch, encoded_build);
+    return 0;
+}
+
+static int wifi_update_cmd(int argc, char* argv[])
 {
     wifi_enter_update_mode();
     return 0;

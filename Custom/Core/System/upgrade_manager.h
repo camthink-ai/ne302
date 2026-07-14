@@ -21,6 +21,7 @@
 #define APP_MAGIC 0x41505000 //APP
 #define WEB_MAGIC 0x57454200 //WEB
 #define AI_MAGIC  0x41490000 //AI
+#define WIFI_MAGIC 0x57494649 //WIFI
 
 typedef int (*upgrade_flash_read)(uint32_t offset, void *data, size_t size);
 typedef int (*upgrade_flash_write)(uint32_t offset, void *data, size_t size);
@@ -32,7 +33,8 @@ typedef enum {
     FIRMWARE_WEB,
     FIRMWARE_AI_1,
     FIRMWARE_AI_2,
-    FIRMWARE_RESERVED1,
+    FIRMWARE_WIFI,      // WiFi (SiWG917) firmware — reuses the former RESERVED1 slot
+                        // index to keep the NVS-persisted active_slot[] layout stable.
     FIRMWARE_RESERVED2,
     FIRMWARE_TYPE_COUNT
 } FirmwareType;

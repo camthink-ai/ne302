@@ -102,7 +102,7 @@ def parse_version_mk(version_mk_path):
         # Try to extract COMP_VERSION := value
         comp_version_match = re.search(rf'{comp}_VERSION\s*:?=\s*(.+?)(?:\n|$)', content)
         comp_suffix_match = re.search(rf'{comp}_EFFECTIVE_SUFFIX\s*:?=\s*(.+?)(?:\n|$)', content)
-        
+
         if comp_version_match:
             comp_ver_str = comp_version_match.group(1).strip()
             # Remove Make functions and evaluate
@@ -111,7 +111,15 @@ def parse_version_mk(version_mk_path):
                 'version_str': comp_ver_str,
                 'suffix': ''
             }
-    
+
+    # Parse expected firmware versions
+    fsbl_match = re.search(r'EXPECTED_FSBL_VERSION\s*:?=\s*(\S+)', content)
+    if fsbl_match:
+        version['expected_fsbl'] = fsbl_match.group(1).strip()
+    wifi_match = re.search(r'EXPECTED_WIFI_VERSION\s*:?=\s*(\S+)', content)
+    if wifi_match:
+        version['expected_wifi'] = wifi_match.group(1).strip()
+
     return version
 
 def generate_version_header(output_path, version, build_override=None):
@@ -139,10 +147,11 @@ def generate_version_header(output_path, version, build_override=None):
     version_string = f"{major}.{minor}.{patch}.{build}"
     if suffix:
         version_string = f"{version_string}_{suffix}"
-    
-    # WakeCore version (from command line or use main version)
-    fsbl_version_string = version.get('fsbl_version', version_string)
-    
+
+    # Expected firmware versions (from version.mk, with --fsbl-version as fallback)
+    expected_fsbl = version.get('expected_fsbl', '') or version.get('fsbl_version', '') or version_string
+    expected_wifi = version.get('expected_wifi', '') or '0.0.0.0'
+
     header_content = f'''/**
  * @file version.h
  * @brief Auto-generated version information (DO NOT EDIT)
@@ -178,6 +187,11 @@ def generate_version_header(output_path, version, build_override=None):
 
 #define FW_VERSION_AT_LEAST(major, minor, patch) \\
     (FW_VERSION_U32 >= FW_VERSION_MAKE(major, minor, patch, 0))
+
+/* ==================== Expected Firmware Versions ==================== */
+/* Definitions in version.mk; generated here so the C code can reference them. */
+#define EXPECTED_FSBL_VERSION_STRING    "{expected_fsbl}"
+#define EXPECTED_WIFI_VERSION_STRING    "{expected_wifi}"
 
 #endif /* VERSION_H */
 '''
