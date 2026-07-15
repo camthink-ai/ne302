@@ -86,6 +86,7 @@ export default function Light() {
    const handleSetLightBrightness = async (value: number) => {
       const nextCfg: SetLightConfigReq = { ...lightConfigRef.current, brightness_level: value };
       await handleSetLightConfig(nextCfg);
+      // When test switch is ON, update duty immediately by re-applying manual ON.
       if (testLightOnRef.current) {
          await controlLightReq({ enable: true });
       }
@@ -122,6 +123,7 @@ export default function Light() {
          if (checked) {
             const value = lightConfigRef.current.brightness_level;
             latestBrightnessRef.current = value;
+            // Ensure brightness is applied before turning ON.
             const nextCfg: SetLightConfigReq = {
                ...lightConfigRef.current,
                brightness_level: value,
@@ -136,6 +138,7 @@ export default function Light() {
          testLightOnRef.current = !checked;
          setTestLightOn(!checked);
          if (checked) {
+            // Best-effort revert: turn light off if enabling failed.
             controlLightReq({ enable: false }).catch(() => {});
          }
       }
@@ -161,6 +164,7 @@ export default function Light() {
       </div>
    )
 
+   // If leaving the brightness-adjustable modes, ensure test switch turns light off
    useEffect(() => {
       if (loading) return;
       if (!lightConfig?.connected || lightConfig.mode === 'off') {
@@ -183,6 +187,7 @@ export default function Light() {
       if (brightnessApplyTimerRef.current) {
          clearTimeout(brightnessApplyTimerRef.current);
       }
+      // Throttle to reduce POST spam while dragging.
       brightnessApplyTimerRef.current = setTimeout(() => {
          handleSetLightBrightness(latestBrightnessRef.current).catch(error => {
             console.error('scheduleRealtimeBrightnessApply', error);

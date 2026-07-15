@@ -19,6 +19,11 @@
 #include "json_config_mgr.h"
 #include "video_camera_node.h"
 #include "device_service.h"
+#include "Services/Video/video_stream_hub.h"
+#include "mqtt_service.h"
+#include "drtc.h"
+#include "common_utils.h"
+#include "cbor_enc.h"
 
 /* ==================== AI Service Context ==================== */
 
@@ -55,7 +60,61 @@ typedef struct {
 
 static ai_service_context_t g_ai_service = {0};
 
+/* ==================== Continuous AI Telemetry Context ==================== */
+
+#define AI_TELEMETRY_FLAG_RESULT    0x0001U
+#define AI_TELEMETRY_MAX_DETECTS    32   // matches max_detections in the AI configs
+#define AI_TELEMETRY_MAX_KEYPOINTS  64
+
+#define AI_TELEMETRY_CBOR_VERSION   1U
+// Bounds the worst-case CBOR beat (32 MPE detects x 33 keypoints) with margin
+#define AI_TELEMETRY_ENCODE_BUF_SIZE (16U * 1024U)
+
+/**
+ * @brief One published telemetry beat, deep-copied at inference time
+ * @details The pp module rewrites its output buffers on every inference (on
+ *          any path, including captures), so the pointer-backed payloads in
+ *          nn_result_t are rebased into the telemetry-owned buffers below.
+ */
+typedef struct {
+    nn_result_t result;                    // Result with detect/keypoint pointers rebased
+    uint32_t frame_id;                     // Sensor frame the inference ran on
+    uint32_t inference_time_ms;            // Measured wall time of this inference
+    uint64_t timestamp_ms;                 // RTC time the result was snapshotted
+    char model_name[64];                   // From nn_model_info_t.name
+    aicam_bool_t valid;                    // Snapshot holds a publishable result
+} ai_telemetry_snapshot_t;
+
+static struct {
+    aicam_bool_t initialized;              // Telemetry unit initialization status
+    volatile aicam_bool_t task_running;    // Publisher task loop gate
+    volatile aicam_bool_t task_exited;     // Publisher task exit handshake
+    osThreadId_t task_handle;              // Publisher task handle
+    osEventFlagsId_t event_flags;          // New-result signal to the publisher task
+    osMutexId_t snapshot_mutex;            // Guards snapshot and the copy buffers
+    ai_telemetry_snapshot_t snapshot;      // Latest result handed to the publisher
+    od_detect_t *od_detects;               // Deep-copy destination (OD)
+    mpe_detect_t *mpe_detects;             // Deep-copy destination (MPE)
+    spe_keypoint_t *spe_keypoints;         // Deep-copy destination (SPE)
+    iseg_detect_t *iseg_detects;           // Deep-copy destination (ISEG, masks omitted)
+    uint8_t *encode_buf;                   // CBOR beat encode buffer
+    video_hub_subscriber_id_t hub_sub_id;  // Hub subscription that holds the pipeline running
+} g_ai_telemetry = {0};
+
+static uint8_t ai_telemetry_task_stack[1024 * 4] ALIGN_32 IN_PSRAM;
+
 /* ==================== Internal Function Declarations ==================== */
+
+static void ai_telemetry_result_callback(const nn_result_t *result, uint32_t frame_id,
+                                         uint32_t inference_time_ms, void *user_data);
+static aicam_result_t ai_telemetry_hub_frame_cb(const video_hub_frame_t *frame, void *user_data);
+static void ai_telemetry_task(void *argument);
+static void ai_telemetry_publish(void);
+static void ai_telemetry_reconcile_pipeline(void);
+static void ai_telemetry_invalidate_snapshot(void);
+static aicam_result_t ai_telemetry_init(void);
+static aicam_bool_t ai_telemetry_stop_task(void);
+static void ai_telemetry_deinit(void);
 
 static void ai_camera_pipeline_event_callback(video_pipeline_t *pipeline,
                                              uint32_t event_type,
@@ -71,6 +130,8 @@ static aicam_result_t ai_create_camera_pipeline_nodes(const ai_service_config_t 
 static aicam_result_t ai_create_ai_pipeline_nodes(const ai_service_config_t *config);
 static aicam_result_t ai_connect_camera_pipeline_nodes(void);
 static aicam_result_t ai_connect_ai_pipeline_nodes(void);
+
+static aicam_result_t ai_reload_model_restart_pipeline(void);
 
 static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer, 
                                              uint32_t width, 
@@ -126,7 +187,12 @@ aicam_result_t ai_service_start(void)
         LOG_SVC_ERROR("Failed to initialize AI pipeline: %d", result);
         return result;
     }
-    
+
+    // Telemetry is auxiliary: a failure here must not take down the service
+    if (ai_telemetry_init() != AICAM_OK) {
+        LOG_SVC_WARN("AI telemetry unavailable, continuing without it");
+    }
+
     g_ai_service.running = AICAM_TRUE;
     g_ai_service.state = SERVICE_STATE_RUNNING;
     g_ai_service.stats.start_time_ms = osKernelGetTickCount();
@@ -147,9 +213,17 @@ aicam_result_t ai_service_stop(void)
     }
     
     LOG_SVC_INFO("Stopping AI Service...");
-    
+
+    // Order matters: stop the telemetry task and unregister the result
+    // callback first (kills the reconciler so it cannot restart the pipeline),
+    // then stop the pipeline so the AI node thread drains any in-flight
+    // callback, and only then free the telemetry snapshot resources.
+    ai_telemetry_stop_task();
+
     // Stop pipeline
     ai_pipeline_stop();
+
+    ai_telemetry_deinit();
     
     g_ai_service.running = AICAM_FALSE;
     g_ai_service.state = SERVICE_STATE_INITIALIZED;
@@ -385,7 +459,15 @@ aicam_result_t ai_pipeline_stop(void)
     }
     
     LOG_SVC_INFO("AI pipelines stopped successfully");
-    
+
+    /* Encoder session is torn down with the camera pipeline; drop the stale
+     * SPS/PPS cache so the next pipeline start re-extracts fresh params.
+     * Otherwise the MSE player is fed stale SPS/PPS and the preview stays
+     * black after a model reload / pipeline restart. */
+    if (video_hub_is_initialized()) {
+        video_hub_invalidate_sps_pps();
+    }
+
     return result;
 }
 
@@ -610,6 +692,7 @@ static aicam_result_t ai_create_camera_pipeline_nodes(const ai_service_config_t 
     camera_config.bpp = config->bpp;
     camera_config.format = config->format;
     camera_config.ai_enabled = config->ai_enabled;
+    camera_config.overlay_results = config->overlay_results;
     
     // Create encoder node configuration
     video_encoder_config_t encoder_config;
@@ -673,7 +756,9 @@ static aicam_result_t ai_create_ai_pipeline_nodes(const ai_service_config_t *con
     ai_config.nms_threshold = config->nms_threshold;
     ai_config.max_detections = config->max_detections;
     ai_config.processing_interval = config->processing_interval;
+    ai_config.inference_interval_ms = config->inference_interval_ms;
     ai_config.enabled = config->ai_enabled;
+    ai_config.overlay_results = config->overlay_results;
     ai_config.enable_drawing = config->enable_drawing;
     
     // Create AI node
@@ -694,7 +779,7 @@ static aicam_result_t ai_create_ai_pipeline_nodes(const ai_service_config_t *con
     }
 
     //load model
-    // result = ai_load_model(AI_DEFAULT_BASE);
+    // result = ai_load_model(AI_1_BASE);
     // if (result != AICAM_OK) {
     //     LOG_SVC_ERROR("Failed to load AI model: %d", result);
     //     return result;
@@ -794,6 +879,95 @@ aicam_result_t ai_set_inference_enabled(aicam_bool_t enabled)
 aicam_bool_t ai_get_inference_enabled(void)
 {
     return g_ai_service.config.ai_enabled;
+}
+
+aicam_result_t ai_set_overlay_results(aicam_bool_t overlay_results)
+{
+    // Update and persist the configuration first, so the setting also
+    // takes effect (via config) when the pipeline is not running
+    g_ai_service.config.overlay_results = overlay_results;
+    json_config_set_overlay_results(overlay_results);
+
+    if (!g_ai_service.ai_pipeline_initialized || !g_ai_service.ai_node || !g_ai_service.camera_node) {
+        LOG_SVC_INFO("AI overlay results %s (pipeline not active, saved to config)",
+                     overlay_results ? "enabled" : "disabled");
+        return AICAM_OK;
+    }
+
+    // Update AI node configuration
+    video_ai_config_t ai_config;
+    aicam_result_t result = video_ai_node_get_config(g_ai_service.ai_node, &ai_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to get AI node config: %d", result);
+        return result;
+    }
+    ai_config.overlay_results = overlay_results;
+    result = video_ai_node_set_config(g_ai_service.ai_node, &ai_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to set AI node config: %d", result);
+        return result;
+    }
+
+    // Update camera node config
+    video_camera_config_t camera_config;
+    result = video_camera_node_get_config(g_ai_service.camera_node, &camera_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to get camera node config: %d", result);
+        return result;
+    }
+    camera_config.overlay_results = overlay_results;
+    result = video_camera_node_set_config(g_ai_service.camera_node, &camera_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to set camera node config: %d", result);
+        return result;
+    }
+
+    LOG_SVC_INFO("AI overlay results %s", overlay_results ? "enabled" : "disabled");
+    return AICAM_OK;
+}
+
+aicam_bool_t ai_get_overlay_results(void)
+{
+    return g_ai_service.config.overlay_results;
+}
+
+aicam_result_t ai_set_inference_interval_ms(uint32_t interval_ms)
+{
+    // Any uint32 is a valid interval (0 = every frame); range is validated at
+    // the API boundary where the request value is still a JSON number.
+
+    // Update and persist the configuration first, so the setting also
+    // takes effect (via config) when the pipeline is not running
+    g_ai_service.config.inference_interval_ms = interval_ms;
+    json_config_set_inference_interval_ms(interval_ms);
+
+    if (!g_ai_service.ai_pipeline_initialized || !g_ai_service.ai_node) {
+        LOG_SVC_INFO("AI inference interval set to %u ms (pipeline not active, saved to config)",
+                     (unsigned)interval_ms);
+        return AICAM_OK;
+    }
+
+    // Update AI node configuration
+    video_ai_config_t ai_config;
+    aicam_result_t result = video_ai_node_get_config(g_ai_service.ai_node, &ai_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to get AI node config: %d", result);
+        return result;
+    }
+    ai_config.inference_interval_ms = interval_ms;
+    result = video_ai_node_set_config(g_ai_service.ai_node, &ai_config);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to set AI node config: %d", result);
+        return result;
+    }
+
+    LOG_SVC_INFO("AI inference interval set to %u ms", (unsigned)interval_ms);
+    return AICAM_OK;
+}
+
+uint32_t ai_get_inference_interval_ms(void)
+{
+    return g_ai_service.config.inference_interval_ms;
 }
 
 aicam_result_t ai_set_nms_threshold(uint32_t threshold)
@@ -1036,11 +1210,18 @@ aicam_result_t ai_reload_model(void)
         return result;
     }
 
+    // Drop any telemetry beat latched against the outgoing model: the AI node
+    // thread is now drained (no new beat), and the reload below frees the pp
+    // class-label/keypoint metadata that a latched snapshot still points into.
+    ai_telemetry_invalidate_snapshot();
+
     //reload model
     result = video_ai_node_reload_model(g_ai_service.ai_node);
     if (result != AICAM_OK) {
         LOG_SVC_ERROR("Failed to reload AI model: %d", result);
-        device_service_camera_start();
+        if (device_service_camera_start() == AICAM_OK) {
+            ai_reload_model_restart_pipeline();
+        }
         return result;
     }
 
@@ -1051,6 +1232,17 @@ aicam_result_t ai_reload_model(void)
         return result;
     }
 
+    //Restart pipelines when a preview subscriber is already attached (e.g. a
+    //direct /model/reload call with preview active) so frame production
+    //resumes and the still-connected subscriber receives the encoder's fresh
+    //IDR + SPS/PPS immediately. When preview was stopped first (the web
+    //feature-debug upload flow leaves no subscribers here), leave the pipeline
+    //stopped: the subsequent /preview/start re-subscribes and the Hub
+    //auto-starts the pipeline, which captures the encoder's first IDR instead
+    //of dropping it (an unconditional start here would discard that IDR while
+    //there are zero subscribers, delaying preview recovery by one GOP).
+    ai_reload_model_restart_pipeline();
+
     //deint draw service
     // result = ai_draw_service_deinit();
     // if (result != AICAM_OK) {
@@ -1059,6 +1251,21 @@ aicam_result_t ai_reload_model(void)
     // }
 
     return AICAM_OK;
+}
+
+/* Restart the AI pipelines after a model reload, but only when the Video Hub
+ * currently has subscribers. See ai_reload_model() for the rationale. */
+static aicam_result_t ai_reload_model_restart_pipeline(void)
+{
+    if (!video_hub_is_initialized() || !video_hub_has_subscribers()) {
+        return AICAM_OK;
+    }
+
+    aicam_result_t result = ai_pipeline_start();
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to restart AI pipelines after model reload: %d", result);
+    }
+    return result;
 }
 
 /* ==================== AI Statistics Functions ==================== */
@@ -1161,6 +1368,490 @@ void ai_print_stats(void)
 
 /* ==================== AI Configuration Functions ==================== */
 
+/* ==================== Continuous AI Telemetry ==================== */
+
+/**
+ * @brief Snapshot a fresh inference result for the telemetry publisher
+ * @details Runs on the AI node's processing thread. Deep-copies the
+ *          pointer-backed payloads before the pp output buffers can be
+ *          rewritten by the next inference, then signals the publisher task.
+ */
+static void ai_telemetry_result_callback(const nn_result_t *result, uint32_t frame_id,
+                                         uint32_t inference_time_ms, void *user_data)
+{
+    (void)user_data;
+
+    if (!g_ai_telemetry.initialized || !mqtt_service_get_telemetry_enabled()) {
+        return;
+    }
+
+    // One beat per inference; the AI node's pacing sets the rate
+
+    // Drop this beat rather than stall the inference thread behind a publish
+    if (osMutexAcquire(g_ai_telemetry.snapshot_mutex, 10) != osOK) {
+        return;
+    }
+
+    ai_telemetry_snapshot_t *snap = &g_ai_telemetry.snapshot;
+    memcpy(&snap->result, result, sizeof(nn_result_t));
+
+    // Rebase the pointer-backed payloads into telemetry-owned buffers
+    switch (result->type) {
+        case PP_TYPE_OD:
+            if (result->od.detects && result->od.nb_detect > 0) {
+                uint8_t count = result->od.nb_detect;
+                if (count > AI_TELEMETRY_MAX_DETECTS) count = AI_TELEMETRY_MAX_DETECTS;
+                memcpy(g_ai_telemetry.od_detects, result->od.detects, count * sizeof(od_detect_t));
+                snap->result.od.detects = g_ai_telemetry.od_detects;
+                snap->result.od.nb_detect = count;
+            }
+            break;
+
+        case PP_TYPE_MPE:
+            if (result->mpe.detects && result->mpe.nb_detect > 0) {
+                uint8_t count = result->mpe.nb_detect;
+                if (count > AI_TELEMETRY_MAX_DETECTS) count = AI_TELEMETRY_MAX_DETECTS;
+                // Keypoints are inline in mpe_detect_t; name/connection pointers
+                // reference model metadata that is stable while the model is loaded
+                memcpy(g_ai_telemetry.mpe_detects, result->mpe.detects, count * sizeof(mpe_detect_t));
+                snap->result.mpe.detects = g_ai_telemetry.mpe_detects;
+                snap->result.mpe.nb_detect = count;
+            }
+            break;
+
+        case PP_TYPE_SPE:
+            if (result->spe.keypoints && result->spe.nb_keypoints > 0) {
+                uint32_t count = result->spe.nb_keypoints;
+                if (count > AI_TELEMETRY_MAX_KEYPOINTS) count = AI_TELEMETRY_MAX_KEYPOINTS;
+                memcpy(g_ai_telemetry.spe_keypoints, result->spe.keypoints, count * sizeof(spe_keypoint_t));
+                snap->result.spe.keypoints = g_ai_telemetry.spe_keypoints;
+                snap->result.spe.nb_keypoints = count;
+            }
+            break;
+
+        case PP_TYPE_ISEG:
+            if (result->iseg.detects && result->iseg.nb_detect > 0) {
+                uint8_t count = result->iseg.nb_detect;
+                if (count > AI_TELEMETRY_MAX_DETECTS) count = AI_TELEMETRY_MAX_DETECTS;
+                memcpy(g_ai_telemetry.iseg_detects, result->iseg.detects, count * sizeof(iseg_detect_t));
+                // Masks stay in the shared pp buffer; the JSON serializer only
+                // reports mask_size, so drop the pointers rather than race on them
+                for (uint8_t i = 0; i < count; i++) {
+                    g_ai_telemetry.iseg_detects[i].mask = NULL;
+                }
+                snap->result.iseg.detects = g_ai_telemetry.iseg_detects;
+                snap->result.iseg.nb_detect = count;
+            }
+            break;
+
+        default:
+            // Remaining types carry no payload the JSON serializer dereferences
+            break;
+    }
+
+    snap->frame_id = frame_id;
+    snap->inference_time_ms = inference_time_ms;
+    snap->timestamp_ms = rtc_get_timestamp_ms();
+    nn_model_info_t model_info;
+    if (ai_service_get_model_info(&model_info) == AICAM_OK) {
+        strncpy(snap->model_name, model_info.name, sizeof(snap->model_name) - 1);
+        snap->model_name[sizeof(snap->model_name) - 1] = '\0';
+    } else {
+        snap->model_name[0] = '\0';
+    }
+    snap->valid = AICAM_TRUE;
+
+    osMutexRelease(g_ai_telemetry.snapshot_mutex);
+
+    osEventFlagsSet(g_ai_telemetry.event_flags, AI_TELEMETRY_FLAG_RESULT);
+}
+
+/**
+ * @brief Hub frame sink for the telemetry subscription
+ * @details Telemetry holds a hub subscription only to keep the AI pipeline
+ *          running (the hub starts/stops it by subscriber refcount); it does
+ *          not consume encoded video, so this callback discards the frame.
+ */
+static aicam_result_t ai_telemetry_hub_frame_cb(const video_hub_frame_t *frame, void *user_data)
+{
+    (void)frame;
+    (void)user_data;
+    return AICAM_OK;
+}
+
+/**
+ * @brief Keep the AI pipeline running while telemetry is enabled
+ * @details Continuous inference otherwise only runs while the video hub has
+ *          subscribers (preview/RTSP/RTMP), so on a headless unit telemetry
+ *          holds its own hub subscription. Going through the hub's refcount
+ *          (rather than calling ai_pipeline_start/stop directly) lets the hub
+ *          serialize start/stop against real viewers under its own mutex, so a
+ *          viewer subscribing as telemetry is disabled cannot be left black.
+ */
+static void ai_telemetry_reconcile_pipeline(void)
+{
+    aicam_bool_t desired = mqtt_service_get_telemetry_enabled();
+
+    if (desired && g_ai_service.ai_pipeline_initialized &&
+        g_ai_telemetry.hub_sub_id == VIDEO_HUB_INVALID_SUBSCRIBER_ID) {
+        video_hub_subscriber_id_t id = video_hub_subscribe(
+            VIDEO_HUB_SUBSCRIBER_CUSTOM, ai_telemetry_hub_frame_cb, NULL, NULL);
+        if (id != VIDEO_HUB_INVALID_SUBSCRIBER_ID) {
+            g_ai_telemetry.hub_sub_id = id;
+            LOG_SVC_INFO("Telemetry enabled: holding AI pipeline via hub subscription %ld",
+                         (long)id);
+        }
+    } else if (!desired && g_ai_telemetry.hub_sub_id != VIDEO_HUB_INVALID_SUBSCRIBER_ID) {
+        video_hub_unsubscribe(g_ai_telemetry.hub_sub_id);
+        LOG_SVC_INFO("Telemetry disabled: released hub subscription %ld",
+                     (long)g_ai_telemetry.hub_sub_id);
+        g_ai_telemetry.hub_sub_id = VIDEO_HUB_INVALID_SUBSCRIBER_ID;
+    }
+}
+
+/**
+ * @brief Invalidate the latched telemetry snapshot
+ * @details Called from the model-reload path after the AI node thread is
+ *          drained but before the pp module frees the class-label / keypoint
+ *          metadata that the snapshot's copied detect structs still point into.
+ *          Without this a beat latched before the reload would be serialized
+ *          against freed pointers.
+ */
+static void ai_telemetry_invalidate_snapshot(void)
+{
+    if (!g_ai_telemetry.snapshot_mutex) {
+        return;
+    }
+    if (osMutexAcquire(g_ai_telemetry.snapshot_mutex, osWaitForever) != osOK) {
+        return;
+    }
+    g_ai_telemetry.snapshot.valid = AICAM_FALSE;
+    osMutexRelease(g_ai_telemetry.snapshot_mutex);
+    if (g_ai_telemetry.event_flags) {
+        osEventFlagsClear(g_ai_telemetry.event_flags, AI_TELEMETRY_FLAG_RESULT);
+    }
+}
+
+/**
+ * @brief Build and publish one JSON telemetry message from the current snapshot
+ * @details The snapshot mutex is held only across the payload build; the
+ *          network publish (which can block on a degraded link) runs unlocked.
+ */
+static void ai_telemetry_publish_json(void)
+{
+    if (osMutexAcquire(g_ai_telemetry.snapshot_mutex, osWaitForever) != osOK) {
+        return;
+    }
+
+    if (!g_ai_telemetry.snapshot.valid) {
+        osMutexRelease(g_ai_telemetry.snapshot_mutex);
+        return;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        osMutexRelease(g_ai_telemetry.snapshot_mutex);
+        LOG_SVC_ERROR("Failed to create telemetry payload");
+        return;
+    }
+
+    cJSON_AddStringToObject(root, "type", "ai_telemetry");
+    cJSON_AddNumberToObject(root, "timestamp_ms", (double)g_ai_telemetry.snapshot.timestamp_ms);
+    cJSON_AddNumberToObject(root, "frame_id", g_ai_telemetry.snapshot.frame_id);
+    cJSON_AddStringToObject(root, "model_name", g_ai_telemetry.snapshot.model_name);
+    cJSON_AddNumberToObject(root, "inference_time_ms", g_ai_telemetry.snapshot.inference_time_ms);
+
+    // Explicit null on absence keeps the payload shape stable for consumers
+    cJSON *ai_json = NULL;
+    if (g_ai_telemetry.snapshot.result.is_valid) {
+        ai_json = nn_create_ai_result_json(&g_ai_telemetry.snapshot.result);
+    }
+    if (ai_json) {
+        cJSON_AddItemToObject(root, "ai_result", ai_json);
+    } else {
+        cJSON_AddItemToObject(root, "ai_result", cJSON_CreateNull());
+    }
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    osMutexRelease(g_ai_telemetry.snapshot_mutex);
+
+    if (!json_str) {
+        LOG_SVC_ERROR("Failed to serialize telemetry payload");
+        return;
+    }
+
+    int publish_result = mqtt_service_publish_telemetry(json_str);
+    if (publish_result < 0) {
+        // Expected while the broker is unreachable; QoS/backpressure errors land here too
+        LOG_SVC_DEBUG("Telemetry publish failed: %d", publish_result);
+    }
+
+    buffer_free(json_str);
+}
+
+/**
+ * @brief Build and publish one compact CBOR telemetry message
+ * @details Envelope map carries the JSON wrapper's fields key-for-key:
+ *          {v, ts, fid, model, it, r}, with r the nn_encode_ai_result_cbor
+ *          output or null when the snapshot result is invalid (same
+ *          absent-result semantics as the JSON path). Same locking shape:
+ *          encode under the snapshot mutex into the telemetry-owned buffer,
+ *          publish unlocked (the publisher task is the buffer's only user).
+ */
+static void ai_telemetry_publish_cbor(void)
+{
+    if (osMutexAcquire(g_ai_telemetry.snapshot_mutex, osWaitForever) != osOK) {
+        return;
+    }
+
+    if (!g_ai_telemetry.snapshot.valid) {
+        osMutexRelease(g_ai_telemetry.snapshot_mutex);
+        return;
+    }
+
+    cbor_enc_t enc;
+    cbor_enc_init(&enc, g_ai_telemetry.encode_buf, AI_TELEMETRY_ENCODE_BUF_SIZE);
+    cbor_enc_map(&enc, 6);
+    cbor_enc_text(&enc, "v");
+    cbor_enc_uint(&enc, AI_TELEMETRY_CBOR_VERSION);
+    cbor_enc_text(&enc, "ts");
+    cbor_enc_uint(&enc, g_ai_telemetry.snapshot.timestamp_ms);
+    cbor_enc_text(&enc, "fid");
+    cbor_enc_uint(&enc, g_ai_telemetry.snapshot.frame_id);
+    cbor_enc_text(&enc, "model");
+    cbor_enc_text(&enc, g_ai_telemetry.snapshot.model_name);
+    cbor_enc_text(&enc, "it");
+    cbor_enc_uint(&enc, g_ai_telemetry.snapshot.inference_time_ms);
+    cbor_enc_text(&enc, "r");
+
+    // Same absent-result semantics as the JSON path's ai_result:null - and on
+    // a result-encode failure, rewind and publish r=null rather than dropping
+    // the beat, so consumers keep receiving a liveness signal
+    size_t result_mark = enc.len;
+    int have_result = 0;
+    if (g_ai_telemetry.snapshot.result.is_valid && !enc.overflow) {
+        int result_len = nn_encode_ai_result_cbor(&g_ai_telemetry.snapshot.result,
+                                                  enc.buf + enc.len, enc.cap - enc.len);
+        if (result_len < 0) {
+            LOG_SVC_ERROR("AI result CBOR encode failed; publishing r=null");
+            enc.len = result_mark;
+        } else {
+            enc.len += (size_t)result_len;
+            have_result = 1;
+        }
+    }
+    if (!have_result) {
+        cbor_enc_null(&enc);
+    }
+
+    size_t payload_len = 0;
+    int build_status = cbor_enc_finish(&enc, &payload_len);
+    osMutexRelease(g_ai_telemetry.snapshot_mutex);
+
+    if (build_status != 0) {
+        LOG_SVC_ERROR("Failed to encode telemetry payload");
+        return;
+    }
+
+    int publish_result = mqtt_service_publish_telemetry_raw(g_ai_telemetry.encode_buf,
+                                                            (int)payload_len);
+    if (publish_result < 0) {
+        // Expected while the broker is unreachable; QoS/backpressure errors land here too
+        LOG_SVC_DEBUG("Telemetry publish failed: %d", publish_result);
+    }
+}
+
+/**
+ * @brief Publish one telemetry beat in the configured payload format
+ */
+static void ai_telemetry_publish(void)
+{
+    if (mqtt_service_get_telemetry_format() == MQTT_TELEMETRY_FORMAT_CBOR) {
+        ai_telemetry_publish_cbor();
+    } else {
+        ai_telemetry_publish_json();
+    }
+}
+
+/**
+ * @brief Telemetry publisher task
+ * @details Publishes on each new-result signal; the wait timeout doubles as
+ *          the pipeline-reconciliation tick so config changes apply within ~1 s.
+ */
+static void ai_telemetry_task(void *argument)
+{
+    (void)argument;
+
+    while (g_ai_telemetry.task_running) {
+        uint32_t flags = osEventFlagsWait(g_ai_telemetry.event_flags, AI_TELEMETRY_FLAG_RESULT,
+                                          osFlagsWaitAny, 1000);
+
+        if (!g_ai_telemetry.task_running) {
+            break;
+        }
+
+        ai_telemetry_reconcile_pipeline();
+
+        if ((int32_t)flags >= 0 && (flags & AI_TELEMETRY_FLAG_RESULT)) {
+            ai_telemetry_publish();
+        }
+    }
+
+    g_ai_telemetry.task_exited = AICAM_TRUE;
+    osThreadExit();
+}
+
+/**
+ * @brief Initialize the telemetry unit and hook it onto the AI node
+ * @note Telemetry is auxiliary: failure here must not fail service start
+ */
+static aicam_result_t ai_telemetry_init(void)
+{
+    if (g_ai_telemetry.initialized) {
+        return AICAM_OK;
+    }
+
+    memset(&g_ai_telemetry, 0, sizeof(g_ai_telemetry));
+    // memset zeroes hub_sub_id to 0, which is a valid subscriber id
+    g_ai_telemetry.hub_sub_id = VIDEO_HUB_INVALID_SUBSCRIBER_ID;
+
+    g_ai_telemetry.snapshot_mutex = osMutexNew(NULL);
+    g_ai_telemetry.event_flags = osEventFlagsNew(NULL);
+    g_ai_telemetry.od_detects = buffer_calloc(AI_TELEMETRY_MAX_DETECTS, sizeof(od_detect_t));
+    g_ai_telemetry.mpe_detects = buffer_calloc(AI_TELEMETRY_MAX_DETECTS, sizeof(mpe_detect_t));
+    g_ai_telemetry.spe_keypoints = buffer_calloc(AI_TELEMETRY_MAX_KEYPOINTS, sizeof(spe_keypoint_t));
+    g_ai_telemetry.iseg_detects = buffer_calloc(AI_TELEMETRY_MAX_DETECTS, sizeof(iseg_detect_t));
+    g_ai_telemetry.encode_buf = buffer_calloc(1, AI_TELEMETRY_ENCODE_BUF_SIZE);
+
+    if (!g_ai_telemetry.snapshot_mutex || !g_ai_telemetry.event_flags ||
+        !g_ai_telemetry.od_detects || !g_ai_telemetry.mpe_detects ||
+        !g_ai_telemetry.spe_keypoints || !g_ai_telemetry.iseg_detects ||
+        !g_ai_telemetry.encode_buf) {
+        LOG_SVC_ERROR("Failed to allocate telemetry resources");
+        ai_telemetry_deinit();
+        return AICAM_ERROR_NO_MEMORY;
+    }
+
+    g_ai_telemetry.task_running = AICAM_TRUE;
+    const osThreadAttr_t task_attributes = {
+        .name = "AITelemetry",
+        .stack_mem = ai_telemetry_task_stack,
+        .stack_size = sizeof(ai_telemetry_task_stack),
+        .priority = osPriorityNormal,
+    };
+    g_ai_telemetry.task_handle = osThreadNew(ai_telemetry_task, NULL, &task_attributes);
+    if (!g_ai_telemetry.task_handle) {
+        LOG_SVC_ERROR("Failed to create telemetry task");
+        g_ai_telemetry.task_running = AICAM_FALSE;
+        ai_telemetry_deinit();
+        return AICAM_ERROR_NO_MEMORY;
+    }
+
+    aicam_result_t result = video_ai_node_set_result_callback(g_ai_service.ai_node,
+                                                              ai_telemetry_result_callback, NULL);
+    if (result != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to register telemetry result callback: %d", result);
+        ai_telemetry_deinit();
+        return result;
+    }
+
+    g_ai_telemetry.initialized = AICAM_TRUE;
+    LOG_SVC_INFO("AI telemetry unit initialized");
+    return AICAM_OK;
+}
+
+/**
+ * @brief Stop the telemetry task, unregister the callback, release the hub hold
+ * @details Idempotent. After this returns TRUE, the reconciler and publisher
+ *          are gone and no NEW result callback will fire, but a callback
+ *          already in flight on the AI node thread may still be running — the
+ *          caller must stop the AI pipeline before freeing snapshot resources.
+ * @return AICAM_TRUE when no task remains (never started, or joined);
+ *         AICAM_FALSE when the task did not exit within the join window, in
+ *         which case the task handle and hub hold are left in place so a
+ *         later call can retry the join.
+ */
+static aicam_bool_t ai_telemetry_stop_task(void)
+{
+    g_ai_telemetry.initialized = AICAM_FALSE;
+
+    if (g_ai_service.ai_node) {
+        video_ai_node_set_result_callback(g_ai_service.ai_node, NULL, NULL);
+    }
+
+    if (g_ai_telemetry.task_handle) {
+        g_ai_telemetry.task_running = AICAM_FALSE;
+        osEventFlagsSet(g_ai_telemetry.event_flags, AI_TELEMETRY_FLAG_RESULT);
+        // Wait for the task to leave its loop. Worst-case exit latency is one
+        // flag-wait timeout (1 s) plus one publish blocked on a degraded link
+        // (network timeout, 3 s default), so 6 s covers it with margin.
+        for (uint32_t waited_ms = 0; !g_ai_telemetry.task_exited && waited_ms < 6000; waited_ms += 100) {
+            osDelay(100);
+        }
+        if (!g_ai_telemetry.task_exited) {
+            LOG_SVC_ERROR("Telemetry task did not exit within the join window");
+            return AICAM_FALSE;
+        }
+        g_ai_telemetry.task_handle = NULL;
+    }
+
+    // Release the pipeline hold now that the reconciler can no longer run
+    if (g_ai_telemetry.hub_sub_id != VIDEO_HUB_INVALID_SUBSCRIBER_ID) {
+        video_hub_unsubscribe(g_ai_telemetry.hub_sub_id);
+        g_ai_telemetry.hub_sub_id = VIDEO_HUB_INVALID_SUBSCRIBER_ID;
+    }
+
+    return AICAM_TRUE;
+}
+
+/**
+ * @brief Tear down the telemetry unit
+ * @warning Frees the snapshot mutex and copy buffers. The caller must ensure
+ *          the AI node thread is stopped first (so no result callback is in
+ *          flight); ai_service_stop does this via ai_pipeline_stop(). The
+ *          init-failure paths are safe because the AI pipeline is not yet
+ *          running when ai_telemetry_init runs. If the publisher task cannot
+ *          be joined, the shared resources are deliberately leaked rather
+ *          than freed under a live task.
+ */
+static void ai_telemetry_deinit(void)
+{
+    if (!ai_telemetry_stop_task()) {
+        LOG_SVC_ERROR("Leaking telemetry resources: publisher task still running");
+        return;
+    }
+
+    if (g_ai_telemetry.event_flags) {
+        osEventFlagsDelete(g_ai_telemetry.event_flags);
+        g_ai_telemetry.event_flags = NULL;
+    }
+    if (g_ai_telemetry.snapshot_mutex) {
+        osMutexDelete(g_ai_telemetry.snapshot_mutex);
+        g_ai_telemetry.snapshot_mutex = NULL;
+    }
+    if (g_ai_telemetry.od_detects) {
+        buffer_free(g_ai_telemetry.od_detects);
+        g_ai_telemetry.od_detects = NULL;
+    }
+    if (g_ai_telemetry.mpe_detects) {
+        buffer_free(g_ai_telemetry.mpe_detects);
+        g_ai_telemetry.mpe_detects = NULL;
+    }
+    if (g_ai_telemetry.spe_keypoints) {
+        buffer_free(g_ai_telemetry.spe_keypoints);
+        g_ai_telemetry.spe_keypoints = NULL;
+    }
+    if (g_ai_telemetry.iseg_detects) {
+        buffer_free(g_ai_telemetry.iseg_detects);
+        g_ai_telemetry.iseg_detects = NULL;
+    }
+    if (g_ai_telemetry.encode_buf) {
+        buffer_free(g_ai_telemetry.encode_buf);
+        g_ai_telemetry.encode_buf = NULL;
+    }
+}
+
 void ai_get_normal_config(ai_service_config_t *config)
 {
     if (!config) return;
@@ -1175,7 +1866,9 @@ void ai_get_normal_config(ai_service_config_t *config)
     config->nms_threshold = json_config_get_nms_threshold();
     config->max_detections = 32;
     config->processing_interval = 1;
+    config->inference_interval_ms = json_config_get_inference_interval_ms();
     config->ai_enabled = AICAM_TRUE;
+    config->overlay_results = json_config_get_overlay_results();
     config->enable_stats = AICAM_TRUE;
     config->enable_drawing = AICAM_FALSE;
     config->enable_debug = AICAM_FALSE;
@@ -1195,7 +1888,9 @@ void ai_get_ai_config(ai_service_config_t *config)
     config->nms_threshold = json_config_get_nms_threshold();
     config->max_detections = 32;
     config->processing_interval = 1;
+    config->inference_interval_ms = json_config_get_inference_interval_ms();
     config->ai_enabled = AICAM_TRUE;
+    config->overlay_results = json_config_get_overlay_results();
     config->enable_stats = AICAM_TRUE;
     config->enable_debug = AICAM_FALSE;
     config->enable_drawing = AICAM_TRUE;

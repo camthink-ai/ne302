@@ -91,6 +91,13 @@ typedef struct {
     uint32_t status_report_interval_ms;          // Status report interval (ms)
     aicam_bool_t enable_heartbeat;               // Enable heartbeat
     uint32_t heartbeat_interval_ms;              // Heartbeat interval (ms)
+    uint8_t report_content;                      // Report content mode (mqtt_report_content_t)
+
+    // Continuous AI telemetry
+    aicam_bool_t telemetry_enabled;              // Publish AI results continuously
+    char telemetry_topic[MAX_TOPIC_LENGTH];      // Telemetry topic
+    uint8_t telemetry_qos;                       // Telemetry QoS (0-2)
+    uint8_t telemetry_format;                    // Payload format (mqtt_telemetry_format_t)
 } mqtt_service_extended_config_t;
 
 typedef struct {
@@ -113,6 +120,12 @@ typedef struct {
     
     // Event flags for waiting on specific events
     osEventFlagsId_t event_flags;
+
+    /* Per-msg_id ack tracking: each PUBLISHED event pushes the msg_id here,
+     * so callers can pipeline-publish N messages then drain N acks and know
+     * exactly which one failed (vs. event_flags which collapses to 1 bit). */
+    osMessageQueueId_t ack_msg_queue;
+#define MQTT_ACK_QUEUE_DEPTH    32
     
     // Auto subscription status
     aicam_bool_t receive_topic_subscribed;
@@ -646,6 +659,17 @@ static void mqtt_client_event_handler(ms_mqtt_event_data_t *event_data, void *us
         case MQTT_EVENT_PUBLISHED:
             g_mqtt_service.stats.messages_published++;
             LOG_SVC_DEBUG("MQTT message published: msg_id=%d", event_data->msg_id);
+            /* Push msg_id to ack queue so pipelined callers can match which
+             * publish was confirmed. Best-effort: if queue is full (callers
+             * not draining), drop oldest to make room. */
+            if (g_mqtt_service.ack_msg_queue) {
+                int mid = (int)event_data->msg_id;
+                if (osMessageQueuePut(g_mqtt_service.ack_msg_queue, &mid, 0, 0) != osOK) {
+                    int dropped;
+                    (void)osMessageQueueGet(g_mqtt_service.ack_msg_queue, &dropped, NULL, 0);
+                    (void)osMessageQueuePut(g_mqtt_service.ack_msg_queue, &mid, 0, 0);
+                }
+            }
             break;
             
         case MQTT_EVENT_SUBSCRIBED:
@@ -1092,6 +1116,13 @@ static aicam_result_t mqtt_config_persistent_to_runtime(const mqtt_service_confi
     runtime->status_report_interval_ms = persistent->status_report_interval_ms;
     runtime->enable_heartbeat = persistent->enable_heartbeat;
     runtime->heartbeat_interval_ms = persistent->heartbeat_interval_ms;
+    runtime->report_content = persistent->report_content;
+
+    //copy telemetry configuration
+    runtime->telemetry_enabled = persistent->telemetry_enabled;
+    strcpy(runtime->telemetry_topic, persistent->telemetry_topic);
+    runtime->telemetry_qos = persistent->telemetry_qos;
+    runtime->telemetry_format = persistent->telemetry_format;
 
     return AICAM_OK;
 }
@@ -1130,6 +1161,13 @@ static aicam_result_t mqtt_config_runtime_to_persistent(const mqtt_service_exten
     persistent->status_report_interval_ms = runtime->status_report_interval_ms;
     persistent->enable_heartbeat = runtime->enable_heartbeat;
     persistent->heartbeat_interval_ms = runtime->heartbeat_interval_ms;
+    persistent->report_content = runtime->report_content;
+
+    //copy telemetry configuration
+    persistent->telemetry_enabled = runtime->telemetry_enabled;
+    strcpy(persistent->telemetry_topic, runtime->telemetry_topic);
+    persistent->telemetry_qos = runtime->telemetry_qos;
+    persistent->telemetry_format = runtime->telemetry_format;
 
     return AICAM_OK;
 }
@@ -1185,7 +1223,17 @@ aicam_result_t mqtt_service_init(void *config)
         buffer_free(mqtt_config);
         return AICAM_ERROR_NO_MEMORY;
     }
-    
+
+    /* Per-msg_id ack queue (static control block for ThreadX port). */
+    g_mqtt_service.ack_msg_queue = osMessageQueueNew(MQTT_ACK_QUEUE_DEPTH, sizeof(int), NULL);
+    if (!g_mqtt_service.ack_msg_queue) {
+        LOG_SVC_ERROR("Failed to create MQTT ack msg queue");
+        osEventFlagsDelete(g_mqtt_service.event_flags);
+        g_mqtt_service.event_flags = NULL;
+        buffer_free(mqtt_config);
+        return AICAM_ERROR_NO_MEMORY;
+    }
+
     g_mqtt_service.initialized = AICAM_TRUE;
     
     LOG_SVC_INFO("MQTT Service initialized successfully");
@@ -1371,6 +1419,12 @@ aicam_result_t mqtt_service_deinit(void)
     if (g_mqtt_service.event_flags) {
         osEventFlagsDelete(g_mqtt_service.event_flags);
         g_mqtt_service.event_flags = NULL;
+    }
+
+    // Delete ack msg queue
+    if (g_mqtt_service.ack_msg_queue) {
+        osMessageQueueDelete(g_mqtt_service.ack_msg_queue);
+        g_mqtt_service.ack_msg_queue = NULL;
     }
     
     // Clear event callbacks
@@ -2161,7 +2215,15 @@ aicam_result_t mqtt_service_get_topic_config(mqtt_service_topic_config_t *config
     config->status_report_interval_ms = g_mqtt_service.config.status_report_interval_ms;
     config->enable_heartbeat = g_mqtt_service.config.enable_heartbeat;
     config->heartbeat_interval_ms = g_mqtt_service.config.heartbeat_interval_ms;
-    
+    config->report_content = g_mqtt_service.config.report_content;
+
+    config->telemetry_enabled = g_mqtt_service.config.telemetry_enabled;
+    strncpy(config->telemetry_topic, g_mqtt_service.config.telemetry_topic, sizeof(config->telemetry_topic) - 1);
+    config->telemetry_topic[sizeof(config->telemetry_topic) - 1] = '\0';
+    config->telemetry_qos = g_mqtt_service.config.telemetry_qos;
+    config->telemetry_format = g_mqtt_service.config.telemetry_format;
+
+
     return AICAM_OK;
 }
 
@@ -2202,10 +2264,104 @@ aicam_result_t mqtt_service_set_topic_config(const mqtt_service_topic_config_t *
     g_mqtt_service.config.status_report_interval_ms = config->status_report_interval_ms;
     g_mqtt_service.config.enable_heartbeat = config->enable_heartbeat;
     g_mqtt_service.config.heartbeat_interval_ms = config->heartbeat_interval_ms;
-    
+    g_mqtt_service.config.report_content = config->report_content;
+
+    g_mqtt_service.config.telemetry_enabled = config->telemetry_enabled;
+    strncpy(g_mqtt_service.config.telemetry_topic, config->telemetry_topic, sizeof(g_mqtt_service.config.telemetry_topic) - 1);
+    g_mqtt_service.config.telemetry_topic[sizeof(g_mqtt_service.config.telemetry_topic) - 1] = '\0';
+    g_mqtt_service.config.telemetry_qos = config->telemetry_qos;
+    g_mqtt_service.config.telemetry_format = (uint8_t)config->telemetry_format;
+
+
     LOG_SVC_DEBUG("MQTT service topic configuration updated");
-    
+
     return AICAM_OK;
+}
+
+/**
+ * @brief Get the configured data report content mode
+ */
+mqtt_report_content_t mqtt_service_get_report_content(void)
+{
+    // Treat uninitialized service or an out-of-range stored value as stock behavior
+    if (g_mqtt_service.initialized &&
+        g_mqtt_service.config.report_content == MQTT_REPORT_CONTENT_METADATA_ONLY) {
+        return MQTT_REPORT_CONTENT_METADATA_ONLY;
+    }
+    return MQTT_REPORT_CONTENT_FULL;
+}
+
+/**
+ * @brief Get whether continuous AI telemetry publishing is enabled
+ */
+aicam_bool_t mqtt_service_get_telemetry_enabled(void)
+{
+    // Treat an uninitialized service as telemetry off (stock behavior)
+    if (g_mqtt_service.initialized && g_mqtt_service.config.telemetry_enabled) {
+        return AICAM_TRUE;
+    }
+    return AICAM_FALSE;
+}
+
+/**
+ * @brief Get the continuous AI telemetry payload format
+ */
+mqtt_telemetry_format_t mqtt_service_get_telemetry_format(void)
+{
+    // Only the exact non-default value selects CBOR; an uninitialized service
+    // or an out-of-range stored byte degrades to the stock JSON payload
+    if (g_mqtt_service.initialized &&
+        g_mqtt_service.config.telemetry_format == MQTT_TELEMETRY_FORMAT_CBOR) {
+        return MQTT_TELEMETRY_FORMAT_CBOR;
+    }
+    return MQTT_TELEMETRY_FORMAT_JSON;
+}
+
+/**
+ * @brief Publish a continuous AI telemetry message
+ * @details Fire-and-forget on the configured telemetry topic/QoS. Fails fast
+ *          while disconnected; callers treat failures as dropped beats.
+ */
+int mqtt_service_publish_telemetry(const char *json_str)
+{
+    if (!json_str) {
+        return MQTT_ERR_INVALID_ARG;
+    }
+
+    if (!mqtt_service_get_telemetry_enabled()) {
+        return MQTT_ERR_INVALID_STATE;
+    }
+
+    if (!mqtt_service_is_connected()) {
+        return MQTT_ERR_CONN;
+    }
+
+    return mqtt_service_publish_json(g_mqtt_service.config.telemetry_topic, json_str,
+                                     g_mqtt_service.config.telemetry_qos, 0);
+}
+
+/**
+ * @brief Publish a binary continuous AI telemetry message
+ * @details Same guards and topic/QoS as mqtt_service_publish_telemetry, but
+ *          the payload is length-delimited rather than a NUL-terminated
+ *          string, so binary encodings (containing 0x00 bytes) pass through.
+ */
+int mqtt_service_publish_telemetry_raw(const uint8_t *payload, int payload_len)
+{
+    if (!payload || payload_len <= 0) {
+        return MQTT_ERR_INVALID_ARG;
+    }
+
+    if (!mqtt_service_get_telemetry_enabled()) {
+        return MQTT_ERR_INVALID_STATE;
+    }
+
+    if (!mqtt_service_is_connected()) {
+        return MQTT_ERR_CONN;
+    }
+
+    return mqtt_service_publish(g_mqtt_service.config.telemetry_topic, payload, payload_len,
+                                g_mqtt_service.config.telemetry_qos, 0);
 }
 
 /* ==================== Event Management ==================== */
@@ -2317,6 +2473,27 @@ aicam_result_t mqtt_service_wait_for_event(ms_mqtt_event_id_t event_id, aicam_bo
     return AICAM_OK;
 }
 
+aicam_result_t mqtt_service_get_acked_msg_id(int *out_msg_id, uint32_t timeout_ms)
+{
+    if (!out_msg_id) return AICAM_ERROR_INVALID_PARAM;
+    if (!g_mqtt_service.initialized || !g_mqtt_service.ack_msg_queue) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    /* QoS 0 has no puback — publish success IS the ack. Return a sentinel
+     * so callers know to treat all pending publishes as confirmed. */
+    if (g_mqtt_service.config.data_report_qos == 0) {
+        *out_msg_id = -1;
+        return AICAM_OK;
+    }
+    int mid = 0;
+    osStatus_t st = osMessageQueueGet(g_mqtt_service.ack_msg_queue, &mid, NULL, timeout_ms);
+    if (st != osOK) {
+        return AICAM_ERROR_TIMEOUT;
+    }
+    *out_msg_id = mid;
+    return AICAM_OK;
+}
+
 /**
  * @brief Clear event flag for specific event
  * @param event_id Event ID to clear
@@ -2327,7 +2504,7 @@ aicam_result_t mqtt_service_clear_event_flag(ms_mqtt_event_id_t event_id)
     if (!g_mqtt_service.initialized || !g_mqtt_service.event_flags) {
         return AICAM_ERROR_NOT_INITIALIZED;
     }
-    
+
     uint32_t flag = event_id_to_flag(event_id);
     if (flag == 0) {
         return AICAM_ERROR_INVALID_PARAM;
@@ -3273,9 +3450,9 @@ int mqtt_service_publish_image_with_ai(const char *topic,
         cJSON_AddItemToObject(root, "metadata", meta_json);
     }
 
-    //Add device info
+    //Add device info (lightweight — cached, no storage scan)
     device_info_config_t* device_info = (device_info_config_t*)buffer_calloc(1, sizeof(device_info_config_t));
-    aicam_result_t ret = device_service_get_info(device_info);
+    aicam_result_t ret = device_service_get_cached_info(device_info);
     if (ret != AICAM_OK) {
         LOG_SVC_ERROR("Failed to get device information: %d", ret);
         buffer_free(device_info);
@@ -3338,7 +3515,7 @@ int mqtt_service_publish_ai_result(const char *topic,
                                 const mqtt_ai_result_t *ai_result,
                                 int qos)
 {
-    if (!metadata || !ai_result) {
+    if (!metadata) {
         return MQTT_ERR_INVALID_ARG;
     }
     
@@ -3359,10 +3536,32 @@ int mqtt_service_publish_ai_result(const char *topic,
         cJSON_AddItemToObject(root, "metadata", meta_json);
     }
     
-    // Add AI result
-    cJSON *ai_json = create_ai_result_json(ai_result);
+    //Add device info
+    device_info_config_t *device_info = (device_info_config_t *)buffer_calloc(1, sizeof(device_info_config_t));
+    if (device_info) {
+        if (device_service_get_info(device_info) == AICAM_OK) {
+            cJSON *device_json = create_device_info_json(device_info);
+            if (device_json) {
+                cJSON_AddItemToObject(root, "device_info", device_json);
+            }
+        } else {
+            LOG_SVC_WARN("Failed to get device information, reporting without it");
+        }
+        buffer_free(device_info);
+    }
+
+    // Add AI result if provided (explicit null on absence or serialization
+    // failure keeps the payload shape stable for consumers)
+    cJSON *ai_json = NULL;
+    if (ai_result && ai_result->ai_result.is_valid) {
+        ai_json = create_ai_result_json(ai_result);
+    }
     if (ai_json) {
         cJSON_AddItemToObject(root, "ai_result", ai_json);
+    }
+    else
+    {
+        cJSON_AddItemToObject(root, "ai_result", cJSON_CreateNull());
     }
     
     // Convert to JSON string
@@ -3384,11 +3583,16 @@ int mqtt_service_publish_ai_result(const char *topic,
     
     // Get detection count based on result type
     uint32_t detection_count = 0;
-    if (ai_result->ai_result.is_valid) {
+    if (ai_result && ai_result->ai_result.is_valid) {
         if (ai_result->ai_result.type == PP_TYPE_OD) {
             detection_count = ai_result->ai_result.od.nb_detect;
         } else if (ai_result->ai_result.type == PP_TYPE_MPE) {
             detection_count = ai_result->ai_result.mpe.nb_detect;
+        } else if (ai_result->ai_result.type == PP_TYPE_SPE) {
+            // SPE is detector-free single instance: one pose when keypoints exist
+            detection_count = (ai_result->ai_result.spe.nb_keypoints > 0) ? 1 : 0;
+        } else if (ai_result->ai_result.type == PP_TYPE_ISEG) {
+            detection_count = ai_result->ai_result.iseg.nb_detect;
         }
     }
     
@@ -3576,6 +3780,14 @@ static aicam_bool_t mqtt_build_topics(const char *mac_str, mqtt_service_config_t
     {
         snprintf(cfg->data_report_topic, sizeof(cfg->data_report_topic),
                 "ne302/%s/upload/report", mac_hex);
+        changed = AICAM_TRUE;
+    }
+
+    if (cfg->telemetry_topic[0] == '\0' ||
+        strcmp(cfg->telemetry_topic, "aicam/data/telemetry") == 0)
+    {
+        snprintf(cfg->telemetry_topic, sizeof(cfg->telemetry_topic),
+                "ne301/%s/upload/telemetry", mac_hex);
         changed = AICAM_TRUE;
     }
 

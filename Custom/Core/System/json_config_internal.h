@@ -61,6 +61,8 @@
  #define NVS_KEY_AI_PIPE_HEIGHT      "ai_pipe_height"
  #define NVS_KEY_CONFIDENCE          "confidence"
  #define NVS_KEY_NMS_THRESHOLD       "nms_thresh"
+ #define NVS_KEY_OVERLAY_RESULTS     "overlay_results"
+ #define NVS_KEY_INFER_INTERVAL      "ai_infer_iv"
  
  // Power mode configuration key names
  #define NVS_KEY_POWER_CURRENT_MODE  "power_cur_mode"
@@ -96,6 +98,7 @@
  #define NVS_KEY_IMAGE_VFLIP             "img_vflip"
  #define NVS_KEY_IMAGE_AEC               "img_aec"
  #define NVS_KEY_IMAGE_ISP_MODE          "img_isp_mode"
+ #define NVS_KEY_IMAGE_GRAYSCALE         "img_gray"
  #define NVS_KEY_IMAGE_SKIP_FRAMES       "img_skip"
  #define NVS_KEY_IMAGE_FAST_SKIP_FRAMES  "img_fast_skip"
  #define NVS_KEY_IMAGE_FAST_RESOLUTION   "img_fast_res"
@@ -177,6 +180,22 @@
 // Note: Individual known network entries use format "net_<idx>_<field>"
 // where <idx> is 0-15 and <field> is ssid/bssid/pwd/rssi/ch/sec/conn/known/time
 
+// Wi-Fi HaLow last-connected info
+#define NVS_KEY_HALOW_SSID              "hw_ssid"
+#define NVS_KEY_HALOW_PASSWORD          "hw_pwd"
+#define NVS_KEY_HALOW_SECURITY          "hw_sec"
+#define NVS_KEY_HALOW_COUNTRY_CODE      "hw_cc"
+#define NVS_KEY_HALOW_BSSID              "hw_bssid"
+#define NVS_KEY_HALOW_IP_MODE            "hw_ip_mode"
+#define NVS_KEY_HALOW_IP_ADDR            "hw_ip"
+#define NVS_KEY_HALOW_NETMASK            "hw_mask"
+#define NVS_KEY_HALOW_GATEWAY            "hw_gw"
+#define NVS_KEY_HALOW_TX_POWER           "hw_txpwr"
+#define NVS_KEY_HALOW_SCAN_DWELL         "hw_scan_dw"
+#define NVS_KEY_HALOW_RC_MCS             "hw_rc_mcs"
+#define NVS_KEY_HALOW_RC_BW              "hw_rc_bw"
+#define NVS_KEY_HALOW_RC_GI              "hw_rc_gi"
+
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"
 #define NVS_KEY_COMM_AUTO_PRIORITY      "comm_auto_pri"
@@ -189,6 +208,7 @@
 #define NVS_KEY_CELLULAR_AUTH           "cell_auth"
 #define NVS_KEY_CELLULAR_ROAMING        "cell_roam"
 #define NVS_KEY_CELLULAR_OPERATOR       "cell_operator"
+#define NVS_KEY_CELLULAR_PLMN           "cell_plmn"
 
 // PoE/Ethernet configuration key names
 #define NVS_KEY_POE_IP_MODE             "poe_ip_mode"
@@ -282,6 +302,15 @@
 #define NVS_KEY_MQTT_STATUS_INTERVAL    "mqtt_sts_iv"
 #define NVS_KEY_MQTT_ENABLE_HEARTBEAT   "mqtt_en_hb"
 #define NVS_KEY_MQTT_HEARTBEAT_INTERVAL "mqtt_hb_iv"
+
+// Report content
+#define NVS_KEY_MQTT_REPORT_CONTENT     "mqtt_rpt_ct"
+
+// Continuous AI telemetry
+#define NVS_KEY_MQTT_TELEMETRY_ENABLE   "mqtt_tel_en"
+#define NVS_KEY_MQTT_TELEMETRY_TOPIC    "mqtt_t_tel"
+#define NVS_KEY_MQTT_TELEMETRY_QOS      "mqtt_q_tel"
+#define NVS_KEY_MQTT_TELEMETRY_FORMAT   "mqtt_f_tel"
  
  // Work mode configuration key names
  #define NVS_KEY_WORK_MODE           "work_mode"
@@ -337,6 +366,21 @@
 #define NVS_KEY_WEBHOOK_SECRET      "wh_secret"
 #define NVS_KEY_WEBHOOK_CA_CERT_PATH "wh_ca_path"
 
+// Capture-upload configuration key names
+#define NVS_KEY_CAPUP_VERSION       "cu_ver"
+#define NVS_KEY_CAPUP_MODE          "cu_mode"
+#define NVS_KEY_CAPUP_STORAGE       "cu_store"
+#define NVS_KEY_CAPUP_POLICY        "cu_policy"
+#define NVS_KEY_CAPUP_PROTO         "cu_proto"
+#define NVS_KEY_CAPUP_RETRY_EN      "cu_re_en"
+#define NVS_KEY_CAPUP_RETRY_MAX     "cu_re_max"
+#define NVS_KEY_CAPUP_BATCH_N       "cu_bat_n"
+#define NVS_KEY_CAPUP_SCHED_CNT     "cu_sch_cnt"
+#define NVS_KEY_CAPUP_SCHED_MIN_FMT "cu_sch_%u"   /* uint16_t index 0..7 */
+#define NVS_KEY_CAPUP_KEEP_HOURS    "cu_keep_h"
+#define NVS_KEY_CAPUP_MAX_PENDING   "cu_max_pd"
+#define NVS_KEY_CAPUP_COMM_TYPE     "cu_comm"
+
 
  /* ==================== Internal Function Prototypes ==================== */
  
@@ -357,6 +401,8 @@ aicam_result_t json_config_save_mqtt_service_config_to_nvs(const mqtt_service_co
 aicam_result_t json_config_save_auth_mgr_config_to_nvs(const auth_mgr_config_t *config);
 aicam_result_t json_config_save_webhook_config_to_nvs(const webhook_config_t *config);
 aicam_result_t json_config_load_webhook_from_nvs(webhook_config_t *config);
+aicam_result_t json_config_save_capture_upload_to_nvs(const capture_upload_config_t *config);
+aicam_result_t json_config_load_capture_upload_from_nvs(capture_upload_config_t *config);
  aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config);
  aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config);
  
@@ -385,6 +431,7 @@ aicam_result_t json_config_load_webhook_from_nvs(webhook_config_t *config);
  uint32_t json_config_crc32(const void *data, size_t length);
  uint64_t json_config_get_timestamp(void);
  aicam_result_t json_config_validate_ranges(const aicam_global_config_t *config);
+ aicam_bool_t json_config_enforce_invariants(aicam_global_config_t *config);
  void json_config_generate_device_name_from_mac(char *device_name, size_t name_size, const char *mac_address);
  
  

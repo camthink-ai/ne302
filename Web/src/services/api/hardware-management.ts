@@ -7,11 +7,14 @@ export interface SetHardwareInfoReq {
     vertical_flip: boolean;
     aec: number;
     isp_mode: number;
-    fast_capture_skip_frames: number;
-    fast_capture_resolution: number;
-    fast_capture_jpeg_quality: number;
-    capture_disable_comm: boolean;
-    capture_storage_ai: boolean;
+    grayscale: boolean;
+    /* The following are optional — backend only updates fields that are present
+       in the request body. They are managed on the Capture Settings page. */
+    fast_capture_skip_frames?: number;
+    fast_capture_resolution?: number;
+    fast_capture_jpeg_quality?: number;
+    capture_disable_comm?: boolean;
+    capture_storage_ai?: boolean;
 }
 export interface SetLightConfigReq {
     mode: 'off' | 'on' | 'auto' | 'custom';

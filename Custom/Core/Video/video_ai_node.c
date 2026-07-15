@@ -56,7 +56,7 @@ void video_ai_get_default_config(video_ai_config_t *config) {
     config->max_detections = 32;
     config->processing_interval = 1;  // Process every frame
     config->enabled = AICAM_TRUE;
-    config->overlay_results = AICAM_FALSE;
+    config->overlay_results = AICAM_TRUE;  // Overlay on by default (stock behavior)
     config->enable_drawing = AICAM_TRUE;
     
     // Initialize drawing configuration
@@ -454,8 +454,26 @@ aicam_result_t video_ai_node_get_best_nn_result(video_node_t *node, nn_result_t 
 
     // Release cache mutex (no index changes for non-destructive read)
     osMutexRelease(data->cache_mutex);
-    
+
     //LOG_CORE_DEBUG("Retrieved latest NN result from cache: %d detections", result->od.nb_detect);
+    return AICAM_OK;
+}
+
+aicam_result_t video_ai_node_set_result_callback(video_node_t *node,
+                                                 video_ai_result_callback_t callback,
+                                                 void *user_data)
+{
+    if (!node) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    video_ai_node_data_t *data = (video_ai_node_data_t*)video_node_get_private_data(node);
+    if (!data) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    data->result_callback = callback;
+    data->result_callback_user_data = user_data;
     return AICAM_OK;
 }
 
@@ -526,6 +544,21 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
         return AICAM_ERROR_INVALID_PARAM;
     }
 
+    // Pace inference to the configured interval. Sleep in bounded slices so
+    // config changes and pipeline stop are picked up within ~100 ms, and
+    // never inside a camera ioctl (it holds the camera mutex while blocking).
+    if (data->config.inference_interval_ms != 0)
+    {
+        uint32_t elapsed_ms = osKernelGetTickCount() - data->last_inference_tick;
+        if (elapsed_ms < data->config.inference_interval_ms)
+        {
+            uint32_t remaining_ms = data->config.inference_interval_ms - elapsed_ms;
+            osDelay(remaining_ms < 100 ? remaining_ms : 100);
+            *output_frame = NULL;
+            return AICAM_OK;
+        }
+    }
+
     // Check processing interval
     if (data->config.processing_interval > 1)
     {
@@ -594,7 +627,11 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
 
 
     // Call NN module to process frame
+    uint32_t infer_start_tick = osKernelGetTickCount();
     int nn_ret = nn_inference_frame(input_frame_buffer, camera_buffer_with_frame_id.size, &nn_result);
+    uint32_t inference_time_ms = osKernelGetTickCount() - infer_start_tick;
+    // Anchor pacing to the attempt so inference errors keep the configured cadence
+    data->last_inference_tick = infer_start_tick;
 
     // return pipe2 buffer
     device_ioctl(camera_dev, CAM_CMD_RETURN_PIPE2_BUFFER, input_frame_buffer, 0);
@@ -645,6 +682,14 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
                 LOG_CORE_WARN("Cache mutex timeout, failed %lu times", lock_fail_count);
             }
         }
+
+        // Hand the fresh result to the registered consumer while the
+        // postprocess output buffers still hold this inference's data
+        if (data->result_callback)
+        {
+            data->result_callback(&nn_result, frame_id, inference_time_ms,
+                                  data->result_callback_user_data);
+        }
     }
 
     // No output frame generated - results are cached internally
@@ -663,7 +708,7 @@ static aicam_result_t video_ai_node_load_model_active(video_node_t *node) {
     }
     
 
-    uintptr_t model_ptr = json_config_get_ai_1_active() ? AI_1_BASE + 1024 : AI_DEFAULT_BASE + 1024;
+    uintptr_t model_ptr = json_config_get_ai_1_active() ? AI_2_BASE + 1024 : AI_1_BASE + 1024;
     LOG_CORE_INFO("Load model from %p", model_ptr);
     int nn_ret = nn_load_model(model_ptr);
     if(nn_ret != 0) {

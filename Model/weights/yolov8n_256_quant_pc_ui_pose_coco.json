@@ -30,8 +30,8 @@
         "width": 1344,
         "channels": 224,
         "data_type": "int8",
-        "scale": 0.003921569,
-        "zero_point": 0
+        "scale": 0.00693925,
+        "zero_point": -104
       }
     ]
   },
@@ -46,13 +46,14 @@
   "postprocess_params": {
     "num_classes": 1,
     "class_names": ["person"],
-    "confidence_threshold": 0.6,
+    "confidence_threshold": 0.25,
     "iou_threshold": 0.5,
     "max_detections": 10,
     "num_keypoints": 17,
     "total_boxes": 1344,
-    "raw_output_scale": 0.003921569,
-    "raw_output_zero_point": 0,
+    "raw_output_scale": 0.00693925,
+    "raw_output_zero_point": -104,
+    "kpts_conf_thresh": 0.15,
     "keypoint_names": [
       "nose", "left_eye", "right_eye", "left_ear", "right_ear",
       "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",

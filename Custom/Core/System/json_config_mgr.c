@@ -7,6 +7,7 @@
  */
 
  #include "json_config_internal.h" // Includes all necessary headers
+ #include "netif_manager.h"
  #include "buffer_mgr.h"
  #include "version.h"              // Centralized version info
  #include "fsbl_app_common.h"
@@ -35,7 +36,9 @@
          .ai_enabled = AICAM_FALSE,
          .ai_1_active = AICAM_FALSE,
          .confidence_threshold = 50,
-         .nms_threshold = 50
+         .nms_threshold = 50,
+         .overlay_results = AICAM_TRUE,
+         .inference_interval_ms = 0
      },
      
      .power_mode_config = {
@@ -129,6 +132,7 @@
              .vertical_flip = AICAM_FALSE,
              .aec = 1,  // Auto exposure enabled
              .isp_mode = IMAGE_ISP_MODE_OUTDOOR,
+             .grayscale = IMAGE_GRAYSCALE_OFF,
              .startup_skip_frames = 10,  // Default frames to skip for camera stabilization
              .fast_capture_skip_frames = 10,
              .fast_capture_resolution = 0,   // 0: 1280x720
@@ -156,7 +160,23 @@
          .known_network_count = 0,
          .preferred_comm_type = 0,  // No preferred type
          .enable_auto_priority = AICAM_TRUE,  // Enable auto priority
-         
+
+        // Wi-Fi HaLow last-connected info defaults
+        .halow_ssid = "",
+        .halow_password = "",
+        .halow_security = 0,
+        .halow_country_code = "",
+        .halow_bssid = "",
+        .halow_ip_mode = POE_IP_MODE_DHCP,
+        .halow_ip_addr = {192, 168, 12, 199},
+        .halow_netmask = {255, 255, 255, 0},
+        .halow_gateway = {192, 168, 12, 1},
+        .halow_tx_power_dbm = NETIF_WIFI_HALOW_DEFAULT_TX_PWR,
+        .halow_scan_dwell_ms = NETIF_WIFI_HALOW_DEFAULT_SCAN_DWELL,
+        .halow_rc_mcs = -1,
+        .halow_rc_bw_mhz = -1,
+        .halow_rc_gi = -1,
+
          // PoE/Ethernet default configuration
          .poe = {
              .ip_mode = POE_IP_MODE_DHCP,                // Default to DHCP
@@ -255,7 +275,14 @@
         .enable_status_report = AICAM_TRUE,
         .status_report_interval_ms = 60000,
         .enable_heartbeat = AICAM_TRUE,
-        .heartbeat_interval_ms = 30000
+        .heartbeat_interval_ms = 30000,
+        .report_content = MQTT_REPORT_CONTENT_FULL,
+
+        // Continuous AI telemetry
+        .telemetry_enabled = AICAM_FALSE,
+        .telemetry_topic = "aicam/data/telemetry",
+        .telemetry_qos = 0,
+        .telemetry_format = MQTT_TELEMETRY_FORMAT_JSON
     }
  };
 
@@ -430,6 +457,9 @@
 
      memcpy(config, &default_config, sizeof(aicam_global_config_t));
      config->timestamp = json_config_get_timestamp();
+
+     /* Fields not covered by the static default_config table */
+     json_config_capture_upload_defaults(&config->capture_upload);
 
      // Delegate checksum calculation
      aicam_result_t result = json_config_calculate_checksum(config, &config->checksum);
@@ -799,6 +829,34 @@
  uint32_t json_config_get_nms_threshold(void)
  {
      return g_json_config_ctx.current_config.ai_debug.nms_threshold;
+ }
+
+ aicam_result_t json_config_set_overlay_results(aicam_bool_t overlay_results)
+ {
+     g_json_config_ctx.current_config.ai_debug.overlay_results = overlay_results;
+
+     // update to NVS
+     json_config_nvs_write_bool(NVS_KEY_OVERLAY_RESULTS, overlay_results);
+     return AICAM_OK;
+ }
+
+ aicam_bool_t json_config_get_overlay_results(void)
+ {
+     return g_json_config_ctx.current_config.ai_debug.overlay_results;
+ }
+
+ aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms)
+ {
+     g_json_config_ctx.current_config.ai_debug.inference_interval_ms = interval_ms;
+
+     // update to NVS
+     json_config_nvs_write_uint32(NVS_KEY_INFER_INTERVAL, interval_ms);
+     return AICAM_OK;
+ }
+
+ uint32_t json_config_get_inference_interval_ms(void)
+ {
+     return g_json_config_ctx.current_config.ai_debug.inference_interval_ms;
  }
 
  /*=================== Work Mode Configuration API Implementation ====================*/
@@ -1555,6 +1613,76 @@ aicam_result_t json_config_set_webhook_config(const webhook_config_t *config)
     aicam_result_t result = json_config_save_webhook_config_to_nvs(config);
     if (result == AICAM_OK) {
         memcpy(&g_json_config_ctx.current_config.webhook_config, config, sizeof(webhook_config_t));
+    }
+    return result;
+}
+
+/* ==================== Capture-Upload Configuration ==================== */
+
+void json_config_capture_upload_defaults(capture_upload_config_t *config)
+{
+    if (!config) return;
+    memset(config, 0, sizeof(*config));
+    config->version              = CAPTURE_UPLOAD_CFG_VERSION;
+    config->mode                 = CAPTURE_MODE_INSTANT;
+    config->storage              = CAPTURE_STORE_AUTO;
+    config->policy               = STORAGE_POLICY_WRAP;
+    config->upload_protocol      = UPLOAD_PROTO_MQTT;
+    config->retry_enable         = AICAM_TRUE;
+    config->retry_max_attempts   = 5;
+    config->batch_count          = 10;
+    config->schedule_node_count  = 0;
+    config->keep_sent_hours      = 168;     /* 7 days */
+    config->max_pending_records  = 200;
+    config->upload_comm_type     = 0;  /* COMM_TYPE_NONE = default logic */
+}
+
+aicam_result_t json_config_get_capture_upload_config(capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+    return json_config_load_capture_upload_from_nvs(config);
+}
+
+aicam_result_t json_config_set_capture_upload_config(const capture_upload_config_t *config)
+{
+    if (!config) return AICAM_ERROR_INVALID_PARAM;
+
+    /* Light normalization before persisting so callers don't have to. */
+    capture_upload_config_t norm = *config;
+    if (norm.version == 0) norm.version = CAPTURE_UPLOAD_CFG_VERSION;
+    if (norm.mode    >= CAPTURE_MODE_LOCAL_ONLY + 1) norm.mode    = CAPTURE_MODE_INSTANT;
+    if (norm.storage >  CAPTURE_STORE_NONE)          norm.storage = CAPTURE_STORE_AUTO;
+    if (norm.policy  >  STORAGE_POLICY_STOP)         norm.policy  = STORAGE_POLICY_WRAP;
+    if (norm.upload_protocol > UPLOAD_PROTO_WEBHOOK) norm.upload_protocol = UPLOAD_PROTO_MQTT;
+    /* retry_max_attempts: 0 = unlimited, 1..20 otherwise */
+    if (norm.retry_max_attempts > 20) norm.retry_max_attempts = 20;
+    /* batch_count: 2..20 (1 makes no sense for "batch") */
+    if (norm.batch_count < 2)  norm.batch_count = 2;
+    if (norm.batch_count > 20) norm.batch_count = 20;
+    if (norm.schedule_node_count > CAPTURE_SCHEDULE_MAX_NODES)
+        norm.schedule_node_count = CAPTURE_SCHEDULE_MAX_NODES;
+    for (uint8_t i = 0; i < CAPTURE_SCHEDULE_MAX_NODES; i++) {
+        if (norm.schedule_minutes[i] > 1439) norm.schedule_minutes[i] = 0;
+    }
+    if (norm.keep_sent_hours > 24 * 30) norm.keep_sent_hours = 24 * 30;
+    if (norm.max_pending_records == 0)  norm.max_pending_records = 200;
+    if (norm.max_pending_records > 1000) norm.max_pending_records = 1000;
+
+    /* Cross-field constraints */
+    if (norm.storage == CAPTURE_STORE_NONE && norm.mode != CAPTURE_MODE_INSTANT) {
+        /* "none" only allowed with INSTANT; downgrade to AUTO. */
+        norm.storage = CAPTURE_STORE_AUTO;
+    }
+    if (norm.mode == CAPTURE_MODE_LOCAL_ONLY) {
+        norm.retry_enable = AICAM_FALSE;
+    }
+    if (norm.storage == CAPTURE_STORE_NONE) {
+        norm.retry_enable = AICAM_FALSE;
+    }
+
+    aicam_result_t result = json_config_save_capture_upload_to_nvs(&norm);
+    if (result == AICAM_OK) {
+        memcpy(&g_json_config_ctx.current_config.capture_upload, &norm, sizeof(capture_upload_config_t));
     }
     return result;
 }

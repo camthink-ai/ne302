@@ -6,6 +6,7 @@
 
 #include "api_mqtt_module.h"
 #include "mqtt_service.h"
+#include "ai_service.h"
 #include "web_api.h"
 #include "web_server.h"
 #include "system_service.h"
@@ -63,6 +64,34 @@ static void free_mqtt_config_strings(ms_mqtt_config_t *config)
         buffer_free(config->last_will.msg);
         config->last_will.msg = NULL;
     }
+}
+
+/**
+ * @brief Map a report content mode to its API string form
+ */
+static const char *report_content_to_str(uint8_t mode)
+{
+    return mode == MQTT_REPORT_CONTENT_METADATA_ONLY ? "metadata_only" : "full";
+}
+
+/**
+ * @brief Parse a report content mode from its API string form
+ * @return AICAM_OK on a recognized value, error otherwise
+ */
+static aicam_result_t parse_report_content(const cJSON *item, uint8_t *mode)
+{
+    if (!cJSON_IsString(item)) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (strcmp(item->valuestring, "full") == 0) {
+        *mode = MQTT_REPORT_CONTENT_FULL;
+        return AICAM_OK;
+    }
+    if (strcmp(item->valuestring, "metadata_only") == 0) {
+        *mode = MQTT_REPORT_CONTENT_METADATA_ONLY;
+        return AICAM_OK;
+    }
+    return AICAM_ERROR_INVALID_PARAM;
 }
 
 /**
@@ -287,7 +316,16 @@ static aicam_result_t mqtt_config_get_handler(http_handler_context_t* ctx)
         // cJSON_AddNumberToObject(qos, "status_qos", topic_config.status_qos);
         // cJSON_AddNumberToObject(qos, "command_qos", topic_config.command_qos);
         cJSON_AddItemToObject(response_json, "qos", qos);
-        
+
+        cJSON_AddStringToObject(response_json, "report_content", report_content_to_str(topic_config.report_content));
+
+        cJSON_AddBoolToObject(response_json, "telemetry_enabled", topic_config.telemetry_enabled);
+        cJSON_AddStringToObject(response_json, "telemetry_topic", topic_config.telemetry_topic);
+        cJSON_AddNumberToObject(response_json, "telemetry_qos", topic_config.telemetry_qos);
+        cJSON_AddStringToObject(response_json, "telemetry_format",
+                                topic_config.telemetry_format == MQTT_TELEMETRY_FORMAT_CBOR ? "cbor" : "json");
+
+
         //cJSON *auto_subscribe = cJSON_CreateObject();
         //cJSON_AddBoolToObject(auto_subscribe, "auto_subscribe_receive", topic_config.auto_subscribe_receive);
         //cJSON_AddBoolToObject(auto_subscribe, "auto_subscribe_command", topic_config.auto_subscribe_command);
@@ -349,7 +387,58 @@ static aicam_result_t mqtt_config_set_handler(http_handler_context_t* ctx)
     if (!request_json) {
         return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON");
     }
-    
+
+    // Validate report content mode up front (applied with the topic config below)
+    uint8_t report_content_mode = MQTT_REPORT_CONTENT_FULL;
+    cJSON *report_content = cJSON_GetObjectItem(request_json, "report_content");
+    if (report_content && parse_report_content(report_content, &report_content_mode) != AICAM_OK) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "report_content must be 'full' or 'metadata_only'");
+    }
+
+    // Validate telemetry fields up front (applied with the topic config below)
+    cJSON *telemetry_enabled = cJSON_GetObjectItem(request_json, "telemetry_enabled");
+    if (telemetry_enabled && !cJSON_IsBool(telemetry_enabled)) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "telemetry_enabled must be a boolean");
+    }
+    if (telemetry_enabled && cJSON_IsTrue(telemetry_enabled)) {
+        // Telemetry publishes one message per paced inference, so it requires a
+        // cadence (a non-zero interval) rather than every-frame inference
+        if (json_config_get_inference_interval_ms() == 0) {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
+                                      "telemetry_enabled requires inference_interval_ms > 0 (set via ai/params)");
+        }
+    }
+    cJSON *telemetry_topic = cJSON_GetObjectItem(request_json, "telemetry_topic");
+    if (telemetry_topic && (!cJSON_IsString(telemetry_topic) ||
+                            telemetry_topic->valuestring[0] == '\0' ||
+                            strlen(telemetry_topic->valuestring) >= MAX_TOPIC_LENGTH)) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
+                                  "telemetry_topic must be a non-empty string under 128 characters");
+    }
+    cJSON *telemetry_qos = cJSON_GetObjectItem(request_json, "telemetry_qos");
+    if (telemetry_qos && (!cJSON_IsNumber(telemetry_qos) ||
+                          telemetry_qos->valueint < 0 || telemetry_qos->valueint > 2)) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "telemetry_qos must be 0, 1, or 2");
+    }
+    cJSON *telemetry_format = cJSON_GetObjectItem(request_json, "telemetry_format");
+    int telemetry_format_value = MQTT_TELEMETRY_FORMAT_JSON;
+    if (telemetry_format) {
+        if (cJSON_IsString(telemetry_format) && strcmp(telemetry_format->valuestring, "json") == 0) {
+            telemetry_format_value = MQTT_TELEMETRY_FORMAT_JSON;
+        } else if (cJSON_IsString(telemetry_format) && strcmp(telemetry_format->valuestring, "cbor") == 0) {
+            telemetry_format_value = MQTT_TELEMETRY_FORMAT_CBOR;
+        } else {
+            cJSON_Delete(request_json);
+            return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
+                                      "telemetry_format must be 'json' or 'cbor'");
+        }
+    }
+
     // Get current configuration
     ms_mqtt_config_t config;
     aicam_result_t result = mqtt_service_get_config(&config);
@@ -504,8 +593,8 @@ static aicam_result_t mqtt_config_set_handler(http_handler_context_t* ctx)
     // Update topic configuration if provided
     cJSON *topics = cJSON_GetObjectItem(request_json, "topics");
     cJSON *qos = cJSON_GetObjectItem(request_json, "qos");
-    
-    if (topics || qos) {
+
+    if (topics || qos || report_content || telemetry_enabled || telemetry_topic || telemetry_qos || telemetry_format) {
         mqtt_service_topic_config_t topic_config;
         result = mqtt_service_get_topic_config(&topic_config);
         if (result == AICAM_OK) {
@@ -542,7 +631,27 @@ static aicam_result_t mqtt_config_set_handler(http_handler_context_t* ctx)
             }
             
             // Note: auto_subscribe and message_config are not exposed in GET handler
-            
+
+            // Update report content mode if provided (validated above)
+            if (report_content) {
+                topic_config.report_content = report_content_mode;
+            }
+
+            // Update telemetry settings if provided (validated above)
+            if (telemetry_enabled) {
+                topic_config.telemetry_enabled = cJSON_IsTrue(telemetry_enabled) ? AICAM_TRUE : AICAM_FALSE;
+            }
+            if (telemetry_topic) {
+                strncpy(topic_config.telemetry_topic, telemetry_topic->valuestring, sizeof(topic_config.telemetry_topic) - 1);
+                topic_config.telemetry_topic[sizeof(topic_config.telemetry_topic) - 1] = '\0';
+            }
+            if (telemetry_qos) {
+                topic_config.telemetry_qos = (int)telemetry_qos->valueint;
+            }
+            if (telemetry_format) {
+                topic_config.telemetry_format = telemetry_format_value;
+            }
+
             // Apply topic configuration
             result = mqtt_service_set_topic_config(&topic_config);
             if (result != AICAM_OK) {

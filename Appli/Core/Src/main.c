@@ -45,8 +45,9 @@
 #include "framework.h"
 #include "driver_core.h"
 #include "driver_test.h"
-#include "xspim.h"
+#include "../FSBL/Core/Inc/xspim.h"
 #include "rng.h"
+#include "mm_hal_common.h"
 #include "core_init.h"
 #include "service_init.h"
 #include "drtc.h"
@@ -243,16 +244,8 @@ static void PLATFORM_Config(void)
     // NPUCache_config();
 #endif
     /*** External RAM and NOR Flash *********************************************/
-#ifdef BOOT_IN_PSRAM
     // BSP_XSPI_RAM_Init(0);
     // BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-#else
-    // MX_XSPI1_Init();
-    // XSPI_PSRAM_EnableMemoryMappedMode();
-    BSP_XSPI_RAM_Init(0);
-    BSP_XSPI_RAM_EnableMemoryMappedMode(0);
-#endif
-
     MX_XSPI2_Init();
     XSPI_NOR_EnableMemoryMappedMode();
 
@@ -352,13 +345,13 @@ void StartMainTask(void *argument)
     }
 
     // Step 5: Service initialization
-    step_start_time_ms = rtc_get_uptime_ms();
+    // step_start_time_ms = rtc_get_uptime_ms();
     service_init();
     step_end_time_ms = rtc_get_uptime_ms();
     step_duration_ms = step_end_time_ms - step_start_time_ms;
     printf("[BOOT] Step 5 - service_init: %lu ms\r\n", (unsigned long)step_duration_ms);
     
-    // printf("[MAIN] All systems initialized successfully\r\n");
+    printf("[MAIN] All systems initialized successfully\r\n");
 
     // Step 6: Process wakeup event
     step_start_time_ms = rtc_get_uptime_ms();
@@ -384,16 +377,32 @@ void StartMainTask(void *argument)
     // wdg_task_change_priority(osPriorityNormal);
     printf("[MAIN] Entering main loop\r\n");
 
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
+        LOG_WARN("[MAIN] System reset due to IWDG reset\r\n");
+        __HAL_RCC_CLEAR_RESET_FLAGS();
+    }
+    
     /* Infinite loop */
+    uint32_t flush_poll_div = 0;  /* counts osDelay(100) ticks; poll flush every ~150 (15s) */
     for(;;)
     {
+        // Periodic scheduled-flush poll: catches upload nodes that arrive while
+        // awake (FULL_SPEED mode, or LOW_POWER awake periods spanning a node).
+        // The wake path only fires on cold-boot wake; this covers the gap.
+        if (++flush_poll_div >= 150) {
+            flush_poll_div = 0;
+            (void)system_service_poll_scheduled_flush();
+        }
+
         // Check if system needs to enter sleep mode
         aicam_bool_t sleep_pending = AICAM_FALSE;
         result = system_service_is_sleep_pending(&sleep_pending);
-        
+
         if (result == AICAM_OK && sleep_pending == AICAM_TRUE) {
+            // Wait for any in-progress upload to finish before cutting power.
+            (void)system_service_wait_upload_before_sleep(30000);
             printf("[MAIN] Sleep pending detected, entering sleep mode...\r\n");
-            
+
             // Execute sleep operation
             result = system_service_execute_pending_sleep();
             if (result == AICAM_OK) {
@@ -401,19 +410,16 @@ void StartMainTask(void *argument)
                 // Execution will restart from main() -> StartMainTask()
                 // This line should not be reached
                 printf("[MAIN] Enter sleep mode successfully!\r\n");
+                osDelay(1000);  
+                // Normally, it wouldn't run over here
+                printf("[MAIN] Resetting system...\r\n");
+                HAL_NVIC_SystemReset();
             } else {
                 printf("[MAIN] Failed to enter sleep mode: %d, continuing...\r\n", result);
                 osDelay(100); // Wait before retry
             }
         }
-        
-        // Main loop periodic tasks can be added here
-        // For example:
-        // - System health monitoring
-        // - Watchdog feeding
-        // - LED blinking
-        // ...
-        
+
         // Sleep 100ms to avoid busy waiting
         osDelay(100);
     }
@@ -588,7 +594,7 @@ static void SystemIsolation_Config(void)
   * @brief  This function is executed in case of error occurrence.
   * @retval None
   */
-void Error_Handler(void)
+void _Error_Handler_(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */

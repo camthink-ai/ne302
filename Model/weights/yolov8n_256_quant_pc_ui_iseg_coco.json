@@ -3,7 +3,7 @@
   "model_info": {
     "name": "YOLOv8 Nano Instance Segmentation Model - COCO 80 Classes (Int8)",
     "version": "1.0.0",
-    "description": "YOLOv8 Nano model for instance segmentation with COCO dataset (Int8 quantized)",
+    "description": "YOLOv8 Nano model for instance segmentation with COCO dataset (Int8 quantized, no sigmoid - raw logits)",
     "type": "INSTANCE_SEGMENTATION",
     "framework": "TFLITE",
     "author": "CamThink"
@@ -24,24 +24,24 @@
     "num_outputs": 2,
     "outputs": [
       {
-        "name": "detections",
-        "batch": 1,
-        "height": 84,
-        "width": 8400,
-        "channels": 1,
-        "data_type": "int8",
-        "scale": 0.003921569,
-        "zero_point": 0
-      },
-      {
         "name": "masks",
         "batch": 1,
-        "height": 32,
-        "width": 268800,
+        "height": 64,
+        "width": 64,
+        "channels": 32,
+        "data_type": "int8",
+        "scale": 0.02950232,
+        "zero_point": -119
+      },
+      {
+        "name": "detections",
+        "batch": 1,
+        "height": 116,
+        "width": 1344,
         "channels": 1,
         "data_type": "int8",
-        "scale": 0.003921569,
-        "zero_point": 0
+        "scale": 0.19877490,
+        "zero_point": 112
       }
     ]
   },
@@ -65,10 +65,10 @@
       "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
       "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
     ],
-    "confidence_threshold": 0.5,
+    "confidence_threshold": 0.25,
     "iou_threshold": 0.45,
     "max_detections": 100,
-    "total_boxes": 8400,
+    "total_boxes": 1344,
     "mask_size": 32,
     "num_masks": 32
   },
@@ -90,4 +90,3 @@
     }
   }
 }
-

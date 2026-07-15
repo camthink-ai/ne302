@@ -31,6 +31,8 @@
      aicam_bool_t ai_1_active;      // AI_1 active switch
      uint32_t confidence_threshold;             // Confidence threshold 0-100
      uint32_t nms_threshold;                    // NMS threshold 0-100
+     aicam_bool_t overlay_results;  // Draw AI results onto encoded frames
+     uint32_t inference_interval_ms;            // AI inference pacing interval in ms (0 = every frame)
  } ai_debug_config_t;
  
 typedef struct {
@@ -151,6 +153,7 @@ typedef struct {
     uint8_t authentication;                 // Authentication type (0=None, 1=PAP, 2=CHAP, 3=Auto)
     aicam_bool_t enable_roaming;            // Enable roaming
     uint8_t operator;                       // Mobile operator (0=Auto, 1=CMCC, 2=CUCC, 3=CTCC, etc.)
+    char plmn[8];                           // Manual PLMN code (MCC+MNC, 5-6 digits); empty = auto COPS=0
 } cellular_config_persist_t;
 
 /**
@@ -223,8 +226,8 @@ typedef struct {
     network_scan_result_t known_networks[16]; // Known network configuration
     uint32_t known_network_count;           // Known network count
     
-    // Communication type settings
-    uint32_t preferred_comm_type;           // Preferred communication type (0=None, 1=WiFi, 2=Cellular, 3=PoE)
+    // Communication type settings (values = communication_type_t in communication_service.h)
+    uint32_t preferred_comm_type;           // 0=None, 1=WiFi, 2=HaLow, 3=Cellular, 4=PoE
     aicam_bool_t enable_auto_priority;      // Enable automatic priority-based switching
     
     // Cellular/4G settings
@@ -232,6 +235,28 @@ typedef struct {
     
     // PoE/Ethernet settings
     poe_config_persist_t poe;               // PoE configuration
+
+    // Wi-Fi HaLow last-connected info (no "known networks" list)
+    char halow_ssid[32];
+    char halow_password[64];
+    uint32_t halow_security;
+    char halow_country_code[NETIF_HALOW_COUNTRY_CODE_LEN];
+    char halow_bssid[18];
+    /** @ref POE_IP_MODE_DHCP or @ref POE_IP_MODE_STATIC */
+    uint32_t halow_ip_mode;
+    uint8_t halow_ip_addr[4];
+    uint8_t halow_netmask[4];
+    uint8_t halow_gateway[4];
+    /** HaLow TX power cap in dBm (0 = regulatory max). */
+    uint16_t halow_tx_power_dbm;
+    /** Foreground scan dwell time per channel (ms). */
+    uint32_t halow_scan_dwell_ms;
+    /** Fixed TX MCS 0..9, or -1 for automatic rate control. */
+    int32_t halow_rc_mcs;
+    /** TX bandwidth 1/2/4/8 MHz, or -1 for automatic. */
+    int32_t halow_rc_bw_mhz;
+    /** Guard interval: 0 short, 1 long, or -1 for automatic. */
+    int32_t halow_rc_gi;
 } network_service_config_t;
  
  // Power mode configuration structure
@@ -310,6 +335,17 @@ typedef struct {
 } mqtt_base_config_t;
 
 /**
+ * @brief Data report content mode
+ * @note Selects what the capture/report flow publishes on the data report topic
+ * @note Applies to the normal capture path; the Quick_Bootstrap fast-capture
+ *       path builds its report independently and always sends the full report
+ */
+typedef enum {
+    MQTT_REPORT_CONTENT_FULL = 0,           // Image + metadata + AI result
+    MQTT_REPORT_CONTENT_METADATA_ONLY = 1,  // Metadata + AI result only, no image
+} mqtt_report_content_t;
+
+/**
  * @brief Extended MQTT service configuration
  * @note Combines base config with application-specific settings
  */
@@ -337,12 +373,33 @@ typedef struct {
     uint32_t status_report_interval_ms;          // Status report interval (ms)
     aicam_bool_t enable_heartbeat;               // Enable heartbeat
     uint32_t heartbeat_interval_ms;              // Heartbeat interval (ms)
+    uint8_t report_content;                      // Report content mode (mqtt_report_content_t)
+
+    // Continuous AI telemetry
+    aicam_bool_t telemetry_enabled;              // Publish AI results continuously
+    char telemetry_topic[MAX_TOPIC_LENGTH];      // Telemetry topic
+    uint8_t telemetry_qos;                       // Telemetry QoS (0-2)
+    uint8_t telemetry_format;                    // Payload format (mqtt_telemetry_format_t)
 } mqtt_service_config_t;
+
+/**
+ * @brief Continuous AI telemetry payload format
+ * @note Consumers distinguish the payloads on the wire by the first byte:
+ *       '{' (0x7B) for JSON, a CBOR map header (0xA0-0xBF) for CBOR.
+ */
+typedef enum {
+    MQTT_TELEMETRY_FORMAT_JSON = 0,              // cJSON text payload (default)
+    MQTT_TELEMETRY_FORMAT_CBOR = 1               // Compact CBOR binary payload
+} mqtt_telemetry_format_t;
 
 /** Stored in image_config_t.isp_mode — built-in profiles vs NVS-backed custom IQ. */
 #define IMAGE_ISP_MODE_OUTDOOR  0u   /* default */
 #define IMAGE_ISP_MODE_INDOOR   1u
 #define IMAGE_ISP_MODE_CUSTOM   255u   /* 0xFF: use isp_config_t from NVS when valid */
+
+/** Stored in image_config_t.grayscale — ISP luma matrix when enabled (PIPE1 stays RGB565). */
+#define IMAGE_GRAYSCALE_OFF     AICAM_FALSE
+#define IMAGE_GRAYSCALE_ON      AICAM_TRUE
 
 //device service configuration structure
 typedef struct {
@@ -351,6 +408,7 @@ typedef struct {
     aicam_bool_t horizontal_flip;            // image horizontal flip
     aicam_bool_t vertical_flip;              // image vertical flip
     uint32_t isp_mode;                       // IMAGE_ISP_MODE_OUTDOOR(0) / INDOOR(1) / CUSTOM
+    aicam_bool_t grayscale;                  // AICAM_TRUE: ISP grayscale overlay (PIPE1 RGB565)
     uint32_t aec;                            // image auto exposure control (0=manual, 1=auto)
     uint32_t startup_skip_frames;            // frames to skip on camera startup for stabilization (1-300)
     uint32_t fast_capture_skip_frames;       // frames to skip for fast capture (number of skipped frames for snapshot capture)
@@ -509,6 +567,67 @@ typedef struct {
     char secret[WEBHOOK_SECRET_MAX_LEN];          // Auth token/credentials
 } webhook_config_t;
 
+/* ==================== Capture Upload Configuration ==================== */
+
+/** Capture-mode: when the device wakes/triggers a snapshot, how should the result be uploaded. */
+typedef enum {
+    CAPTURE_MODE_INSTANT    = 0,  /* Snap-and-upload, retry queue available */
+    CAPTURE_MODE_BATCH      = 1,  /* Accumulate N, then flush */
+    CAPTURE_MODE_SCHEDULED  = 2,  /* Flush at scheduled minutes-of-day */
+    CAPTURE_MODE_LOCAL_ONLY = 3,  /* Store only, no upload */
+} capture_mode_t;
+
+/** Capture storage target. */
+typedef enum {
+    CAPTURE_STORE_AUTO  = 0, /* Prefer SD, fall back to internal flash */
+    CAPTURE_STORE_FLASH = 1,
+    CAPTURE_STORE_SD    = 2,
+    CAPTURE_STORE_NONE  = 3, /* In-memory only (INSTANT mode only, no retry possible) */
+} capture_storage_t;
+
+/** Behavior when the chosen storage is full. */
+typedef enum {
+    STORAGE_POLICY_WRAP = 0, /* Delete oldest sent/local/failed/pending until enough free */
+    STORAGE_POLICY_STOP = 1, /* Reject this capture and raise alarm */
+} storage_policy_t;
+
+/** Upload protocol selection (per-record, derived from this config at enqueue time). */
+typedef enum {
+    UPLOAD_PROTO_MQTT    = 0,
+    UPLOAD_PROTO_WEBHOOK = 1,
+} upload_proto_t;
+
+#define CAPTURE_SCHEDULE_MAX_NODES  8
+#define CAPTURE_UPLOAD_CFG_VERSION  1
+
+typedef struct {
+    uint32_t          version;            /* schema version */
+    capture_mode_t    mode;
+    capture_storage_t storage;
+    storage_policy_t  policy;
+    upload_proto_t    upload_protocol;
+
+    /* Retry (mode != LOCAL_ONLY, storage != NONE) */
+    aicam_bool_t      retry_enable;
+    uint8_t           retry_max_attempts;     /* default 5; >max → marked failed */
+
+    /* Batch (mode == BATCH) */
+    uint16_t          batch_count;            /* default 10, range 1..50 */
+
+    /* Schedule (mode == SCHEDULED) */
+    uint8_t           schedule_node_count;
+    uint16_t          schedule_minutes[CAPTURE_SCHEDULE_MAX_NODES]; /* 0..1439 */
+
+    /* Housekeeping */
+    uint32_t          keep_sent_hours;        /* 0 = delete immediately on success; default 168 (7d) */
+    uint32_t          max_pending_records;    /* hard cap on queue length; default 200 */
+
+    /* Wake-capture network: which netif to bring up on the wake path.
+     * Values = communication_type_t (communication_service.h).
+     * COMM_TYPE_NONE (0) = default (use system comm-pref logic, init all). */
+    uint32_t          upload_comm_type;
+} capture_upload_config_t;
+
 // RTMP config is now part of video_stream_mode_config_t
 // These macros are kept for compatibility
 #define RTMP_CONFIG_MAX_URL_LENGTH         256
@@ -531,6 +650,7 @@ typedef struct {
     mqtt_service_config_t mqtt_service;
     auth_mgr_config_t auth_mgr;
     webhook_config_t webhook_config;
+    capture_upload_config_t capture_upload; /* Capture/upload mode, storage, retry, schedule */
     // RTMP config is now in work_mode_config.video_stream_mode
  } aicam_global_config_t;
  
@@ -813,8 +933,34 @@ uint32_t json_config_get_confidence_threshold(void);
 /**
  * @brief Get NMS threshold
  * @return NMS threshold
- */ 
+ */
 uint32_t json_config_get_nms_threshold(void);
+
+/**
+ * @brief Set AI overlay results flag
+ * @param overlay_results Draw AI results onto encoded frames
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_overlay_results(aicam_bool_t overlay_results);
+
+/**
+ * @brief Get AI overlay results flag
+ * @return AI overlay results flag
+ */
+aicam_bool_t json_config_get_overlay_results(void);
+
+/**
+ * @brief Set AI inference pacing interval
+ * @param interval_ms Interval in milliseconds (0 = process every frame)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms);
+
+/**
+ * @brief Get AI inference pacing interval
+ * @return Interval in milliseconds (0 = process every frame)
+ */
+uint32_t json_config_get_inference_interval_ms(void);
 
 
 /**
@@ -959,6 +1105,21 @@ aicam_result_t json_config_get_webhook_config(webhook_config_t *config);
 aicam_result_t json_config_set_webhook_config(const webhook_config_t *config);
 
 /**
+ * @brief Get capture-upload configuration
+ */
+aicam_result_t json_config_get_capture_upload_config(capture_upload_config_t *config);
+
+/**
+ * @brief Set capture-upload configuration (persisted to NVS)
+ */
+aicam_result_t json_config_set_capture_upload_config(const capture_upload_config_t *config);
+
+/**
+ * @brief Fill capture-upload struct with safe defaults
+ */
+void json_config_capture_upload_defaults(capture_upload_config_t *config);
+
+/**
  * @brief Get webhook custom CA certificate (from LittleFS file)
  * @param cert_data Output buffer (caller must free with buffer_free). NULL if no cert.
  * @param cert_len Output length (0 if no cert)
@@ -984,6 +1145,8 @@ aicam_result_t json_config_delete_webhook_ca_cert(void);
 #define JSON_CONFIG_GET_AI_1_ACTIVE(config)    ((config)->ai_debug.ai_1_active)
 #define JSON_CONFIG_GET_CONFIDENCE(config)     ((config)->ai_debug.confidence_threshold)
 #define JSON_CONFIG_GET_NMS_THRESHOLD(config)  ((config)->ai_debug.nms_threshold)
+#define JSON_CONFIG_GET_OVERLAY_RESULTS(config) ((config)->ai_debug.overlay_results)
+#define JSON_CONFIG_GET_INFER_INTERVAL(config) ((config)->ai_debug.inference_interval_ms)
 
 // Macros for quick access to power mode configuration
 #define JSON_CONFIG_GET_POWER_MODE(config)     ((config)->power_mode_config.current_mode)

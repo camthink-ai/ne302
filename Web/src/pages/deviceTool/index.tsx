@@ -60,7 +60,6 @@ export default function DeviceTool() {
     configVideoStreamPushReq,
     getAiParamsReq,
     setAiParamsReq,
-    startVideoStreamReq,
     stopVideoStreamReq,
     toggleAiReq,
   } = deviceTool;
@@ -80,6 +79,7 @@ export default function DeviceTool() {
   };
   // const [uploadLoading, setUploadLoading] = useState(false);
   const [modelUploadLoading, setModelUploadLoading] = useState(false);
+  const [playerEpoch, setPlayerEpoch] = useState(0);
   // video URL
   const [videoParameters, setVideoParameters] = useState<VideoStreamPushReq>({
     enabled: false,
@@ -241,7 +241,6 @@ export default function DeviceTool() {
   const handleUploadChange = async (file: File) => {
     try {
       setModelUploadLoading(true);
-      videoRendererInstance.current?.pause();
       await stopVideoStreamReq();
       const contentPreview = await sliceFile(file, 2048);
       if (!contentPreview.size) {
@@ -250,13 +249,19 @@ export default function DeviceTool() {
       await preCheckReq(contentPreview, 'ai');
       await uploadOTAFileReq(file, 'ai');
       await reloadModelReq();
-      getAiStatus();
     } catch (error) {
       console.error('handleUploadChange', error);
       throw error;
     } finally {
-      await startVideoStreamReq();
-      videoRendererInstance.current?.reStart();
+      try {
+        await stopVideoStreamReq();
+        await new Promise((resolve) => { setTimeout(resolve, 1000); });
+        // Remount player for a clean MSE / Worker / WebSocket lifecycle
+        setPlayerEpoch((epoch) => epoch + 1);
+        await getAiStatus();
+      } catch (restartError) {
+        console.error('preview restart after model upload', restartError);
+      }
       setModelUploadLoading(false);
     }
   };
@@ -301,7 +306,11 @@ export default function DeviceTool() {
           <CardContent className="sm:w-xl flex flex-col">
 
             <div className=" bg-gray-100 w-full  aspect-video flex justify-center items-center">
-              <Player videoUrl={getWebSocketUrl()} videoRendererInstance={videoRendererInstance} />
+              <Player
+                key={playerEpoch}
+                videoUrl={getWebSocketUrl()}
+                videoRendererInstance={videoRendererInstance}
+              />
             </div>
             <div
               className=" w-full  bg-white pt-4 px-4"
@@ -454,15 +463,17 @@ export default function DeviceTool() {
                               </div>
                               <Separator className="my-2" />
                               <div className="flex items-center justify-between">
-                                <div className="flex min-w-0 items-center gap-1">
-                                  <Label className="text-sm text-text-primary shrink-0">
-                                    {i18n._('sys.device_tool.sys_clk_title')}
-                                  </Label>
+                                <Label className="inline-flex min-w-0 shrink-0 items-center gap-1 text-sm text-text-primary">
+                                  {i18n._('sys.device_tool.sys_clk_title')}
                                   <Tooltip mbEnhance>
-                                    <TooltipTrigger>
-                                      <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
-                                        <SvgIcon className="h-4 w-4 text-gray-500" icon="info" />
-                                      </div>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="inline-flex size-4 shrink-0 items-center justify-center text-gray-500"
+                                        aria-label={i18n._('common.tip')}
+                                      >
+                                        <SvgIcon className="size-4 text-gray-500" icon="info" />
+                                      </button>
                                     </TooltipTrigger>
                                     <TooltipContent className="max-w-80 text-pretty">
                                       <div>
@@ -473,7 +484,7 @@ export default function DeviceTool() {
                                       </div>
                                     </TooltipContent>
                                   </Tooltip>
-                                </div>
+                                </Label>
                                 <Select
                                   value={String(sysClkProfile)}
                                   onValueChange={async (v) => {
@@ -482,7 +493,7 @@ export default function DeviceTool() {
                                     try {
                                       await setSysClkConfigReq({ sys_clk_profile: next });
                                       setSysClkFlashValid(true);
-                                      toast.success(i18n._('sys.device_tool.sys_clk_saved_toast'));
+                                      toast.warning(i18n._('sys.device_tool.sys_clk_reboot_toast'));
                                     } catch (e) {
                                       console.error(e);
                                       toast.error('Save failed');

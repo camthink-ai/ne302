@@ -212,7 +212,7 @@ static int qs_prepare_camera_and_jpeg(const qs_snapshot_config_t *cfg, const nn_
     /* ISP IQ before start: NVS + stock profiles via quick_storage (no json_config init). */
     {
         ISP_IQParamTypeDef isp_param = {0};
-        (void)quick_storage_fill_isp_iq_param(cfg->isp_mode, &isp_param);
+        (void)quick_storage_fill_isp_iq_param(cfg->isp_mode, cfg->grayscale, &isp_param);
         (void)device_ioctl(s_cam_dev, CAM_CMD_SET_ISP_PARAM, (uint8_t *)&isp_param, sizeof(isp_param));
     }
 
@@ -370,6 +370,7 @@ static void qs_snapshot_thread(void *argument)
         osThreadExit();
         return;
     }
+    printf("[QS]end1, %lu ms\r\n", HAL_GetTick());
 
     if (need_ai) {
         camera_buffer_with_frame_id_t pipe2 = {0};
@@ -391,6 +392,7 @@ static void qs_snapshot_thread(void *argument)
             osThreadExit();
             return;
         }
+        printf("[QS]end2, %lu ms\r\n", HAL_GetTick());
     }
 
     /* turn light off after capture */
@@ -400,7 +402,6 @@ static void qs_snapshot_thread(void *argument)
 
     /* Stop pipes/sensor early to reduce power while encoding/inference runs */
     qs_stop_camera_pipes(need_ai);
-    printf("[QS]end, %lu ms\r\n", HAL_GetTick());
     qt_prof_step(&prof, "[QS] snap:stop ");
 
     /* JPEG encode using pipe1 buffer */
@@ -462,7 +463,7 @@ static void qs_ai_thread(void *argument)
     qt_prof_step(&prof, "[QS] ai:nn ");
 
     /* load model: follow device_service fast path selection */
-    uintptr_t model_ptr = (s_cfg.ai_1_active) ? (AI_1_BASE + 1024U) : (AI_DEFAULT_BASE + 1024U);
+    uintptr_t model_ptr = (s_cfg.ai_1_active) ? (AI_2_BASE + 1024U) : (AI_1_BASE + 1024U);
     if (nn_load_model(model_ptr) != 0) {
         QT_TRACE("[QS] ", "load model fail");
         (void)osEventFlagsSet(s_evt, QS_FLAG_AI_INFO_READY | QS_FLAG_AI_RESULT_READY);
