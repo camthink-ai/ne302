@@ -1,220 +1,234 @@
-# NE302 - STM32N6570 AI Vision Camera
+# NE302 — Mini AI Camera Board
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Platform](https://img.shields.io/badge/platform-STM32N6570-blue)]()
-[![License](https://img.shields.io/badge/license-Proprietary-red)]()
-[![Version](https://img.shields.io/badge/version-1.0.0.1-blue)]()
+[![Platform](https://img.shields.io/badge/platform-STM32N657-blue)]()
+[![MCU](https://img.shields.io/badge/MCU-Cortex--M55%20%2B%20NPU-blue)]()
+[![License](https://img.shields.io/badge/license-Dual%20License-red)]()
 
-> High-performance AI vision camera system based on STM32N6570 Discovery Kit, featuring real-time video processing, neural network acceleration, and modern web interface.
+> **38 × 38 mm AI camera module** built on the STM32N657 — ST's first MCU with a dedicated Neural Processing Unit (NPU). Real-time vision, always-on wake, and wireless connectivity in a compact, production-ready form factor.
 
-## ✨ Key Features
+![NE302](Docs/images/mini_all_board_1.png)
 
-- 🎥 **Real-time Video Processing** - Multiple camera sensor support (OS04C10, IMX335)
-- 🧠 **AI Accelerated Inference** - NPU hardware acceleration, YOLOv8/YOLOX
-- 🌐 **Modern Web Interface** - Preact + TypeScript, real-time preview and configuration
-- 📡 **Multi-network Support** - Ethernet, WiFi, Cat1, BLE connectivity
-- 🔒 **Secure Boot** - TrustZone secure partitioning, firmware signature verification
-- 🔄 **OTA Updates** - Secure over-the-air firmware and model upgrade
+---
 
-## 🎬 Preview
+## 📋 Contents
 
-### Take a Closer Look at CamThink NeoEyes NE302  
-[![Watch the video](https://resources.camthink.ai/video/product.jpg)](https://resources.camthink.ai/video/NE302_product_introduction.mp4)
+- [Hardware](#-hardware)
+- [Software](#-software)
+- [Build & Flash](#-build--flash)
+- [Project Structure](#-project-structure)
+- [Resources](#-resources)
+- [License](#-license)
 
-### Deploy NeoEyes NE302 Anywhere Outdoors  
-[![Watch the video](https://resources.camthink.ai/video/deploy.jpg)](https://resources.camthink.ai/video/NE302_deploy_everywhere.mp4)
+---
 
-### Always Awake. Always Ready for Action  
-[![Watch the video](https://resources.camthink.ai/video/ready%20for%20action.jpg)](https://resources.camthink.ai/video/NE302_IO_and_MQTT_Wake-up.mp4)  
+## 🔧 Hardware
 
-### Detecting Every Critical Moment  
-[![Watch the video](https://resources.camthink.ai/video/aipreview.jpg)](https://resources.camthink.ai/video/NE302_reasoning_preview.mp4) 
+The NE302 is a **two-board solution** — a Main Board (8-layer, 38 × 38 mm) carrying all core processing, and an Interface Board (4-layer) that breaks out power, debug, and storage. The camera sensor is soldered directly on-board.
 
-[**Learn More**](https://www.camthink.ai/)
+![NE302 — Main Board & Interface Board](Docs/images/mini_all_board_2.png)
 
-## 🏗️ Project Structure
-Low Power, Performance, and Edge AI
-![img](https://resources.camthink.ai/wiki/img/neoeyes-ne301-series/overview/U0.png)
-NE301 is an AI vision camera system based on STM32N6570, featuring a multi-core architecture:
+### Main Board
 
-- **STM32N6 (Main MCU)**: Cortex-M55, handles video processing, AI inference, and network communication
-- **STM32U0 (WakeCore)**: Power control unit, manages low-power operation and wake-up
-- **Web Frontend**: Preact + TypeScript, provides real-time preview and configuration interface
-- **AI Models**: YOLOv8/YOLOX, supports object detection and pose estimation
+| Feature | Detail |
+|---------|--------|
+| **MCU** | STM32N657 — Cortex-M55 @ 800 MHz + NPU (600 GOPS) |
+| **Co-Processor** | STM32U073 — Cortex-M0+ always-on wake controller |
+| **Camera** | 4 MP CMOS sensor, soldered directly on-board |
+| **Flash** | 512 Mbit Octal-SPI NOR Flash (other capacities available on request) |
+| **PSRAM** | 256 Mbit Octal-SPI PSRAM |
+| **Wireless** | Wi-Fi 6 (802.11b/g/n/ax, 2.4 GHz single-band) + Bluetooth LE 5.4 |
 
-```
-┌─────────────────────────────────────┐
-│   Web Service (HTTP/WebSocket)      │  ← User Interface Layer
-├─────────────────────────────────────┤
-│   Service Layer                     │  ← Service Layer
-│   ├─ AI Service                     │
-│   ├─ System Service                 │
-│   ├─ Communication Service          │
-│   ├─ Web Service                    │
-│   ├─ MQTT Service                   │
-│   └─ OTA Service                    │
-├─────────────────────────────────────┤
-│   Core Layer                        │  ← Core Layer
-│   ├─ Framework                      │
-│   ├─ Video Pipeline                 │
-│   ├─ Configuration Manager          │
-│   └─ Event Bus                      │
-├─────────────────────────────────────┤
-│   HAL Layer                         │  ← Hardware Abstraction Layer
-│   ├─ Camera Driver                  │
-│   ├─ Network Driver                 │
-│   ├─ NN Driver                      │
-│   └─ Storage Driver                 │
-└─────────────────────────────────────┘
-```
-```
-ne302/
-├── Appli/                  # Stm32n6 Main application
-├── FSBL/                   # Stm32n6 First stage bootloader
-├── WakeCore/               # Power Ctrl Unit
-├── Web/                    # Web frontend 
-├── Model/                  # AI models
-├── Script/                 # Build and packaging scripts
-└── Makefile                # Root build orchestration
-```
+> Additional network interfaces supported in firmware (require corresponding hardware module): Ethernet (SPI), Cat.1 4G LTE, WiFi HaLow (802.11ah).
 
-## 🚀 Quick Start
+### Interface Board
 
-Go to [WIKI](https://wiki.camthink.ai/docs/neoeyes-ne302-series/quick-start)
+| Feature | Detail |
+|---------|--------|
+| **Power** | USB Type-C (5 V) |
+| **Debug** | N6-STLINK, U0-STLINK (dual SWD) |
+| **Console** | U6-UART serial (baud 921600) |
+| **Storage** | MicroSD (TF) card slot |
+| **Boot Control** | N6-BOOT & U0-BOOT DIP switches |
 
-## 🛠️ Development Guide 
+![Interface Board Pinout](Docs/images/mini_interface_board_labeling_1.png)
 
-### Development Environment Setup
+| Label | Function |
+|-------|----------|
+| **N6-STLINK** | STM32N6 debug & flash (SWD) |
+| **U0-STLINK** | STM32U0 debug & flash (SWD) |
+| **U6-UART** | STM32N6 serial console |
+| **N6-BOOT** | STM32N6 boot mode (ON = flash mode) |
+| **U0-BOOT** | STM32U0 boot mode (ON = flash mode) |
 
-#### 🐳 Method 1: Docker (Recommended)
+> ⚠️ After flashing, return boot switches to **OFF** and power-cycle or press RESET to run.
 
-**Prerequisites:** Docker 20.10+  Disk Space > 10GB+
+### What's Included
 
-```bash
-# 1. Build (Or pull)Docker image
-docker build -t ne302-dev:latest .
-# or pull (faster)
-docker pull camthink/ne302-dev:latest
-# 2. Run container
-docker run -it --rm --privileged \
-  -v $(pwd):/workspace \
-  -v /dev/bus/usb:/dev/bus/usb \
-  camthink/ne302-dev:latest
-# 3. Inside container
-make                        # Build all
-```
+| Item | Qty |
+|------|-----|
+| NE302 Main Board (camera integrated) | × 1 |
+| Interface Board | × 1 |
+| Device enclosure | × 1 |
+| WiFi / BLE antenna | × 1 |
+| USB-C cable | × 1 |
+| 4-pin adapter cable (1.25 mm → 2.54 mm Dupont) | × 1 |
+| Heavy-duty double-sided adhesive tape (back mount) | × 1 |
 
-#### 💻 Method 2: Source Installation
+### Flash Partition Layout
 
-**Prerequisites:**
-- ARM GCC 13.3+
-- GNU Make 3.81+ 
-- Python 3.8+
-- Node.js 20+
-- pnpm 9+
-- STM32CubeProgrammer(v2.19.0)
-- STM32_SigningTool_CLI(v2.19.0)
-- stedgeai(v3.0,stedgeai0300.stneuralart)
+| Partition | Address | Size | Content |
+|-----------|---------|------|---------|
+| FSBL | `0x70000000` | 512 KB | First Stage Bootloader |
+| NVS | `0x70080000` | 64 KB | Non-volatile configuration |
+| OTA Info | `0x70090000` | 8 KB | OTA status & metadata |
+| App A | `0x70100000` | 4 MB | Main application (active) |
+| App B | `0x70500000` | 4 MB | Main application (OTA fallback) |
+| Model A | `0x70900000` | 8 MB | AI model bundle (active) |
+| Model B | `0x71100000` | 8 MB | AI model bundle (OTA fallback) |
+| Web | `0x71900000` | 1 MB | Web frontend SPA |
+| WiFi FW | `0x71A00000` | 3 MB | WiFi firmware |
+| LittleFS | `0x71D00000` | ~32 MB | User data & file system |
 
-```bash
-# 1. Check environment
-./check_env.sh
-# 2. Install as prompted
-./setup.sh                  # Linux/macOS
-setup.bat                   # Windows
-# 3. Verify
-./check_env.sh
-```
+---
+
+## 💻 Software
+
+### Key Capabilities
+
+- **Edge AI** — NPU-accelerated object detection & pose estimation, runtime model switching
+- **Video Pipeline** — MIPI CSI-2 → ISP → H.264 / MJPEG hardware encoding, full-res snapshot
+- **Web UI** — Preact + TypeScript SPA with real-time preview via WebSocket
+- **Multi-Protocol** — HTTP REST API, WebSocket, MQTT, RTSP, RTMP
+- **OTA Updates** — A/B partition, encrypted + signed delivery, Web UI / HTTP / MQTT trigger
+- **Secure Boot** — TrustZone secure/non-secure partitioning, signed boot chain, anti-rollback
+- **Low-Power** — STM32U073 always-on domain, multi-source wake-up (IO, RTC, PIR, button, remote)
+
+### Development Toolchain
+
+| Tool | Version | Required |
+|------|---------|----------|
+| ARM GCC (`arm-none-eabi`) | 13.3+ | ✅ |
+| GNU Make | 3.81+ | ✅ |
+| Python | 3.8+ | ✅ |
+| Node.js + pnpm | 20+ / 9+ | ✅ |
+| STM32CubeProgrammer CLI | 2.19.0+ | Flash only |
+| STM32 SigningTool CLI | 2.19.0+ | Sign only |
+| ST Edge AI Core (`stedgeai`) | 3.0+ | Model conversion only |
 
 See [SETUP.md](SETUP.md) for detailed installation instructions.
 
-### Hardware Connect
+---
 
-**Prerequisites:**
-- NE302 Board * 1
-- ST-Link V2 * 1
-- 4P 1.25mm pitch male to 2.54mm dupont female adapter (Used for flash N6 chips)
-- 3P 2.54mm pitch dual female header dupont wires (Used for flash U0 chips)
-- Type C USB cable compatible with the computer's USB port (for e.g., type C to type A if the computer has a type A USB port)
+## 🔨 Build & Flash
 
-The mainboard contains two MCUs： **stm32n6** and **stm32u0**
-#### Ready for Flashing `apps`, `web`, or `models` to **stm32n6**
-1. Turn on the dip switch 2 on the board to enter the flash mode.***(After the flash is completed, please turn it off and power it back on or reset it to enter the running mode)*** 
+### Build Pipeline Overview
 
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/flash-mode.png)
+Three stages — **compile**, **sign**, and **package**. Not every component needs all three:
 
-2. Connect ST Link to the DEBUG port on the board using a 4P adapter cable and connect ST Link to the computer.
-
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/st-link.png)
-
-3. Connect the board to a computer or adapter using a type-c USB cable, and the onboard DEBUG indicator light will remain on, indicating that it has entered the flash mode.
-
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/type-c.png)
-
-#### Ready for Flashing `wakecore` to **stm32u0**
-1. Connect ST-LINK to STM32U0 chip using 3P DuPont wire and connect ST-LINK to computer.
-
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/u0.png)
-
-2. Connect the board to a computer or adapter using a type-c USB cable.
-
-![alt text](https://resources.camthink.ai/wiki/img/neoeyes-ne302-series/NE300-MB01-development-board/software-guide/system-flashing-and-initialization/connect.png)
-
-### Build
-
-```bash
-# Build
-make                        # Build all (FSBL + App + Web + Model)
-make app                    # Build application only
-make web                    # Build web frontend
-make model                  # Build AI model
-make pkg                    # package for flash or OTA
-make info                   # help
+```
+Source Code
+    │
+    ▼
+  make [component]          ← Compile only → unsigned .bin (not flashable)
+    │
+    ▼
+  make sign-[component]     ← Sign → _signed.bin
+    │                              FSBL: signed .bin is flashable as-is
+    │                              App:  signed .bin still needs packaging
+    ▼
+  make pkg-[component]      ← Package → _v*_pkg.bin (flashable / OTA-ready)
 ```
 
-### Flash
+| Stage | FSBL | App | Web | Model | WakeCore |
+|-------|------|-----|-----|-------|----------|
+| **Compile** | `make fsbl` | `make app` | `make web` | `make model` | `make wakecore` |
+| **Sign** | `make sign-fsbl` | `make sign-app` | — | — | — |
+| **Package** | `make pkg-fsbl` | `make pkg-app` | `make pkg-web` | `make pkg-model` | — |
+| **Flash** | `make flash-fsbl` | `make flash-app` | `make flash-web` | `make flash-model` | `make flash-wakecore` |
 
-1. Firmwares List
+> - **FSBL**: signed `.bin` can be flashed directly. Packaging is only needed for OTA delivery.
+> - **App**: must be signed **and** packaged before flashing. `make flash-app` depends on both.
+> - **Web & Model**: no signing required, but must be packaged before flashing.
+> - **WakeCore**: compiled and flashed directly via its own Makefile (STM32U0 side).
+
+### Before Flashing
+
+> ⚠️ **Always set the boot switch for the target MCU before powering on or resetting the board.**
+>
+> | Target | ST-Link Port | Boot Switch | Procedure |
+> |--------|-------------|-------------|-----------|
+> | **STM32N6** (FSBL / App / Web / Model) | N6-STLINK | **N6-BOOT → ON** | Set switch, power-cycle, flash, set switch OFF, power-cycle to run |
+> | **STM32U0** (WakeCore) | U0-STLINK | **U0-BOOT → ON** | Set switch, power-cycle, flash, set switch OFF, power-cycle to run |
+
+### Common Commands
+
 ```bash
-  ne301_FSBL_signed.bin       --> use for stm32n6 FSBL        --> flash addr 0x70000000
-  ne301_App_signed_pkg.bin    --> use for stm32n6 App         --> flash addr 0x70100000
-  ne301_Web_pkg.bin           --> use for web gui             --> flash addr 0x71900000
-  ne301_Model_pkg.bin         --> use for AI model            --> flash addr 0x70900000
-  # Connect ST Link to U0 first, then execute
-  ne302_WakeCore.bin          --> use for stm32u0 wakecore    --> flash addr 0x08000000 
-```
-2. Flash tools supported
+# ── Build & Flash ───────────────────────────────────────
+make                  # Build all (unsigned, not flashable)
+make flash            # Build, sign, package & flash all (N6)
+make flash-wakecore   # Flash WakeCore (U0)
 
-- STM32CubeProgrammer
-- Script/maker.sh
+# ── Per-component ───────────────────────────────────────
+make flash-fsbl       # FSBL (sign → flash)
+make flash-app        # App (sign → pkg → flash)
+make flash-web        # Web (pkg → flash)
+make flash-model      # Model (pkg → flash)
 
-```bash
-Script/maker.sh flash <bin-name> <flash-addr>
-```
-- make 
+# ── Package for OTA ─────────────────────────────────────
+make pkg              # → build/ne302_*_v*_pkg.bin
 
-```bash
-  # Flash all components
-  make flash
-  # Flash specific component
-  make flash-fsbl
-  make flash-app
-  make flash-web
-  make flash-model
-  # Connect ST Link to U0 first, then execute
-  make flash-wakecore
+# ── Erase ───────────────────────────────────────────────
+make erase-nvs        # Wipe device config
+make erase-ota        # Reset OTA state
+make erase-all        # Erase all except FSBL
+
+# ── Utilities ───────────────────────────────────────────
+make clean            # Clean all build artifacts
+make info             # Show build configuration
+make help             # Show all available targets
 ```
+
+---
+
+## 🏗️ Project Structure
+
+```
+ne302/
+├── Appli/                  # STM32N6 main application
+├── FSBL/                   # First Stage Bootloader (TrustZone secure boot)
+├── WakeCore/               # STM32U0 always-on wake controller firmware
+├── Web/                    # Preact + TypeScript web frontend
+├── Model/                  # AI model files & conversion scripts
+├── Script/                 # Build, flash, packaging, and CI scripts
+├── Docs/                   # Documentation & datasheets
+├── Hardware/               # Board schematics, layout, BOM
+├── Custom/                 # Third-party libraries (lwIP, mbedTLS, etc.)
+├── Drivers/                # STM32N6xx HAL & LL drivers
+├── Middlewares/            # ST software packages (Camera, USBX, FileX, etc.)
+├── BSP/                    # Board Support Package
+├── Gcc/                    # Linker scripts & GCC config
+├── Secure_nsclib/          # TrustZone non-secure callable library
+├── Makefile                # Top-level build orchestration
+├── Dockerfile              # Reproducible Docker dev environment
+├── SETUP.md                # Detailed environment setup guide
+└── LICENSE
+```
+
+---
+
+## 📚 Resources
+
+- [**NE302 Wiki**](https://wiki.camthink.ai/docs/neoeyes-ne302-series/quick-start) — Full documentation & API reference
+- [**Hardware**](Hardware/) — Board schematics, layout, and BOM
+- [**camthink.ai**](https://www.camthink.ai/) — Product page & announcements
+
+---
 
 ## 📄 License
 
-This software is released under a **Dual-License** model.  
-- *Community Edition License*   
-- *Commercial Edition License*
-  
-Please see the full terms in [LICENSE](./LICENSE)
+**Dual-License** — Community Edition (free for non-commercial use) and Commercial Edition. See [LICENSE](./LICENSE) for full terms.
 
 ---
 
 **Development Team:** CamThink AI Camera Team  
-**Contact:** zbing@camthink.ai  
-**Last Updated:** 2026-03-30
+**Contact:** [zbing@camthink.ai](mailto:zbing@camthink.ai)
