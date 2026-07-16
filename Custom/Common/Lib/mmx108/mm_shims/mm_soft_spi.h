@@ -14,7 +14,7 @@
  *
  * Tuning (in mm_soft_spi.c or -D on the compiler command line):
  *   MM_SOFT_SPI_SETUP_LOOPS   before SCLK rise (tISU)
- *   MM_SOFT_SPI_SAMPLE_LOOPS  after SCLK rise, before MISO read (tODLY) — keep ~100 on NE301
+ *   MM_SOFT_SPI_SAMPLE_LOOPS  after SCLK rise, before MISO read (tODLY) — keep ~100 on NE302
  *   MM_SOFT_SPI_LOW_LOOPS     after SCLK fall
  *
  * Full legacy symmetric behaviour: -DMM_SOFT_SPI_DELAY_LOOPS=100

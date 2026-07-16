@@ -67,7 +67,7 @@ export default function ActionButtons() {
           </Button>
 
           <Link
-            to="https://wiki.camthink.ai/docs/neoeyes-ne301-series/overview"
+            to="https://wiki.camthink.ai/docs/neoeyes-ne302-series/overview"
             target="_blank"
             className="inline-flex shrink-0"
           >

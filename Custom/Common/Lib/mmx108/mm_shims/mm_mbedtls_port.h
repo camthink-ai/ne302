@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Morse Micro / NE301
+ * Copyright 2025 Morse Micro / NE302
  *
  * SPDX-License-Identifier: Apache-2.0
  */

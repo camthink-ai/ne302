@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 60
     
     container:
-      image: camthink/ne302-dev:v1.1
+      image: camthink/ne301-dev:v1.1
       volumes:
         - ${{ github.workspace }}:/workspace
     defaults:

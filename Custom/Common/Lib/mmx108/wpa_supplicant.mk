@@ -235,8 +235,8 @@ CFLAGS-$(SUPP_DIR) += -Wno-misleading-indentation
 
 endif
 
-ifneq ($(NE301_WPA_CRYPTO_IN_APP),)
-# crypto_mbedtls_*.c is compiled by NE301 Appli (mmx108.mk), not libmorse.a
+ifneq ($(NE302_WPA_CRYPTO_IN_APP),)
+# crypto_mbedtls_*.c is compiled by NE302 Appli (mmx108.mk), not libmorse.a
 else ifneq ($(BUILD_SUPPLICANT_CRYPTO_FROM_SOURCE)$(BUILD_SUPPLICANT_FROM_SOURCE),)
 # mbedTLS crypto shim layer.
 ifneq ($(BUILD_SUPPLICANT_WITH_DPP),)

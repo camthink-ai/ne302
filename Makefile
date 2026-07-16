@@ -140,7 +140,7 @@ __WIFI_META := $(shell python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wifi-meta 2>/de
 WIFI_VERSION     := $(word 1,$(__WIFI_META))
 WIFI_VERSION_STR := $(WIFI_VERSION)
 WIFI_RPS_NAME    := $(word 2,$(__WIFI_META))
-WIFI_DESC        := NE301 WiFi Firmware $(WIFI_RPS_NAME)
+WIFI_DESC        := NE302 WiFi Firmware $(WIFI_RPS_NAME)
 
 ######################################
 # Version Header Generation (cross-platform using Python)
@@ -241,7 +241,7 @@ $(eval $(call pkg_project,model,model,$(MODEL_NAME),ai_model,NE302_MODEL,$(MODEL
 # WiFi firmware package: wraps the flash image (flash_header_t + .rps) with a 1KB
 # OTA header for WEB verification. The OTA header is NOT written to flash; only the
 # flash image payload is. fw_type = wifi (0x08), version derived from the .rps name.
-$(eval $(call pkg_project,wifi,wifi-image,$(WIFI_NAME)_flash,wifi,NE301_WIFI,$(WIFI_VERSION),$(WIFI_VERSION_STR),,"$(WIFI_DESC)"))
+$(eval $(call pkg_project,wifi,wifi-image,$(WIFI_NAME)_flash,wifi,NE302_WIFI,$(WIFI_VERSION),$(WIFI_VERSION_STR),,"$(WIFI_DESC)"))
 
 .PHONY: pkg
 pkg: $(foreach proj, fsbl app web model wifi,pkg-$(proj))

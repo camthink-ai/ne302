@@ -3787,7 +3787,7 @@ static aicam_bool_t mqtt_build_topics(const char *mac_str, mqtt_service_config_t
         strcmp(cfg->telemetry_topic, "aicam/data/telemetry") == 0)
     {
         snprintf(cfg->telemetry_topic, sizeof(cfg->telemetry_topic),
-                "ne301/%s/upload/telemetry", mac_hex);
+                "ne302/%s/upload/telemetry", mac_hex);
         changed = AICAM_TRUE;
     }
 

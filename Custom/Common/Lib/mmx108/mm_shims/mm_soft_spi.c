@@ -5,7 +5,7 @@
  *
  * Software SPI per MM-APPNOTE-51 §3.3 (Mode 0, asymmetric phase delays).
  *
- * Delays are NOP loop counts (not CPU cycles). On NE301, symmetric
+ * Delays are NOP loop counts (not CPU cycles). On NE302, symmetric
  * MM_SOFT_SPI_DELAY_LOOPS=100 per half-bit was stable (~0.9 MHz @ 800 MHz CPU).
  */
 
@@ -17,7 +17,7 @@
 /*
  * Per-bit NOP loop counts (MM-APPNOTE-51 §3.3):
  *   MOSI --[SETUP/tISU]--> SCLK↑ --[SAMPLE/tODLY]--> read MISO --> SCLK↓ --[LOW]-->
- * NE301: keep SAMPLE_LOOPS at ~100; reduce SETUP/LOW only when tuning for speed.
+ * NE302: keep SAMPLE_LOOPS at ~100; reduce SETUP/LOW only when tuning for speed.
  */
 #ifndef MM_SOFT_SPI_SETUP_LOOPS
 #define MM_SOFT_SPI_SETUP_LOOPS  (5U)

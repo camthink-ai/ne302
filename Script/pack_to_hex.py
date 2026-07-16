@@ -39,7 +39,7 @@ ADDRESS_MAP = {
         'required': True
     },
     'WEB': {
-        'pattern': 'ne301_Web_v*_pkg.bin',
+        'pattern': 'ne302_Web_v*_pkg.bin',
         'address': 0x71900000,
         'required': True
     },
@@ -508,7 +508,7 @@ def main():
     # `make flash-wifi` (program to 0x71A00000) and `make pkg-wifi` (wrap with the
     # 1KB OTA header for WEB verification; the header itself is NOT written to flash).
     if len(sys.argv) > 1 and sys.argv[1] == '--wifi-image':
-        output_file = Path(sys.argv[2]) if len(sys.argv) > 2 else (build_dir / 'ne301_Wifi_flash.bin')
+        output_file = Path(sys.argv[2]) if len(sys.argv) > 2 else (build_dir / 'ne302_Wifi_flash.bin')
         if not output_file.is_absolute():
             output_file = project_root / output_file
 

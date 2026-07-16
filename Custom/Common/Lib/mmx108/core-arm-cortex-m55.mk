@@ -5,7 +5,7 @@
 #
 
 # Configure the toolchain
-# TOOLCHAIN_DIR := /home/tyson/projects/camthink/ne301/Prerequisites/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi
+# TOOLCHAIN_DIR := /home/tyson/projects/camthink/ne302/Prerequisites/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi
 # TOOLCHAIN_BASE := $(TOOLCHAIN_DIR)/bin/arm-none-eabi-
 
 TOOLCHAIN_BASE := arm-none-eabi-

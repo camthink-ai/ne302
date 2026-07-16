@@ -9,9 +9,9 @@ MMX108_HOSTAP_DIR = $(MMX108_ROOT_PATH)/hostap
 
 C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mm_shims/*.c)
 
-# WPA crypto in Appli (always fresh); libmorse built with NE301_WPA_CRYPTO_IN_APP=y omits it.
-NE301_WPA_CRYPTO_IN_APP ?= y
-ifneq ($(NE301_WPA_CRYPTO_IN_APP),)
+# WPA crypto in Appli (always fresh); libmorse built with NE302_WPA_CRYPTO_IN_APP=y omits it.
+NE302_WPA_CRYPTO_IN_APP ?= y
+ifneq ($(NE302_WPA_CRYPTO_IN_APP),)
 C_SOURCES += $(MMX108_HOSTAP_DIR)/crypto_mbedtls_dpp.c
 C_INCLUDES += -I$(MMX108_HOSTAP_DIR)
 C_INCLUDES += -I$(MMX108_HOSTAP_DIR)/src
@@ -49,7 +49,7 @@ C_INCLUDES += -I../Custom/Hal/Network/netif_manager
 
 CFLAGS += -DHALT_ON_ASSERT
 
-# NE301 SPI HaLow: disable 802.11 PS and long bus idle timeout (default 100 ms sleeps chip).
+# NE302 SPI HaLow: disable 802.11 PS and long bus idle timeout (default 100 ms sleeps chip).
 CFLAGS += -DMMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS=3600000U
 CFLAGS += -DMMWLAN_DEFAULT_PS_MODE=0
 
