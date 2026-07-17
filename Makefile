@@ -154,7 +154,8 @@ version-header:
 	@echo "Generating version header..."
 	@python $(VERSION_SCRIPT) -o $(VERSION_HEADER) \
 		$(if $(VERSION_BUILD),-b $(VERSION_BUILD)) \
-		--fsbl-version "$(FSBL_VERSION_STR)"
+		--fsbl-version "$(FSBL_VERSION_STR)" \
+		--stedgeai-version "$(MODEL_STEDGEAI_VERSION)"
 
 ######################################
 # Default Target
