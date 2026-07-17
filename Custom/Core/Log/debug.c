@@ -1018,8 +1018,8 @@ aicam_result_t debug_switch_to_usb_cdc(void)
     g_debug_use_usb_cdc = AICAM_TRUE;
     debug_console_update_input_route();
 
-    debug_uart_output_str("\r\n[DEBUG] USB1 CDC console enabled (USB preferred, UART fallback)\r\n");
-    debug_uart_output_str(g_debug_ctx.cmdline.prompt);
+    // debug_uart_output_str("\r\n[DEBUG] USB1 CDC console enabled (USB preferred, UART fallback)\r\n");
+    // debug_uart_output_str(g_debug_ctx.cmdline.prompt);
 
     return AICAM_OK;
 }

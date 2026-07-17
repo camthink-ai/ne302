@@ -16,6 +16,7 @@
 #include "common_utils.h"
 #include "pwr.h"
 #include "sd_file.h"
+#include "debug.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -381,7 +382,7 @@ static void qs_snapshot_thread(void *argument)
             (void)osEventFlagsSet(s_evt, QS_FLAG_AI_FRAME_READY);
             qt_prof_step(&prof, "[QS] snap:pipe2 ");
             if (pipe2.frame_id != s_frame_id) {
-                QB_LOGW("pipe2 frame_id != s_frame_id: %lu != %lu",
+                LOG_WARN("pipe2 frame_id != s_frame_id: %lu != %lu",
                         (unsigned long)pipe2.frame_id,
                         (unsigned long)s_frame_id);
             }

@@ -36,7 +36,7 @@ static uint8_t g_cdc_read_stack[4096] ALIGN_32 IN_PSRAM;
 
 static const osThreadAttr_t g_cdc_read_task_attr = {
     .name = "usbCdcRx",
-    .priority = (osPriority_t)osPriorityAboveNormal,
+    .priority = (osPriority_t)osPriorityLow,
     .stack_mem = g_cdc_read_stack,
     .stack_size = sizeof(g_cdc_read_stack),
 };
