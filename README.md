@@ -3,7 +3,10 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Platform](https://img.shields.io/badge/platform-STM32N6570-blue)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red)]()
-[![Version](https://img.shields.io/badge/version-1.0.0.1-blue)]()
+[![Version](https://img.shields.io/badge/version-2.3.0-blue)]()
+[![Changelog](https://img.shields.io/badge/changelog-v2.3.0-green)]()
+
+> 📋 **[Change Log](Docs/NE301_v2.3.0_ChangeLog.md)** — see what's new in v2.3.0
 
 > High-performance AI vision camera system based on STM32N6570 Discovery Kit, featuring real-time video processing, neural network acceleration, and modern web interface.
 
