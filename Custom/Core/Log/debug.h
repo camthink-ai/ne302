@@ -301,6 +301,12 @@ aicam_result_t debug_system_init(void);
 aicam_result_t debug_switch_to_usb_cdc(void);
 
 /**
+ * @brief Start USB CDC init as a low-priority background task (non-blocking)
+ * @return aicam_result_t AICAM_OK on success, AICAM_ERROR if task creation fails
+ */
+aicam_result_t debug_start_usb_cdc_task(void);
+
+/**
  * @brief Deinitialize debug system
  * @return aicam_result_t Operation result
  */

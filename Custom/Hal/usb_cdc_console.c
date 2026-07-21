@@ -23,6 +23,7 @@ static volatile uint8_t g_cdc_console_active;
 static volatile uint8_t g_cdc_device_ready;
 static volatile uint8_t g_cdc_stack_ready;
 static volatile uint8_t g_cdc_use_usb_path;
+static volatile uint8_t g_cdc_dtr_asserted;
 static osThreadId_t g_cdc_read_task;
 static osMutexId_t g_cdc_io_mutex;
 
@@ -185,7 +186,9 @@ static VOID usb_cdc_activate(VOID *cdc_instance)
 
     g_cdc_acm = cdc_acm;
     g_cdc_device_ready = 1;
-    g_cdc_use_usb_path = 1;
+    /* USB path NOT enabled here — wait for host to assert DTR or send data */
+    g_cdc_use_usb_path = 0;
+    g_cdc_dtr_asserted = 0;
     usb_cdc_apply_io_timeouts(cdc_acm);
 }
 
@@ -197,6 +200,7 @@ static VOID usb_cdc_deactivate(VOID *cdc_instance)
     g_cdc_acm = UX_NULL;
     g_cdc_device_ready = 0;
     g_cdc_use_usb_path = 0;
+    g_cdc_dtr_asserted = 0;
 }
 
 static VOID usb_cdc_parameter_change(VOID *cdc_instance)
@@ -217,10 +221,18 @@ static VOID usb_cdc_parameter_change(VOID *cdc_instance)
                                             UX_SLAVE_CLASS_CDC_ACM_IOCTL_GET_LINE_CODING,
                                             &line_coding);
         (void)ret;
-        usb_cdc_restore_usb_path();
         break;
-    case UX_SLAVE_CLASS_CDC_ACM_SET_CONTROL_LINE_STATE:
+    case UX_SLAVE_CLASS_CDC_ACM_SET_CONTROL_LINE_STATE: {
+        ULONG ctrl_state = *(transfer_request->ux_slave_transfer_request_setup + UX_SETUP_VALUE);
+        if (ctrl_state & 1u) {  /* DTR asserted — host opened the port */
+            g_cdc_dtr_asserted = 1;
+            usb_cdc_restore_usb_path();
+        } else {                /* DTR de-asserted — host closed the port */
+            g_cdc_dtr_asserted = 0;
+            usb_cdc_fallback_to_uart();
+        }
         break;
+    }
     default:
         break;
     }

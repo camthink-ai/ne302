@@ -132,7 +132,6 @@ static int debug_log_fwrite(void *handle, const void *buf, size_t size);
 static int debug_log_fstat(const char *filename, struct stat *st);
 static int debug_log_get_free_bytes(uint64_t *out_free);
 static uint64_t debug_log_get_time(void);
-static void debug_uart_log_output(const char *msg, int len);
 
 // Async log writer (drain task + enqueue callback)
 static void debug_log_enqueue(const char *line, int len);
@@ -778,12 +777,9 @@ static aicam_result_t debug_init_logging(void)
     log_add_output(OUTPUT_CONSOLE, NULL, 0, 0);
     
     // Add file output
-    log_add_output(OUTPUT_FILE, DEBUG_DEFAULT_LOG_FILE_NAME, 
-                   g_debug_ctx.config.log_file_size, 
+    log_add_output(OUTPUT_FILE, DEBUG_DEFAULT_LOG_FILE_NAME,
+                   g_debug_ctx.config.log_file_size,
                    g_debug_ctx.config.log_rotation_count);
-    
-    // Add custom UART output
-    log_add_custom_output(debug_uart_log_output);
 
     /* Switch file output to async mode: log_message() will enqueue each line
      * to the low-priority logWriter task instead of writing synchronously, so
@@ -995,13 +991,34 @@ static uint64_t debug_log_get_time(void)
     return (uint64_t)rtc_get_local_timestamp();
 }
 
-static void debug_uart_log_output(const char *msg, int len)
-{
-    if (msg == NULL || len <= 0) {
-        return;
-    }
+/* ---- USB CDC async init task ---- *
+ * USB CDC init (usb_cdc_console_init + activate) can take several seconds and
+ * blocks its caller.  Offload it to a one-shot low-priority background task so
+ * it does not stall the main boot / service-init sequence. */
 
-    debug_console_output((const uint8_t *)msg, (uint32_t)len);
+static uint8_t debug_usb_cdc_stack[1024 * 4] ALIGN_32 IN_PSRAM;
+
+static void debug_usb_cdc_task(void *argument)
+{
+    (void)argument;
+    debug_switch_to_usb_cdc();
+    osThreadTerminate(osThreadGetId());
+}
+
+const osThreadAttr_t debug_usb_cdc_task_attributes = {
+    .name = "usbCdcInit",
+    .priority = (osPriority_t) osPriorityLow,
+    .stack_mem = debug_usb_cdc_stack,
+    .stack_size = sizeof(debug_usb_cdc_stack),
+};
+
+aicam_result_t debug_start_usb_cdc_task(void)
+{
+    osThreadId_t tid = osThreadNew(debug_usb_cdc_task, NULL, &debug_usb_cdc_task_attributes);
+    if (!tid) {
+        return AICAM_ERROR;
+    }
+    return AICAM_OK;
 }
 
 aicam_result_t debug_switch_to_usb_cdc(void)

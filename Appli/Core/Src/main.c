@@ -346,14 +346,8 @@ void StartMainTask(void *argument)
     // step_duration_ms = step_end_time_ms - step_start_time_ms;
     // printf("[BOOT] Step 5 - service_init: %lu ms\r\n", (unsigned long)step_duration_ms);
     
-    // Temporarily lower priority to minimum for USB CDC switch
-    osPriority_t orig_priority = osThreadGetPriority(mainTaskHandle);
-    osThreadSetPriority(mainTaskHandle, osPriorityLow);
-
-    debug_switch_to_usb_cdc();
-
-    // Restore original priority
-    osThreadSetPriority(mainTaskHandle, orig_priority);
+    // Start USB CDC init as a low-priority background task (non-blocking)
+    debug_start_usb_cdc_task();
 
     // printf("[MAIN] All systems initialized successfully\r\n");
 
