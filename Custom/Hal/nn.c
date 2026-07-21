@@ -709,21 +709,10 @@ int nn_instance_inference_frame(nn_handle_t handle, uint8_t *input_data, uint32_
     osMutexAcquire(nn->mtx_id, osWaitForever);
 
     /* Convert camera uint8 to model input: float32, int8, or uint8 passthrough */
-    if (nn->input_buffer_size[0] == input_size * 4) {
-        /* uint8 → float32: (pixel - 127.5) * (1/127.5) → [-1, 1] */
-        float *dst = (float *)nn->input_buffer[0];
-        for (uint32_t i = 0; i < input_size; i++) {
-            dst[i] = ((float)input_data[i] - 127.5f) * 0.00784313725f;
-        }
-    } else if (nn->input_buffer_size[0] != input_size) {
+    if (nn->input_buffer_size[0] != input_size) {
         LOG_DRV_ERROR("input_buffer_size[0] != input_size\r\r\n");
         osMutexRelease(nn->mtx_id);
         return -1;
-    } else if (nn->model.is_int8_input) {
-        int8_t *dst = (int8_t *)nn->input_buffer[0];
-        for (uint32_t i = 0; i < input_size; i++) {
-            dst[i] = (int8_t)((int)input_data[i] - 128);
-        }
     } else {
         memcpy(nn->input_buffer[0], input_data, input_size);
     }
