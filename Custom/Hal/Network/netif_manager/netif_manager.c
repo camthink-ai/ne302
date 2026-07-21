@@ -782,7 +782,7 @@ int netif_manager_ctrl(const char *if_name, netif_cmd_t cmd, void *param)
 
     if (cmd == NETIF_CMD_INIT || cmd == NETIF_CMD_UP) {
         end_tick = HAL_GetTick();
-        printf("%s %s: %ld / %ld ms\n", if_name, (cmd == NETIF_CMD_INIT) ? "init" : "up", end_tick - start_tick, end_tick);
+        printf("%s %s: %ld / %ld ms\r\n", if_name, (cmd == NETIF_CMD_INIT) ? "init" : "up", end_tick - start_tick, end_tick);
     }
 
     return ret;
