@@ -28,7 +28,7 @@ else ifeq ($(STEDGEAI_VARIANT),4.0)
   STEDGEAI_LIB_DIR      := Middlewares/ST/stedgeai-lib-4.0
   STEDGEAI_NPU_DEVICE   := STM32N6xx
   STEDGEAI_BIT          := 4
-  NETWORK_RUNTIME_LIB   := NetworkRuntime1200_CM55_GCC.a
+  NETWORK_RUNTIME_LIB   := NetworkRuntime1201_CM55_GCC.a
   MODEL_STEDGEAI_VERSION := v4.0.1
   STEDGEAI_EXTRA_SOURCES := \
     Npu/ll_aton/ll_aton_stai_internal.c
