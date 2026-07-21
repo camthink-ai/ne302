@@ -380,52 +380,6 @@ export default function Graphics() {
                             </SelectContent>
                           </Select>
                         </div>
-                        <Separator />
-                        <div className="flex justify-between gap-4 items-center">
-                          <div className="flex min-w-0 flex-1 items-center gap-2">
-                            <Label className="shrink-0">
-                              {i18n._('sys.hardware_management.grayscale')}
-                            </Label>
-                            <Tooltip mbEnhance>
-                              <TooltipTrigger>
-                                <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
-                                  <SvgIcon
-                                    className="h-4 w-4 text-gray-500"
-                                    icon="info"
-                                  />
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent className="max-w-80 text-pretty">
-                                <div>
-                                  <p>
-                                    {i18n._(
-                                      'sys.hardware_management.grayscale_hint'
-                                    )}
-                                  </p>
-                                </div>
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                          <Switch
-                            checked={grayscale}
-                            onCheckedChange={async checked => {
-                              setGrayscale(checked);
-                              try {
-                                await setHardwareInfoReq(
-                                  buildImageConfigRequest({ grayscale: checked })
-                                );
-                                toast.warning(
-                                  i18n._(
-                                    'sys.hardware_management.grayscale_reboot_hint'
-                                  )
-                                );
-                              } catch (error) {
-                                console.error(error);
-                                setGrayscale(!checked);
-                              }
-                            }}
-                          />
-                        </div>
                         {ispMode === ISP_MODE_CUSTOM && (
                           <>
                             <Separator />
@@ -503,6 +457,52 @@ export default function Graphics() {
                             </div>
                           </>
                         )}
+                        <Separator />
+                        <div className="flex justify-between gap-4 items-center">
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <Label className="shrink-0">
+                              {i18n._('sys.hardware_management.grayscale')}
+                            </Label>
+                            <Tooltip mbEnhance>
+                              <TooltipTrigger>
+                                <div className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-gray-500">
+                                  <SvgIcon
+                                    className="h-4 w-4 text-gray-500"
+                                    icon="info"
+                                  />
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-80 text-pretty">
+                                <div>
+                                  <p>
+                                    {i18n._(
+                                      'sys.hardware_management.grayscale_hint'
+                                    )}
+                                  </p>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <Switch
+                            checked={grayscale}
+                            onCheckedChange={async checked => {
+                              setGrayscale(checked);
+                              try {
+                                await setHardwareInfoReq(
+                                  buildImageConfigRequest({ grayscale: checked })
+                                );
+                                toast.warning(
+                                  i18n._(
+                                    'sys.hardware_management.grayscale_reboot_hint'
+                                  )
+                                );
+                              } catch (error) {
+                                console.error(error);
+                                setGrayscale(!checked);
+                              }
+                            }}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>

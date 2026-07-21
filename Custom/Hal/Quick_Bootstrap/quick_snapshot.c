@@ -17,6 +17,7 @@
 #include "pwr.h"
 #include "sd_file.h"
 #include "debug.h"
+#include "drtc.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -331,11 +332,14 @@ static void qs_snapshot_thread(void *argument)
                 }
             }
         } else if (s_cfg.light_mode == QS_LIGHT_MODE_CUSTOM) {
-            /* custom schedule is handled by upper layer in normal flow; here keep it simple and ON if within [start,end) */
-            uint32_t now_s = 0;
-            /* rtc_get_time is in services; avoid dependency here. */
-            (void)now_s;
-            light_on = AICAM_TRUE;
+            uint64_t ts = rtc_get_local_timestamp();
+            uint32_t now_s = (uint32_t)(ts % 86400);
+            if (s_cfg.light_start_time < s_cfg.light_end_time) {
+                light_on = (now_s >= s_cfg.light_start_time && now_s <= s_cfg.light_end_time);
+            } else {
+                /* cross-midnight: e.g. 22:00–06:00 */
+                light_on = (now_s >= s_cfg.light_start_time || now_s <= s_cfg.light_end_time);
+            }
         }
         if (light_on) {
             qs_light_set(AICAM_TRUE, s_cfg.light_brightness);
@@ -371,7 +375,7 @@ static void qs_snapshot_thread(void *argument)
         osThreadExit();
         return;
     }
-    printf("[QS]end1, %lu ms\r\n", HAL_GetTick());
+    // printf("[QS]end1, %lu ms\r\n", HAL_GetTick());
 
     if (need_ai) {
         camera_buffer_with_frame_id_t pipe2 = {0};
@@ -393,8 +397,9 @@ static void qs_snapshot_thread(void *argument)
             osThreadExit();
             return;
         }
-        printf("[QS]end2, %lu ms\r\n", HAL_GetTick());
+        // printf("[QS]end2, %lu ms\r\n", HAL_GetTick());
     }
+    printf("SNAP: %lu ms\r\n", HAL_GetTick());
 
     /* turn light off after capture */
     if (s_cfg.light_mode != QS_LIGHT_MODE_OFF) {

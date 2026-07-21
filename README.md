@@ -162,8 +162,31 @@ Source Code
 
 ### Common Commands
 
+Application code is shared across STEdgeAI toolchains. Select the NPU runtime at build time with `STEDGEAI_VARIANT` (default `4.0`). **Firmware and model packages must use the same variant** — the installed `stedgeai` CLI must match (`STEDGEAI_CORE_DIR`).
+
+| `STEDGEAI_VARIANT` | Docker image | Toolchain | Model OTA version |
+|--------------------|--------------|-----------|-------------------|
+| `2.2` | `camthink/ne301-dev:v2.2` | STEdgeAI 2.2 | `2.x.x.x` |
+| `3.0` | `camthink/ne301-dev:v3.0` | STEdgeAI 3.0 | `3.x.x.x` |
+| `4.0` (default) | `camthink/ne301-dev:v4.0` | STEdgeAI 4.0 | `4.x.x.x` |
+
+Model release version is `$(STEDGEAI_BIT).$(MODEL_VERSION_OVERRIDE)`. Edit `MODEL_VERSION_OVERRIDE` in `version.mk` (e.g. `0.1.0` → `4.0.1.0` when `STEDGEAI_VARIANT=4.0`).
+
 ```bash
-# ── Build & Flash ───────────────────────────────────────
+# Build (default STEdgeAI 4.0)
+make                        # Build all (FSBL + App + Web + Model)
+make app                    # Build application only
+make web                    # Build web frontend
+make model                  # Build AI model
+make pkg                    # package for flash or OTA
+make version                # show versions (incl. STEdgeAI variant)
+make help
+
+# Other STEdgeAI variants
+make all STEDGEAI_VARIANT=3.0
+make model STEDGEAI_VARIANT=3.0   # requires matching stedgeai + STEDGEAI_CORE_DIR
+
+# ── Build & Flash  ───────────────────────────────────────
 make                  # Build all (unsigned, not flashable)
 make flash            # Build, sign, package & flash all (N6)
 make flash-wakecore   # Flash WakeCore (U0)
