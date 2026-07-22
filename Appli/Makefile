@@ -847,7 +847,7 @@ C_INCLUDES += -I../Secure_nsclib
 # Compiler and Linker Flags
 ######################################
 # C compiler flags (inherits COMMON_CFLAGS)
-CFLAGS = $(COMMON_CFLAGS) $(C_DEFS) $(C_DEFS_EXTRA) $(C_INCLUDES)
+CFLAGS = $(COMMON_CFLAGS) $(C_DEFS) $(C_INCLUDES)
 # Generate dependency information
 CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
 # CMSE support for App
