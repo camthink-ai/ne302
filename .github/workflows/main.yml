@@ -180,7 +180,6 @@ jobs:
           make clean STEDGEAI_VARIANT=${{ matrix.stedgeai_variant }}
 
           echo "Building firmware (STEDGEAI_VARIANT=${{ matrix.stedgeai_variant }})..."
-          export C_DEFS_EXTRA="-DNETIF_WIFI_HALOW_IS_ENABLE=1"
           make all STEDGEAI_VARIANT=${{ matrix.stedgeai_variant }}
 
           echo "Creating package..."
@@ -221,7 +220,6 @@ jobs:
 
           # Generate SensorExt hex (same FSBL/Web/Model/WakeCore, SensorExt APP)
           python Script/pack_to_hex.py ne301_Main_SensorExt.hex
-          python Script/pack_to_hex.py ne301_Main_WiFi_SensorExt.hex
 
           # Restore Halow APP pkg (Halow hex already generated in previous step)
           mv build/.halow_pkg.bin "$HALOW_PKG"
