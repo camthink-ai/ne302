@@ -417,20 +417,26 @@ export default function CaptureConfig() {
 
             {/* keep_sent_hours */}
             {showStorageSection && (
+              <>
               <div className="flex justify-between gap-4 items-center">
                   <Label>{i18n._('sys.capture_settings.keep_sent_hours')}</Label>
                   <Input
                     className="w-24 text-right"
                     type="number"
                     min={0}
-                    max={720}
+                    max={72000}
                     value={cfg.keep_sent_hours}
                     onChange={(e) => {
-                      const v = parseInt((e.target as HTMLInputElement).value || '168', 10);
-                      patch('keep_sent_hours', Math.max(0, Math.min(720, v)));
+                      const v = parseInt((e.target as HTMLInputElement).value || '72000', 10);
+                      patch('keep_sent_hours', Math.max(0, Math.min(72000, v)));
                     }}
                   />
               </div>
+              {/* amber alert like the storage flash-cap warning */}
+              <div className="rounded bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                {i18n._('sys.capture_settings.keep_sent_hours_hint')}
+              </div>
+              </>
             )}
           </div>
         )}

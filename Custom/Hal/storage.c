@@ -53,8 +53,6 @@ static int mem_block_read(const struct lfs_config *cfg, lfs_block_t block,
         return LFS_ERR_IO;
     }
     XSPI_NOR_EnableMemoryMappedMode();
-    // uint8_t *ptr_addr = (uint8_t *)(addr + FLASH_BASE);
-    // memcpy(buffer, ptr_addr, size);
     storage_unlock();
     return LFS_ERR_OK;
 }
@@ -334,6 +332,12 @@ static int storage_lfs_stat(void *context, const char *filename, struct stat *st
         if (st) {
             memset(st, 0, sizeof(struct stat));
             st->st_size = info.size; // Fill file size
+            /* Classify dir vs regular file — matches sd_filex_stat(). Without
+             * this st_mode stays 0, so S_IFDIR/S_ISDIR checks (e.g. the file
+             * delete handler's non-empty-directory detection) never match on
+             * flash and a non-empty folder deletion reports a generic
+             * INTERNAL_ERROR instead of DIR_NOT_EMPTY. */
+            st->st_mode = (info.type == LFS_TYPE_DIR) ? (S_IFDIR | 0755) : (S_IFREG | 0644);
         }
         return 0; // File exists
     }
@@ -538,10 +542,7 @@ int storage_flash_read(uint32_t offset, void *data, size_t size)
 {
     storage_lock();
     memcpy(data, (const void *)(FS_BASE_MEM_START + offset), size);
-    // To reduce power consumption, switch back to XSPI memory-mapped mode after reading.
-    // Disable task scheduling during the switch to avoid timing issues caused by task preemption.
-    // XSPI_NOR_DisableMemoryMappedMode();
-    // XSPI_NOR_EnableMemoryMappedMode();
+    storage_power_save();
     storage_unlock();
     return 0;
 }
@@ -735,6 +736,7 @@ static int sysclk_nor_flash_read(uint32_t address, void *data, size_t size)
 
     storage_lock();
     memcpy(data, (const void *)address, size);
+    storage_power_save();
     storage_unlock();
     
     return 0;
@@ -997,6 +999,13 @@ void storage_nvs_dump(NVS_Type_t type)
     nvs_release_iterator(&it);
 }
 
+void storage_power_save(void)
+{
+    // To reduce power consumption (~5mA), switch back to XSPI memory-mapped mode after reading.
+    XSPI_NOR_DisableMemoryMappedMode();
+    XSPI_NOR_EnableMemoryMappedMode();
+}
+
 void storage_lock(void)
 {
     osMutexAcquire(g_storage.mtx_id, osWaitForever);
@@ -1004,6 +1013,17 @@ void storage_lock(void)
 
 void storage_unlock(void)
 {
+    osMutexRelease(g_storage.mtx_id);
+}
+
+void storage_lock_ext(void)
+{
+    osMutexAcquire(g_storage.mtx_id, osWaitForever);
+}
+
+void storage_unlock_ext(void)
+{
+    storage_power_save();
     osMutexRelease(g_storage.mtx_id);
 }
 

@@ -71,6 +71,14 @@ aicam_result_t network_disconnect_handler(http_handler_context_t *ctx);
  */
 aicam_result_t network_delete_known_handler(http_handler_context_t *ctx);
 
+/**
+ * @brief WiFi region (country code) handlers
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t network_wifi_region_get_handler(http_handler_context_t *ctx);
+aicam_result_t network_wifi_region_set_handler(http_handler_context_t *ctx);
+
 #if NETIF_WIFI_HALOW_IS_ENABLE
 aicam_result_t network_halow_sta_handler(http_handler_context_t *ctx);
 aicam_result_t network_halow_region_get_handler(http_handler_context_t *ctx);

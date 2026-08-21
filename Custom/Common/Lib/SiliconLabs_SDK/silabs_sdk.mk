@@ -108,6 +108,11 @@ C_INCLUDES += -I$(SL_WSDK)/resources/defaults
 
 # --- preprocessor defines ---
 C_DEFS += -DSLI_SI917
+# ponytail: forces SL_SI91X_EXT_FEAT_XTAL_CLK = ENABLE(1) = bit22 (external 32kHz XTAL).
+# v4 SDK changed sl_wifi_device.h #if to `SI917 && RADIO_BOARD_VER2` (was `||` in v3),
+# which flips the 917 sleep-clock source to UULP_GPIO_3 bypass (bit23) and breaks
+# connected-sleep (flat 7mA). ne302 has the external XTAL, so value 1 is correct.
+C_DEFS += -DSLI_SI91X_MCU_CONFIG_RADIO_BOARD_VER2
 C_DEFS += -DSL_CATALOG_FREERTOS_KERNEL_PRESENT
 C_DEFS += -DSL_NET_COMPONENT_INCLUDED
 C_DEFS += -DSL_WIFI_COMPONENT_INCLUDED

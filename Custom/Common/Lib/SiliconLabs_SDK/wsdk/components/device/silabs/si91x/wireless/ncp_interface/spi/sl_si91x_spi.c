@@ -520,6 +520,16 @@ void sli_si91x_bus_rx_done_handler(void)
   return;
 }
 
+// ponytail: bounded re-sync. Original while(1) had no exit when the chip's SPI
+// framer returned garbage (rxbuff[1] neither SLI_SPI_FAIL/0x00/SLI_SPI_SUCCESS)
+// — e.g. after a rare host DMA-completion glitch desyncs the bus. That spun
+// forever inside req_wakeup() (called every HAL-thread iteration), hard-locking
+// the RT1 thread: console/business die but wdgTask (RT7) keeps feeding IWDG, so
+// one "sem_spi4 dma failed" log then total silence, no reboot. Bail on a failed
+// transfer too, else a still-broken DMA blocks ~1s per iteration. Normal re-sync
+// is 1-2 tries, so this bound never affects the happy path. Tunable knob.
+#define SLI_SI91X_ULP_WAKEUP_INIT_RETRIES 1000
+
 //! Initialize with modules Slave SPI interface on ulp wakeup.
 void sli_si91x_ulp_wakeup_init(void)
 {
@@ -533,15 +543,19 @@ void sli_si91x_ulp_wakeup_init(void)
   txCmd[3] = ((SLI_SI91X_INIT_CMD >> 24) & 0xFF);
   sl_si91x_host_spi_cs_assert();
 
-  while (1) {
+  for (uint16_t retry = 0; retry < SLI_SI91X_ULP_WAKEUP_INIT_RETRIES; retry++) {
     // Transfer the initialization command to the SI91x module and check the response
-    sl_si91x_host_spi_transfer(txCmd, rxbuff, 2);
+    if (sl_si91x_host_spi_transfer(txCmd, rxbuff, 2) != SL_STATUS_OK) {
+      break; // bus error (e.g. DMA timeout) — can't re-sync, bail out
+    }
 
     if (rxbuff[1] == SLI_SPI_FAIL) {
       break; // Initialization failed, exit the loop
     } else if (rxbuff[1] == 0x00) {
       // If the response indicates success, transfer the remaining part of the command
-      sl_si91x_host_spi_transfer(&txCmd[2], rxbuff, 2);
+      if (sl_si91x_host_spi_transfer(&txCmd[2], rxbuff, 2) != SL_STATUS_OK) {
+        break;
+      }
       if (rxbuff[1] == SLI_SPI_SUCCESS) {
         break; // Initialization succeeded, exit the loop
       }

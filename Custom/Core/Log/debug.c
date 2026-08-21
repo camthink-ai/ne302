@@ -850,8 +850,8 @@ static void debug_console_output(const uint8_t *data, uint32_t len)
             return;
         }
     }
-
-    printf("%.*s", (int)len, data);
+    
+    HAL_UART_Transmit(&H_UART, (uint8_t*)data, len, 100);
 }
 
 static void debug_uart_output(char c)

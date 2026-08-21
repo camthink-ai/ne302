@@ -291,6 +291,8 @@ void mmhal_wlan_deinit(void)
         mmosal_semb_delete(dma_semb_handle);
         dma_semb_handle = NULL;
     }
+    spi_irq_handler = NULL;
+    busy_irq_handler = NULL;
 }
 
 void mmhal_wlan_wake_assert(void)
@@ -375,6 +377,10 @@ void mmhal_read_mac_addr(uint8_t *mac_addr)
 
 const struct mmhal_chip *mmhal_get_chip(void)
 {
+#ifdef HALOW_CHIP_MM8108
+    return &mmhal_mm8108;
+#else
     return &mmhal_mm6108;
+#endif
 }
 

@@ -214,6 +214,53 @@ static uint32_t jpegc_calc_enc_buffer_size(const jpegc_params_t *params)
     return (uint32_t)estimated;
 }
 
+/* Finalize the encoded JPEG's tail. Two defects seen in the field:
+ *  - The encoder emits EOI (FF D9) then DMA-alignment 0x00 padding, and the
+ *    reported size includes the padding -> browsers choke on bytes after EOI.
+ *  - The encode is cut off with the EOI's last byte (D9) missing.
+ * The EOI is the last marker, so it sits in the final output chunk (within
+ * ENC_CHUNK_SIZE_OUT of the end). Entropy FFs are stuffed as FF 00 (RST as
+ * FF D0..D7), so FF D9 occurs only at the EOI. Scan backward from the tail,
+ * bounded to the last 2 chunks: O(chunk) not O(file), and it never reaches the
+ * DQT/DHT tables at the file head (which can legitimately contain FF D9 bytes). */
+static void jpegc_ensure_eoi(jpegc_t *jpegc)
+{
+    uint8_t *buf = jpegc->enc_output_buffer;
+    uint32_t sz = jpegc->enc_output_buffer_size;
+    if (!buf || sz < 4) return;
+
+    int32_t lo = (sz > (2u * ENC_CHUNK_SIZE_OUT)) ? (int32_t)(sz - 2u * ENC_CHUNK_SIZE_OUT) : 0;
+    int32_t i = (int32_t)sz - 2;
+    while (i >= lo) {
+        if (buf[i] == 0xFF && buf[i + 1] == 0xD9) break;
+        i--;
+    }
+    if (i >= lo) {
+        uint32_t clean = (uint32_t)i + 2;
+        if (clean < sz) {
+            /* EOI present but followed by DMA-alignment 0x00 padding — trim it.
+             * Common/expected, so no log. */
+            jpegc->enc_output_buffer_size = clean;
+        }
+        return;
+    }
+
+    /* No EOI in the tail: encode was cut off (e.g. the EOI's D9 dropped). Drop
+     * any trailing 0xFF (the half-written EOI's FF) and append a clean FF D9. */
+    uint32_t end = sz;
+    while (end > 0 && buf[end - 1] == 0xFF) end--;
+    if ((uint64_t)end + 2 > (uint64_t)jpegc->enc_output_buffer_capacity) {
+        LOG_DRV_ERROR("jpegc: no EOI and no capacity to append (sz=%lu cap=%lu)\r\n",
+                      (unsigned long)sz, (unsigned long)jpegc->enc_output_buffer_capacity);
+        return;
+    }
+    buf[end]     = 0xFF;
+    buf[end + 1] = 0xD9;
+    jpegc->enc_output_buffer_size = end + 2;
+    LOG_DRV_WARN("jpegc: appended missing EOI (size %lu -> %lu)\r\n",
+                 (unsigned long)sz, (unsigned long)(end + 2));
+}
+
 
 /**
   * @brief  Encode_DMA
@@ -890,6 +937,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             if (osSemaphoreAcquire(jpegc->sem_enc, 10000) == osOK){
                 osMutexAcquire(jpegc->mtx_id, osWaitForever);
                 if(jpegc->mode == JPEG_MODE_ENC_COMPLETE){
+                    jpegc_ensure_eoi(jpegc);
                     *((unsigned char **)ubuf) = jpegc->enc_output_buffer;
                     ret = jpegc->enc_output_buffer_size;
                 }else{

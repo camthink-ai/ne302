@@ -96,19 +96,19 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
         return -1;
     }
 
-    storage_lock();
+    storage_lock_ext();
 
     nn_package_header_t *header = (nn_package_header_t *)file_ptr;
 
     if (header->magic != MODEL_PACKAGE_MAGIC) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid model package magic number\r\r\n");
         return -1;
     }
 
     if (header->version != MODEL_PACKAGE_VERSION) {
         tmp_val = header->version;
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Incompatible model package version 0X%lx\r\r\n", tmp_val);
         return -1;
     }
@@ -122,7 +122,7 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
     /* Model configuration */
     cJSON *root = cJSON_Parse((const char *)info->config_ptr);
     if (root == NULL) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("load_info: JSON parse failed\r\r\n");
         return -1;
     }
@@ -200,7 +200,7 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
     /* Metadata */
     root = cJSON_Parse((const char *)info->metadata_ptr);
     if (root == NULL) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("load_info: JSON parse failed\r\r\n");
         return -1;
     }
@@ -221,13 +221,13 @@ static int load_info(const uintptr_t file_ptr, nn_model_info_t *info)
     cJSON_Delete(root);
 
     if (!nn_stedgeai_version_supported(info->stedgeai_version)) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("ST Edge AI version not supported, need %s, current: %s\r\r\n",
                       MODEL_STEDGEAI_VERSION_SUPPORTED, info->stedgeai_version);
         return -1;
     }
 
-    storage_unlock();
+    storage_unlock_ext();
     return 0;
 }
 
@@ -246,7 +246,7 @@ static int model_init(const uintptr_t model_ptr, nn_t *nn)
         return -1;
     }
 
-    storage_lock();
+    storage_lock_ext();
 
     /* Print model information */
     ll_aton_reloc_log_info(model_ptr);
@@ -255,7 +255,7 @@ static int model_init(const uintptr_t model_ptr, nn_t *nn)
     ll_aton_reloc_info rt;
     int res = ll_aton_reloc_get_info(model_ptr, &rt);
     if (res != 0) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("ll_aton_reloc_get_info failed %d\r\r\n", res);
         return -1;
     }
@@ -265,7 +265,7 @@ static int model_init(const uintptr_t model_ptr, nn_t *nn)
     nn->exec_ram_addr = hal_mem_alloc_large(rt.rt_ram_copy);
     nn->ext_ram_addr = hal_mem_alloc_large(rt.ext_ram_sz);
     if (nn->exec_ram_addr == NULL || nn->ext_ram_addr == NULL) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("model_init: OOM\r\r\n");
         return -1;
     }
@@ -284,21 +284,21 @@ static int model_init(const uintptr_t model_ptr, nn_t *nn)
 
     nn->nn_inst = (NN_Instance_TypeDef *)hal_mem_alloc_any(sizeof(NN_Instance_TypeDef));
     if (nn->nn_inst == NULL) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("model_init: OOM\r\r\n");
         return -1;
     }
 
     res = ll_aton_reloc_install(model_ptr, &config, nn->nn_inst);
     if (res != 0) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("ll_aton_reloc_install failed %d\r\r\n", res);
         hal_mem_free(nn->nn_inst);
         nn->nn_inst = NULL;
         return -1;
     }
 
-    storage_unlock();
+    storage_unlock_ext();
 
     const LL_Buffer_InfoTypeDef *ll_buffer = NULL;
     while (nn->input_buffer_count < NN_MAX_INPUT_BUFFER) {
@@ -431,13 +431,13 @@ static int load_model(nn_t *nn, const uintptr_t file_ptr)
     }
 
     /* initialize postprocess */
-    storage_lock();
+    storage_lock_ext();
     if (pp_vt->init && pp_vt->init((const char *)nn->model.config_ptr, &nn->pp_params, nn->nn_inst) != 0) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("load_model: postprocess init failed\r\r\n");
         return -1;
     }
-    storage_unlock();
+    storage_unlock_ext();
 
     nn->pp_vt = pp_vt;
 
@@ -471,13 +471,13 @@ static int validate_model(const uintptr_t file_ptr)
         return -1;
     }
 
-    storage_lock();
+    storage_lock_ext();
 
     nn_package_header_t *header = (nn_package_header_t *)file_ptr;
 
     /* Check magic number */
     if (header->magic != MODEL_PACKAGE_MAGIC) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid model package magic number\r\r\n");
         
         return NN_ERROR_INVALID_PACKAGE;
@@ -486,14 +486,14 @@ static int validate_model(const uintptr_t file_ptr)
     /* Check version */
     if (header->version != MODEL_PACKAGE_VERSION) {
         tmp_val = header->version;
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Incompatible model package version 0X%lx\r\r\n", tmp_val);
         return NN_ERROR_INCOMPATIBLE;
     }
 
     /* Quick size validation */
     if (header->package_size == 0 || header->relocatable_model_size == 0) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid package size\r\r\n");
         return NN_ERROR_INVALID_PACKAGE;
     }
@@ -501,7 +501,7 @@ static int validate_model(const uintptr_t file_ptr)
     /* Validate relocatable model magic */
     const uint32_t *model_magic = (const uint32_t *)(file_ptr + header->relocatable_model_offset);
     if (*model_magic != MODEL_RELOCATABLE_MAGIC) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid relocatable model magic number\r\r\n");
         return NN_ERROR_INVALID_MODEL;
     }
@@ -509,7 +509,7 @@ static int validate_model(const uintptr_t file_ptr)
     /* Validate header checksum */
     uint32_t checksum = generic_crc32((const uint8_t *)header, offsetof(nn_package_header_t, header_checksum));
     if (checksum != header->header_checksum) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid header checksum\r\r\n");
         return NN_ERROR_INVALID_CHECKSUM;
     }
@@ -518,7 +518,7 @@ static int validate_model(const uintptr_t file_ptr)
     checksum = generic_crc32((const uint8_t *)(file_ptr + header->relocatable_model_offset),
                              header->relocatable_model_size);
     if (checksum != header->model_checksum) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid relocatable model checksum\r\r\n");
         return NN_ERROR_INVALID_CHECKSUM;
     }
@@ -526,12 +526,12 @@ static int validate_model(const uintptr_t file_ptr)
     /* Validate config checksum */
     checksum = generic_crc32((const uint8_t *)(file_ptr + header->model_config_offset), header->model_config_size);
     if (checksum != header->config_checksum) {
-        storage_unlock();
+        storage_unlock_ext();
         LOG_DRV_ERROR("Invalid config checksum\r\r\n");
         return NN_ERROR_INVALID_CHECKSUM;
     }
 
-    storage_unlock();
+    storage_unlock_ext();
     return NN_ERROR_OK;
 }
 

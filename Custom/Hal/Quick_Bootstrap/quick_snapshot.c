@@ -1,5 +1,4 @@
 #include "quick_snapshot.h"
-#include "quick_bootstrap.h"
 #include "quick_storage.h"
 #include "quick_trace.h"
 #include "cmsis_os2.h"
@@ -23,7 +22,7 @@
 #include <stdio.h>
 
 /*
- * quick_snapshot architecture (aligned with quick_network):
+ * quick_snapshot architecture:
  * - init() only creates threads/sync objects (no NVS access here)
  * - snapshot thread reads qs_snapshot_config_t from quick_storage and runs capture/JPEG
  * - optional AI thread loads model, exposes nn_model_info_t, waits for inference frame

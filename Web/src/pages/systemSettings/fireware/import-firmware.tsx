@@ -332,14 +332,14 @@ export default function ImportFirmware({
               </div>
             </ScrollArea>
           </DialogHeader>
-          <DialogFooter className="mt-4 justify-between">
+          <DialogFooter className="mt-4 justify-between flex-col md:flex-row gap-2">
             <Popover
               open={isAdvancedMenuOpen}
               onOpenChange={setIsAdvancedMenuOpen}
             >
               <PopoverTrigger asChild>
-                <div className="inline-flex">
-                  <Button variant="outline" className="md:w-auto gap-1">
+                <div className="inline-flex w-full md:w-auto">
+                  <Button variant="outline" className="w-full md:w-auto gap-1">
                     {i18n._('sys.system_management.advanced_options')}
                     <SvgIcon icon="bottom" className="w-4 h-4" />
                   </Button>
@@ -374,7 +374,7 @@ export default function ImportFirmware({
                 </button>
               </PopoverContent>
             </Popover>
-            <div className="flex flex-row space-x-2">
+            <div className="flex flex-row space-x-2 w-full md:w-auto">
               <Button
                 variant="outline"
                 className="w-1/2 md:w-auto"

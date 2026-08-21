@@ -1,10 +1,14 @@
 # NE302 — Mini AI Camera Board
 
-[![Platform](https://img.shields.io/badge/platform-STM32N657-blue)]()
-[![MCU](https://img.shields.io/badge/MCU-Cortex--M55%20%2B%20NPU-blue)]()
-[![License](https://img.shields.io/badge/license-Dual%20License-red)]()
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![Platform](https://img.shields.io/badge/platform-STM32N6570-blue)]()
+[![License](https://img.shields.io/badge/license-Proprietary-red)]()
+[![Version](https://img.shields.io/badge/version-4.3.1-blue)]()
+[![Changelog](https://img.shields.io/badge/changelog-v4.3.1-green)]()
 
 > **38 × 38 mm AI camera module** built on the STM32N657 — ST's first MCU with a dedicated Neural Processing Unit (NPU). Real-time vision, always-on wake, and wireless connectivity in a compact, production-ready form factor.
+
+> 📋 **[Change Log](Docs/NE302_v4.3.1_ChangeLog.md)** — see what's new in v4.3.1
 
 ![NE302](Docs/images/mini_all_board_1.png)
 

@@ -103,8 +103,6 @@ C_SOURCES += ../Custom/Hal/codec.c
 C_SOURCES += ../Custom/Hal/draw.c
 C_SOURCES += ../Custom/Hal/image_utils.c
 C_SOURCES += ../Custom/Hal/driver_core.c
-C_SOURCES += ../Custom/Hal/Quick_Bootstrap/quick_bootstrap.c
-C_SOURCES += ../Custom/Hal/Quick_Bootstrap/quick_network.c
 C_SOURCES += ../Custom/Hal/Quick_Bootstrap/quick_snapshot.c
 C_SOURCES += ../Custom/Hal/Quick_Bootstrap/quick_storage.c
 C_SOURCES += ../Custom/Hal/drtc.c
@@ -582,6 +580,10 @@ C_DEFS += -DUSE_MEMORY_POOL_ALLOCATION
 C_DEFS += -DUSE_OS04C10_SENSOR
 C_DEFS += -DSTM32_THREAD_SAFE_STRATEGY=2
 C_DEFS += -DENABLE_U0_MODULE=1
+# CLI fault injection on the Si91x SPI4 host transfer (test-only, validated
+# 2026-08-17, disabled for release): enable + rebuild to arm
+# "ifconfig wl error_test dma_once|dma_ff|dma_off".
+# C_DEFS += -DSIMULATION_SPI4_DMA_ERROR
 # C_DEFS += -DISP_MW_TUNING_TOOL_SUPPORT
 
 # AI Runtime
@@ -890,7 +892,11 @@ LDFLAGS += -Wl,--out-implib=$(BUILD_DIR)/secure_nsclib.o
 LDFLAGS += -Wl,--start-group $(LIBS) -Wl,--end-group
 
 ##################################################################
-include ../Custom/Common/Lib/SiliconLabs_SDK/silabs_sdk.mk
+# WiseConnect SDK. Was: SiliconLabs_SDK (v4.0.2). Switched to the
+# 4.1.1 port (Custom/Hal now uses 4.1.1 APIs: sli_wifi_send_command,
+# sli_buffer_manager_free_buffer, rx_irq bus model). Rollback to 4.0.2
+# = git revert the 4.1.1 port commit (restores SDK tree + Custom/Hal + this line).
+include ../Custom/Common/Lib/SiliconLabs_SDK_4_1_1/silabs_sdk.mk
 include ../Custom/Common/Lib/mmx108/mmx108.mk
 
 ######################################

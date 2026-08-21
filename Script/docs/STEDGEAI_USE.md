@@ -1,6 +1,6 @@
 # stedgeai-use.sh - STEdgeAI Variant Switcher
 
-Switch the NE301 build between STEdgeAI **2.2**, **3.0**, and **4.0** runtimes in Git Bash (Windows), Linux, or macOS.
+Switch the NE302 build between STEdgeAI **2.2**, **3.0**, and **4.0** runtimes in Git Bash (Windows), Linux, or macOS.
 
 Firmware and model packages **must use the same variant**. The vendored NPU runtime is linked at build time; the `stedgeai` CLI used for `make model` must match.
 
@@ -37,7 +37,7 @@ App / main `VERSION` major is also set to `$(STEDGEAI_BIT)` in `stedgeai.mk`, so
 ### 1. One-time path configuration
 
 ```bash
-cd /f/projects/ct-github/ne301   # project root
+cd /f/projects/ct-github/ne302   # project root
 cp Script/stedgeai-use.local.sh.example Script/stedgeai-use.local.sh
 ```
 
@@ -122,12 +122,12 @@ make all STEDGEAI_VARIANT=4.0   # make arg also works per command
 Add to `~/.bashrc`:
 
 ```bash
-_ne301_stedgeai_use() {
-  local root="/f/projects/ct-github/ne301"
+_ne302_stedgeai_use() {
+  local root="/f/projects/ct-github/ne302"
   [[ -f "$root/Script/stedgeai-use.sh" ]] && source "$root/Script/stedgeai-use.sh"
 }
 # call when entering project, or on every shell:
-# _ne301_stedgeai_use
+# _ne302_stedgeai_use
 ```
 
 ---

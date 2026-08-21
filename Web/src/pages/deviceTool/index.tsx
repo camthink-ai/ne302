@@ -302,7 +302,7 @@ export default function DeviceTool() {
             onClose={handleToolGuideClose}
           />
         )}
-        <Card className="relative">
+        <Card className="relative min-w-0">
           <CardContent className="sm:w-xl flex flex-col">
 
             <div className=" bg-gray-100 w-full  aspect-video flex justify-center items-center">
@@ -313,7 +313,7 @@ export default function DeviceTool() {
               />
             </div>
             <div
-              className=" w-full  bg-white pt-4 px-4"
+              className=" w-full bg-white pt-4"
             >
               {isLoading ? (
                 <DeviceToolSkeleton />

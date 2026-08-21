@@ -185,6 +185,7 @@
 #define NVS_KEY_HALOW_PASSWORD          "hw_pwd"
 #define NVS_KEY_HALOW_SECURITY          "hw_sec"
 #define NVS_KEY_HALOW_COUNTRY_CODE      "hw_cc"
+#define NVS_KEY_WIFI_COUNTRY_CODE       "wf_cc"
 #define NVS_KEY_HALOW_BSSID              "hw_bssid"
 #define NVS_KEY_HALOW_IP_MODE            "hw_ip_mode"
 #define NVS_KEY_HALOW_IP_ADDR            "hw_ip"

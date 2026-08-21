@@ -1790,6 +1790,13 @@ static uint32_t configure_u0_wakeup_sources(system_controller_t *controller, uin
             // Step 2: Switch to si91x mqtt client
             mqtt_service_stop();
             mqtt_service_set_api_type(MQTT_API_TYPE_SI91X);
+            // From here on all publishes go through the Si91x embedded MQTT. Its command
+            // buffer (CE_TX) is only 2324B; si91x_mqtt_client_publish rejects payloads
+            // >1800B with MQTT_ERR_SIZE (prevents a memcpy overflow that corrupts the
+            // shared heap -- see the guard in si91x_mqtt_client.c). So PIR-triggered
+            // captures (~50KB base64) during remote wakeup CANNOT be uploaded via Si91x
+            // and are dropped. Architectural direction TBD (queue until MS wakes /
+            // suppress capture during remote wakeup / use Si91x socket transport).
             result = sl_net_netif_romote_wakeup_mode_ctrl(WAKEUP_MODE_WIFI);
             if (result != AICAM_OK) {
                 LOG_SVC_WARN("Failed to enable remote wakeup mode: %d", result);
@@ -1830,7 +1837,7 @@ static uint32_t configure_u0_wakeup_sources(system_controller_t *controller, uin
             }
             
             // Step 4: Enter low power mode
-            result = sl_net_netif_low_power_mode_ctrl(1);
+            result = sl_net_netif_low_power_mode_ctrl(1, NULL);
             if (result != AICAM_OK) {
                 LOG_SVC_WARN("Failed to enable low power mode: %d", result);
                 mqtt_service_stop();
@@ -3593,11 +3600,20 @@ aicam_result_t system_service_capture_and_upload_mqtt(aicam_bool_t enable_ai,
             }
         }
 
+        /* "Store AI result image" toggle. When disabled, skip the bounding-box
+         * overlay JPEG entirely. Previously only the sleep/wake (quick_capture)
+         * path honored capture_storage_ai; the runtime path generated it
+         * unconditionally, so AI result images kept being saved after the user
+         * turned the switch off. */
+        image_config_t img_cfg = {0};
+        aicam_bool_t store_ai = (json_config_get_device_service_image_config(&img_cfg) == AICAM_OK)
+                                ? img_cfg.capture_storage_ai : AICAM_FALSE;
+
         /* AI inference JPEG (bounding-box overlay) - get from quick_snapshot
          * (pre-generated during fast capture) or generate on the fly. */
         uint8_t *inf_jpeg = NULL;
         uint32_t inf_jpeg_size = 0;
-        if (enable_ai && nn_result.is_valid &&
+        if (store_ai && enable_ai && nn_result.is_valid &&
             (nn_result.od.nb_detect > 0 || nn_result.mpe.nb_detect > 0)) {
             if (quick_snapshot_is_init()) {
                 size_t sz = 0;

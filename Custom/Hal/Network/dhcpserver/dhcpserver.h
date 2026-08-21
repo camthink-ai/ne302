@@ -47,8 +47,9 @@ typedef struct dhcps_msg {
 }dhcps_msg;
 
 typedef struct {
-        u8_t is_active;
-        u8_t is_used;
+        u8_t is_active;      /* 1 = currently associated with the AP (may DHCP)   */
+        u8_t is_used;        /* 1 = slot occupied (active OR cached for stickiness) */
+        u32_t seq;           /* monotonic stamp: larger = more recently active (LRU) */
         u8_t Client_Mac[6];
         ip4_addr_t Client_Address;
 } dhcps_client_t;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# stedgeai-use.sh - Switch STEdgeAI variant for NE301 builds (Git Bash / Linux)
+# stedgeai-use.sh - Switch STEdgeAI variant for NE302 builds (Git Bash / Linux)
 # =============================================================================
 # Usage:
 #   source Script/stedgeai-use.sh    # load functions into current shell

@@ -191,6 +191,13 @@ jobs:
           echo "::notice::Build completed successfully"
           echo "::endgroup::"
 
+      - name: Export APP ELF (debug symbols)
+        run: |
+          set -e
+          # APP ELF = symbol source for addr2line post-mortem of field crashes
+          cp Appli/build/ne302_App.elf build/ne302_App.elf
+          ls -lh build/ne302_App.elf
+
       - name: Verify build artifacts
         if: success()
         run: |
@@ -212,6 +219,9 @@ jobs:
           HEX_COUNT=$(find build -name "*.hex" -type f 2>/dev/null | wc -l)
           echo "Found $HEX_COUNT hex file(s):"
           ls -lh build/*.hex 2>/dev/null || true
+
+          echo "Debug ELF file (for addr2line crash symbolication):"
+          ls -lh build/*.elf 2>/dev/null || echo "::error::No APP ELF found in build/"
           echo "::endgroup::"
 
       - name: Upload build artifacts
@@ -222,6 +232,7 @@ jobs:
           path: |
             ./build/*.bin
             ./build/*.hex
+            ./build/*.elf
           retention-days: 30
           compression-level: 6
 
@@ -291,6 +302,9 @@ jobs:
             - **`*_WakeCore.bin`** - Files for flashing the WakeCore
             - **`*.hex`** - Combined HEX file for STM32CubeProgrammer one-click flash
 
+            **Debug symbols:**
+            - **`ne302_App.elf`** — APP ELF with debug symbols; use with `arm-none-eabi-addr2line -e ne302_App.elf -f -C 0x<addr>` to symbolicate crash addresses
+
             Other STEdgeAI variants (`3.0`, `2.2`) can be built via **Actions → workflow_dispatch**.
 
             ---
@@ -300,6 +314,7 @@ jobs:
             ./build/*_pkg.bin
             ./build/*_WakeCore.bin
             ./build/*.hex
+            ./build/ne302_App.elf
           draft: false
           prerelease: false
           generate_release_notes: false

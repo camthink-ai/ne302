@@ -15,6 +15,10 @@
 #include "sli_net_utility.h"
 #include "sli_net_constants.h"
 #include "sli_wifi_constants.h"
+#include "sli_wifi_utility.h"
+#include "sli_wifi_power_profile.h"
+#include "sli_wifi.h"
+#include "sli_buffer_manager.h"
 #include "sl_net_dns.h"
 #include "Log/debug.h"
 #include "dhcpserver.h"
@@ -22,6 +26,9 @@
 
 #define IS_TCP_IP_DUAL_MODE         1
 #define IS_ENABLE_NWP_DEBUG_PRINTS  0
+#if IS_TCP_IP_DUAL_MODE 
+#define IS_SELF_DHCP_SERVER         1
+#endif
 #ifdef SLI_SI91X_ENABLE_BLE
 #define IS_ENABLE_BLE               1
 #else
@@ -44,7 +51,9 @@ bool bypass_mode_enabled = false;
 bool dual_mode_enabled   = false;
 
 /// @brief Default wireless network interface configuration
-static const sl_wifi_device_configuration_t device_configuration = {
+/// @note Non-const so region_code can be configured before init via
+///       sl_net_wifi_set_region_code() (only effective when both netifs DEINIT).
+static sl_wifi_device_configuration_t device_configuration = {
   .boot_option = LOAD_NWP_FW,
   .mac_address = NULL,
   .band        = SL_SI91X_WIFI_BAND_2_4GHZ,
@@ -55,21 +64,20 @@ static const sl_wifi_device_configuration_t device_configuration = {
 #else
                    .coex_mode = SL_SI91X_WLAN_ONLY_MODE,
 #endif
-                   .feature_bit_map = (SL_SI91X_FEAT_SECURITY_OPEN | SL_SI91X_FEAT_AGGREGATION | SL_SI91X_FEAT_ULP_GPIO_BASED_HANDSHAKE
-#ifdef SLI_SI91X_MCU_INTERFACE
-                      | SL_SI91X_FEAT_WPS_DISABLE
-#endif
-                      ),
+                   .feature_bit_map = SL_SI91X_FEAT_AGGREGATION,
                    .tcp_ip_feature_bit_map     = (
 #if IS_TCP_IP_DUAL_MODE
-                        SL_SI91X_TCP_IP_FEAT_DHCPV4_CLIENT | SL_SI91X_TCP_IP_FEAT_DHCPV4_SERVER | SL_SI91X_TCP_IP_FEAT_ICMP | SL_SI91X_TCP_IP_FEAT_SSL
+                        SL_SI91X_TCP_IP_FEAT_DHCPV4_CLIENT | SL_SI91X_TCP_IP_FEAT_ICMP | SL_SI91X_TCP_IP_FEAT_SSL
                         | SL_SI91X_TCP_IP_FEAT_DNS_CLIENT |
+#if (IS_SELF_DHCP_SERVER == 0)
+                        SL_SI91X_TCP_IP_FEAT_DHCPV4_SERVER |
+#endif
 #else
                         SL_SI91X_TCP_IP_FEAT_BYPASS | 
 #endif
                         SL_SI91X_TCP_IP_FEAT_EXTENSION_VALID),
-                   .custom_feature_bit_map     = SL_SI91X_CUSTOM_FEAT_EXTENTION_VALID | SL_SI91X_CUSTOM_FEAT_DNS_SERVER_IN_DHCP_OFFER,
-                   .ext_custom_feature_bit_map = (SL_SI91X_EXT_FEAT_LOW_POWER_MODE | SL_SI91X_EXT_FEAT_XTAL_CLK | MEMORY_CONFIG
+                   .custom_feature_bit_map     = SL_SI91X_CUSTOM_FEAT_EXTENTION_VALID,
+                   .ext_custom_feature_bit_map = (SL_SI91X_EXT_FEAT_XTAL_CLK | MEMORY_CONFIG
 #if IS_ENABLE_NWP_DEBUG_PRINTS
                     | SL_SI91X_EXT_FEAT_UART_SEL_FOR_DEBUG_PRINTS
 #endif
@@ -127,8 +135,102 @@ static const sl_wifi_device_configuration_t device_configuration = {
                    .ble_feature_bit_map        = 0,
                    .ble_ext_feature_bit_map    = 0,
 #endif
-                   .config_feature_bit_map = (SL_SI91X_FEAT_SLEEP_GPIO_SEL_BITMAP | SL_SI91X_ENABLE_ENHANCED_MAX_PSP) }
+                   .config_feature_bit_map = SL_SI91X_FEAT_SLEEP_GPIO_SEL_BITMAP }
 };
+#if IS_SELF_DHCP_SERVER
+/// Defined below (line ~399); needed early by sl_net_fw_dhcps_compat_check().
+extern struct netif client_netif;
+/// Set when the running NWP firmware predates host-side DHCP server support
+/// (< 2.16.5): the AP then uses the firmware DHCP server instead of lwip dhcps.
+static bool sl_net_fw_dhcps_fallback = false;
+/// Set via sl_net_netif_skip_fw_dhcps_compat_check(): STA-only boots (fast
+/// wakeup path, no AP) skip the check. The AP init still checks — it needs
+/// the fallback, so the skip only defers, never disables.
+static bool sl_net_fw_dhcps_check_skip = false;
+
+/// @brief One-shot firmware compatibility check for the host DHCP server.
+///        Runs at whichever of AP/STA initializes first. WiFi firmware older
+///        than 2.16.5 cannot serve DHCP from the host (lwip dhcps) — AP
+///        clients would connect but never obtain an IP. Reboot the NWP with
+///        SL_SI91X_TCP_IP_FEAT_DHCPV4_SERVER added, i.e. fall back to the
+///        firmware DHCP server like an IS_SELF_DHCP_SERVER==0 build.
+/// @param interface Interface currently being initialized
+/// @return SL_STATUS_OK when usable (fallback applied or not needed)
+static sl_status_t sl_net_fw_dhcps_compat_check(sl_net_interface_t interface)
+{
+    static bool checked = false;
+    sl_wifi_firmware_version_t fw = { 0 };
+    sl_status_t status;
+
+    if (checked) return SL_STATUS_OK;
+    checked = true;
+
+    status = sl_wifi_get_firmware_version(&fw);
+    if (status != SL_STATUS_OK) {
+        LOG_DRV_WARN("FW version unavailable (0x%lX), keep host DHCP server\r\n", status);
+        return SL_STATUS_OK;
+    }
+    /* "2.16.5" — the patch number lives in security_version (SDK swaps the
+     * field names, see wifi_get_running_version). */
+    if (fw.major > 2 || (fw.major == 2 && (fw.minor > 16 || (fw.minor == 16 && fw.security_version >= 5)))) {
+        return SL_STATUS_OK;
+    }
+
+    LOG_DRV_WARN("Wi-Fi FW %d.%d.%d < 2.16.5, fall back to firmware DHCP server\r\n",
+                 fw.major, fw.minor, fw.security_version);
+    /* Check deferred to AP init while the STA already brought the device up
+     * (fast-wakeup skip): a bare sl_net_deinit(interface) is not effective
+     * here — sl_wifi_deinit() resets the whole NWP including the live STA
+     * association, and the lwIP client netif would stay registered on a dead
+     * link. Tear the client netif down cleanly first (disconnect, device
+     * deinit, netif remove — same sequence as the recovery thread in
+     * sl_net_thread), reboot the NWP with the server bit, then restore the
+     * STA to its previous state (one-shot check → no recursion). */
+    bool sta_registered = (netif_get_by_index(client_netif.num + 1) == &client_netif);
+    netif_state_t sta_state = sl_net_client_netif_state();
+    if (sta_registered) sl_net_client_netif_deinit();
+    else sl_net_deinit(interface);
+
+    device_configuration.boot_config.tcp_ip_feature_bit_map |= SL_SI91X_TCP_IP_FEAT_DHCPV4_SERVER;
+    sl_net_fw_dhcps_fallback = true;
+    /* We just deinit'd the device: anything but a real init here means the
+     * deinit failed and the new bitmap was NOT applied — fail loudly instead
+     * of keeping a fallback flag that would skip the host DHCP server. */
+    status = sl_net_init(interface, &device_configuration, NULL, NULL);
+    if (status != SL_STATUS_OK) {
+        LOG_DRV_ERROR("Failed to re-init Wi-Fi with firmware DHCP server: 0x%lX\r\n", status);
+        return status;
+    }
+
+    if (sta_registered) {
+        int ret = sl_net_client_netif_init();
+        if (ret != SL_STATUS_OK) {
+            LOG_DRV_ERROR("Failed to restore Wi-Fi client after DHCP fallback: 0x%X\r\n", ret);
+            return ret;
+        }
+        if (sta_state == NETIF_STATE_UP) {
+            ret = sl_net_client_netif_up();
+            if (ret != SL_STATUS_OK) {
+                LOG_DRV_WARN("Wi-Fi client reconnect after DHCP fallback failed: 0x%X\r\n", ret);
+            }
+        }
+    }
+    return SL_STATUS_OK;
+}
+#endif
+
+/// @brief Skip the fw < 2.16.5 DHCP-server compatibility check for STA-only
+///        boots. Call before any netif init on fast-wakeup paths that never
+///        start the AP: saves the version query (and on old firmware the NWP
+///        deinit/re-init cycle). The check still runs before the AP is
+///        initialized, so skipping cannot reintroduce the no-IP problem.
+///        No-op in non-self-DHCP-server builds.
+void sl_net_netif_skip_fw_dhcps_compat_check(void)
+{
+#if IS_SELF_DHCP_SERVER
+    sl_net_fw_dhcps_check_skip = true;
+#endif
+}
 /// @brief Remote wake-up configuration (wifi mode)
 static sl_wifi_device_configuration_t remote_wake_up_wifi_cfg = {
   .boot_option = LOAD_NWP_FW,
@@ -501,8 +603,10 @@ static void sl_net_low_level_input(struct netif *netif, uint8_t *b, uint16_t len
     if (len < NETIF_LWIP_FRAME_ALIGNMENT) len = NETIF_LWIP_FRAME_ALIGNMENT;
 
     // Drop packets originated from the same interface and is not destined for the said interface
-//    const uint8_t *src_mac = b + netif->hwaddr_len;
-//    const uint8_t *dst_mac = b;
+#if LWIP_IPV6
+    const uint8_t *src_mac = b + netif->hwaddr_len;
+    const uint8_t *dst_mac = b;
+#endif
 
 #if LWIP_IPV6
     if (!(ip6_addr_ispreferred(netif_ip6_addr_state(netif, 0)))
@@ -536,6 +640,28 @@ static void sl_net_low_level_input(struct netif *netif, uint8_t *b, uint16_t len
 /// @param netif Network interface
 /// @param p Data buffer
 /// @return Error code
+// A wedged host<->NWP pipe fails every raw TX with SL_STATUS_ALLOCATION_FAILED
+// (0x19): the CE_DATA_POOL never frees, each send waits 1s for a buffer. Unlike
+// a dead NWP this never reaches the C1/C2 handshake timeout, so
+// sli_firmware_error_callback (the only recovery trigger) never fires and the
+// wedge persists until reboot (field log: 14h outage). Escalate to the existing
+// firmware-error recovery after N consecutive 0x19 failures.
+// Single-writer safe: lwIP calls linkoutput only from tcpip_thread.
+#define SL_NET_TX_WEDGE_THRESHOLD 30
+static uint32_t sl_net_tx_wedge_count = 0;
+static void sl_net_tx_failure_escalate(sl_status_t status)
+{
+    if (status != SL_STATUS_ALLOCATION_FAILED) {
+        sl_net_tx_wedge_count = 0; // any success / other error resets the streak
+        return;
+    }
+    if (++sl_net_tx_wedge_count < SL_NET_TX_WEDGE_THRESHOLD) return;
+    sl_net_tx_wedge_count = 0;
+    if (remote_wakeup_mode != WAKEUP_MODE_NORMAL) return; // same guard as sli_firmware_error_callback
+    LOG_DRV_ERROR("raw TX pool exhausted %u times in a row, triggering firmware recovery\r\n",
+                  SL_NET_TX_WEDGE_THRESHOLD);
+    osEventFlagsSet(sl_net_events, SL_NET_EVENT_FIRMWARE_ERROR);
+}
 static err_t sl_net_low_level_output(struct netif *netif, struct pbuf *p)
 {
     struct pbuf *q = NULL;
@@ -554,6 +680,7 @@ static err_t sl_net_low_level_output(struct netif *netif, struct pbuf *p)
             if (netif == &client_netif) status = sl_wifi_send_raw_data_frame(SL_WIFI_CLIENT_INTERFACE, out_buf, p->tot_len);
             else status = sl_wifi_send_raw_data_frame(SL_WIFI_AP_INTERFACE, out_buf, p->tot_len);
             hal_mem_free(out_buf);
+            sl_net_tx_failure_escalate(status);
             if (status != SL_STATUS_OK) {
                 LOG_DRV_ERROR(NETIF_NAME_STR_FMT ": Failed to send data frame: 0x%0lX.\r\n", NETIF_NAME_PARAMETER(netif), status);
                 return ERR_IF;
@@ -565,6 +692,7 @@ static err_t sl_net_low_level_output(struct netif *netif, struct pbuf *p)
         // printf("LWIP TX len : %d\r\n", q->len);
         if (netif == &client_netif) status = sl_wifi_send_raw_data_frame(SL_WIFI_CLIENT_INTERFACE, (uint8_t *)q->payload, q->len);
         else status = sl_wifi_send_raw_data_frame(SL_WIFI_AP_INTERFACE, (uint8_t *)q->payload, q->len);
+        sl_net_tx_failure_escalate(status);
         if (status != SL_STATUS_OK) {
             LOG_DRV_ERROR(NETIF_NAME_STR_FMT ": Failed to send data frame: 0x%0lX.\r\n", NETIF_NAME_PARAMETER(netif), status);
             return ERR_IF;
@@ -621,9 +749,16 @@ static err_t sl_net_ethernetif_init(struct netif *netif)
     // set netif maximum transfer unit
     netif->mtu = NETIF_MAX_TRANSFER_UNIT;
 
-    // Accept broadcast address and ARP traffic
-    netif->flags |= NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP;
-
+    if (interface == SL_WIFI_CLIENT_INTERFACE) {
+        // Accept broadcast address and ARP traffic
+        netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP;
+    } else if (interface == SL_WIFI_AP_INTERFACE) {
+        // Accept broadcast address
+        netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+#if IS_SELF_DHCP_SERVER
+        netif->flags |= NETIF_FLAG_IGMP;
+#endif
+    }
 #if LWIP_IPV6_MLD
     netif->flags |= NETIF_FLAG_MLD6;
 #endif /* LWIP_IPV6_MLD */
@@ -666,6 +801,10 @@ sl_status_t sl_net_wifi_client_init(sl_net_interface_t interface,
                                     sl_net_event_handler_t event_handler)
 {
     sl_status_t status;
+#if IS_ENABLE_NWP_DEBUG_PRINTS
+    sl_si91x_assertion_t debug_config = { 0 };
+#endif
+
     UNUSED_PARAMETER(interface);
     UNUSED_PARAMETER(event_handler);
     UNUSED_PARAMETER(context);
@@ -680,6 +819,19 @@ sl_status_t sl_net_wifi_client_init(sl_net_interface_t interface,
         && ((const sl_wifi_device_configuration_t *)configuration)->boot_config.oper_mode == SL_SI91X_CONCURRENT_MODE) {
         return SL_STATUS_OK;
     }
+#if IS_ENABLE_NWP_DEBUG_PRINTS
+    else if (status == SL_STATUS_OK) {
+        debug_config.assert_level = SL_SI91X_ASSERTION_LEVEL_MAX;
+        debug_config.assert_type = SL_SI91X_ASSERTION_TYPE_ALL; 
+
+        status = sl_si91x_debug_log(&debug_config);
+        if (status != SL_STATUS_OK) {
+            LOG_DRV_ERROR("Failed to enable debug prints: 0x%lX\r\n", status);
+            return status;
+        }
+        printf("Si91x debug prints enabled\r\n");
+    }
+#endif
     return status;
 }
 /// @brief Client deinitialization function implementation provided for SL SDK calls
@@ -901,20 +1053,35 @@ sl_status_t sl_net_wifi_client_up(sl_net_interface_t interface, sl_net_profile_i
         status = sl_wifi_connect(SL_WIFI_CLIENT_INTERFACE, &wifi_client_profile.config, 18000);
     // } while (status != SL_STATUS_OK && cnt_try_times++ < 3);
     if (status != SL_STATUS_OK) {
+        sl_wifi_disconnect(SL_WIFI_CLIENT_INTERFACE);
         LOG_DRV_ERROR("Failed to connect to Wi-Fi: 0x%0lX\r\n", status);
         return status;
     }
 
 #if IS_TCP_IP_DUAL_MODE
-    if (interface == SL_NET_WIFI_CLIENT_2_INTERFACE) {
-        status = sl_si91x_configure_ip_address(&wifi_client_profile.ip, SL_WIFI_CLIENT_VAP_ID_1);
-    } else {
-        status = sl_si91x_configure_ip_address(&wifi_client_profile.ip, SL_WIFI_CLIENT_VAP_ID);
-    }
-    if (status != SL_STATUS_OK) {
-        sl_wifi_disconnect(SL_WIFI_CLIENT_INTERFACE);
-        LOG_DRV_ERROR("Failed to configure client ip: 0x%0lX\r\n", status);
-        return status;
+    {
+        /* fw-compat diagnostic: a clean 0x07 (SL_STATUS_TIMEOUT, no bit16)
+         * here means the HOST-side response wait was aborted — firmware
+         * errors always come back as 0x1000X. Elapsed time separates an
+         * instant rejection (transport) from a delayed abort (matching). */
+        uint32_t ip_cfg_start = osKernelGetTickCount();
+        if (interface == SL_NET_WIFI_CLIENT_2_INTERFACE) {
+            status = sl_si91x_configure_ip_address(&wifi_client_profile.ip, SL_WIFI_CLIENT_VAP_ID_1);
+        } else {
+            status = sl_si91x_configure_ip_address(&wifi_client_profile.ip, SL_WIFI_CLIENT_VAP_ID);
+        }
+        if (status != SL_STATUS_OK) {
+            sl_status_t v4_reason = SL_STATUS_OK, v6_reason = SL_STATUS_OK;
+            char fw_ver[24] = { 0 };
+            sl_wifi_get_ip_config_failure_reason(&v4_reason, &v6_reason);
+            wifi_get_running_version(fw_ver, sizeof(fw_ver));
+            LOG_DRV_ERROR("Client ip configure failed: 0x%0lX (v4 raw 0x%lX, v6 raw 0x%lX, %lu ms) fw %s\r\n",
+                          status, v4_reason, v6_reason,
+                          (unsigned long)(osKernelGetTickCount() - ip_cfg_start),
+                          fw_ver);
+            sl_wifi_disconnect(SL_WIFI_CLIENT_INTERFACE);
+            return status;
+        }
     }
 #endif
 
@@ -1028,6 +1195,18 @@ int sl_net_client_netif_init(void)
         LOG_DRV_ERROR("Failed to init Wi-Fi Client interface: 0x%lX\r\n", status);
         return status;
     }
+
+#if IS_SELF_DHCP_SERVER
+    if (!sl_net_fw_dhcps_check_skip) {
+        status = sl_net_fw_dhcps_compat_check(SL_NET_WIFI_CLIENT_INTERFACE);
+        if (status != SL_STATUS_OK) {
+            if (netif_get_by_index(ap_netif.num + 1) != &ap_netif) {
+                sl_net_deinit(SL_NET_WIFI_CLIENT_INTERFACE);
+            }
+            return status;
+        }
+    }
+#endif
 
     // status = sl_net_set_profile(SL_NET_WIFI_CLIENT_INTERFACE, SL_NET_DEFAULT_WIFI_CLIENT_PROFILE_ID, &wifi_client_profile);
     // if (status != SL_STATUS_OK) {
@@ -1348,6 +1527,14 @@ static sl_status_t sl_net_client_scan_callback_handler(sl_wifi_event_t event, sl
      * but result_length may be set to count * sizeof(sl_wifi_extended_scan_result_t).
      * Old SDK always passed result_length == 0 for this case. */
     if (now_scan_type == SL_WIFI_SCAN_TYPE_EXTENDED) {
+        /* EXTENDED scan: firmware pushes each found AP as a
+         * SLI_WIFI_RSP_SCAN_RESULTS beacon (result != NULL), which the SDK
+         * auto-accumulates into its scan database via sli_handle_wifi_beacon().
+         * The empty-payload completion event (result == NULL) signals scan-done.
+         * Ignore intermediate beacons so restore/dispatch run exactly once. */
+        if (result != NULL) {
+            return SL_STATUS_OK;
+        }
         default_scan_result_parameters.result_count = &scan_result_num;
         status = sl_wifi_get_stored_scan_results(SL_WIFI_CLIENT_INTERFACE, &default_scan_result_parameters);
         if (status != SL_STATUS_OK) {
@@ -1605,22 +1792,26 @@ sl_status_t sl_net_wifi_ap_up(sl_net_interface_t interface, sl_net_profile_id_t 
     }
 
 #if IS_TCP_IP_DUAL_MODE
-    status = SL_STATUS_NOT_SUPPORTED;
-    if (interface == SL_NET_WIFI_AP_1_INTERFACE) {
-        status = sl_si91x_configure_ip_address(&wifi_ap_profile.ip, SL_WIFI_AP_VAP_ID);
-    } else if (interface == SL_NET_WIFI_AP_2_INTERFACE) {
-        status = sl_si91x_configure_ip_address(&wifi_ap_profile.ip, SL_WIFI_AP_VAP_ID_1);
+    /* Firmware-side AP IP configuration whenever the host lwip dhcps is not
+     * in charge: IS_SELF_DHCP_SERVER==0 builds, or the fw < 2.16.5 fallback
+     * flagged by sl_net_fw_dhcps_compat_check(). The firmware then also runs
+     * its own DHCP server for AP clients. */
+    if ((IS_SELF_DHCP_SERVER == 0)
+#if IS_SELF_DHCP_SERVER
+        || sl_net_fw_dhcps_fallback
+#endif
+    ) {
+        status = SL_STATUS_NOT_SUPPORTED;
+        if (interface == SL_NET_WIFI_AP_1_INTERFACE) {
+            status = sl_si91x_configure_ip_address(&wifi_ap_profile.ip, SL_WIFI_AP_VAP_ID);
+        } else if (interface == SL_NET_WIFI_AP_2_INTERFACE) {
+            status = sl_si91x_configure_ip_address(&wifi_ap_profile.ip, SL_WIFI_AP_VAP_ID_1);
+        }
+        if (status != SL_STATUS_OK) {
+            LOG_DRV_ERROR("Failed to configure ap ip: 0x%0lX\r\n", status);
+            return status;
+        }
     }
-    if (status != SL_STATUS_OK) {
-        LOG_DRV_ERROR("Failed to configure ap ip: 0x%0lX\r\n", status);
-        return status;
-    }
-
-    // status = sl_net_get_profile(SL_NET_WIFI_AP_INTERFACE, profile_id, &wifi_ap_profile);
-    // if (status != SL_STATUS_OK) {
-    //     printf("Failed to get ap profile: 0x%lx\r\n", status);
-    //     return status;
-    // }
 #endif
     status = sl_wifi_start_ap(SL_WIFI_AP_2_4GHZ_INTERFACE, &wifi_ap_profile.config);
     if (status != SL_STATUS_OK) {
@@ -1648,6 +1839,11 @@ sl_status_t sl_net_wifi_ap_up(sl_net_interface_t interface, sl_net_profile_id_t 
                                     &netmask,
                                     &gateway);
     LOG_DRV_DEBUG(NETIF_NAME_STR_FMT " ip: %s\r\n", NETIF_NAME_PARAMETER(&ap_netif), ip4addr_ntoa((const ip4_addr_t *)&ap_netif.ip_addr));
+#if IS_SELF_DHCP_SERVER
+    /* fw < 2.16.5 fallback: the firmware DHCP server owns the leases; don't
+     * run a second (host) DHCP server on the same interface. */
+    if (err == ERR_OK && !sl_net_fw_dhcps_fallback) dhcps_start(&ap_netif);
+#endif
 #else
     if (SL_IP_MANAGEMENT_STATIC_IP == wifi_ap_profile.ip.mode) {
 #if LWIP_IPV4 && LWIP_IPV6
@@ -1820,12 +2016,20 @@ static sl_status_t ap_connected_event_handler(sl_wifi_event_t event, void *data,
     UNUSED_PARAMETER(arg);
     UNUSED_PARAMETER(event);
 
-    printf("Remote Client connected: ");
-    print_mac_address((sl_mac_address_t *)mac_address);
-    printf("\r\n");
+    printf("Remote Client connected: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           mac_address->octet[0],
+           mac_address->octet[1],
+           mac_address->octet[2],
+           mac_address->octet[3],
+           mac_address->octet[4],
+           mac_address->octet[5]);
+#if IS_TCP_IP_DUAL_MODE && IS_SELF_DHCP_SERVER
+    dhcps_add_client_by_mac(mac_address->octet);
+#else
     if (wifi_ap_profile.ip.mode == SL_IP_MANAGEMENT_LINK_LOCAL) {
         dhcps_add_client_by_mac(mac_address->octet);
     }
+#endif
 
     return SL_STATUS_OK;
 }
@@ -1837,12 +2041,20 @@ static sl_status_t ap_disconnected_event_handler(sl_wifi_event_t event, void *da
     UNUSED_PARAMETER(arg);
     UNUSED_PARAMETER(event);
 
-    printf("Remote Client disconnected: ");
-    print_mac_address(mac_address);
-    printf("\r\n");
+    printf("Remote Client disconnected: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+           mac_address->octet[0],
+           mac_address->octet[1],
+           mac_address->octet[2],
+           mac_address->octet[3],
+           mac_address->octet[4],
+           mac_address->octet[5]);
+#if IS_TCP_IP_DUAL_MODE && IS_SELF_DHCP_SERVER
+    dhcps_del_client_by_mac(mac_address->octet);
+#else
     if (wifi_ap_profile.ip.mode == SL_IP_MANAGEMENT_LINK_LOCAL) {
         dhcps_del_client_by_mac(mac_address->octet);
     }
+#endif
 
     return SL_STATUS_OK;
 }
@@ -1879,6 +2091,16 @@ int sl_net_ap_netif_init(void)
         LOG_DRV_ERROR("Failed to init Wi-Fi AP interface: 0x%lX\r\n", status);
         return status;
     }
+
+#if IS_SELF_DHCP_SERVER
+    status = sl_net_fw_dhcps_compat_check(SL_NET_WIFI_AP_INTERFACE);
+    if (status != SL_STATUS_OK) {
+        if (netif_get_by_index(client_netif.num + 1) != &client_netif) {
+            sl_net_deinit(SL_NET_WIFI_AP_INTERFACE);
+        }
+        return status;
+    }
+#endif
 
 #if IS_ENABLE_NWP_DEBUG_PRINTS
     sl_si91x_assertion_t assertion = {
@@ -2115,6 +2337,11 @@ int sl_net_ap_netif_info(netif_info_t *netif_info)
     memcpy(netif_info->netmask, &ap_netif.netmask, sizeof(netif_info->netmask));
 
     memset(netif_info->wireless_cfg.ssid, 0x00, sizeof(netif_info->wireless_cfg.ssid));
+    if (netif_info->state != NETIF_STATE_DEINIT && wifi_ap_profile.config.ssid.length < 1) {
+        snprintf((char *)wifi_ap_profile.config.ssid.value, sizeof(wifi_ap_profile.config.ssid.value), "NE302_%02X%02X%02X", ap_netif.hwaddr[3], ap_netif.hwaddr[4], ap_netif.hwaddr[5]);
+        wifi_ap_profile.config.ssid.length = strlen((char *)wifi_ap_profile.config.ssid.value);
+        LOG_DRV_INFO("Use default ap name: %s\r\n", wifi_ap_profile.config.ssid.value);
+    }
     memcpy(netif_info->wireless_cfg.ssid, wifi_ap_profile.config.ssid.value, wifi_ap_profile.config.ssid.length);
     memset(netif_info->wireless_cfg.pw, 0x00, sizeof(netif_info->wireless_cfg.pw));
     if (wifi_ap_credential.data_length >= 8) memcpy(netif_info->wireless_cfg.pw, wifi_ap_credential.data, wifi_ap_credential.data_length);
@@ -2146,6 +2373,9 @@ extern void netif_manager_change_default_if(void);
 extern void sli_generate_c1c2_error(void);
 extern void sli_reset_c1c2_error(void);
 #endif
+#ifdef SIMULATION_SPI4_DMA_ERROR
+extern void sl_si91x_host_sim_spi4_dma(uint8_t mode);
+#endif
 void sl_net_thread(void *arg)
 {
     int event_flag = 0, ret = 0;
@@ -2175,6 +2405,12 @@ void sl_net_thread(void *arg)
                     osMutexAcquire(sl_net_mutex, osWaitForever);
                 #ifdef SLI_SI91X_SIMULATION_C1C2_ERROR
                     sli_reset_c1c2_error();
+                #endif
+                #ifdef SIMULATION_SPI4_DMA_ERROR
+                    // Also clear a dma_ff/dma_once fault injection before re-init, so a
+                    // simulated bus fault self-heals via recovery (mirrors c1c2 above).
+                    // Comment out to test the 10-retry exhaustion path instead.
+                    sl_si91x_host_sim_spi4_dma(0);
                 #endif
                     if (client_state > NETIF_STATE_DEINIT) {
                         ret = sl_net_client_netif_init();
@@ -2207,7 +2443,7 @@ void sl_net_thread(void *arg)
                 client_state = sl_net_client_netif_state();
                 if (client_state == NETIF_STATE_UP) {
                     sl_net_client_netif_down();
-                    status = sli_si91x_driver_send_command(SLI_WIFI_REQ_INIT,
+                    status = sli_wifi_send_command(SLI_WIFI_REQ_INIT,
                                                               SLI_WIFI_WLAN_CMD,
                                                               NULL,
                                                               0,
@@ -2246,9 +2482,104 @@ void sli_firmware_error_callback(int error_code)
     }
 }
 
+/****************************************************************************************/
+/***************************** WiFi Region (Country) Code ********************************/
+/****************************************************************************************/
+/* Region string <-> sl_wifi_region_code_t mapping for legacy WiFi (concurrent AP+STA).
+ * WORLD_DOMAIN is intentionally excluded: per WiSeConnect docs it is only valid in
+ * CLIENT/TRANSCEIVER/TRANSMIT_TEST modes (and AN1437 lists "Worldwide" as BLE-only),
+ * so passing it for CONCURRENT_MODE init makes the firmware reject the AP (0xF).
+ * DEFAULT/SG(not supported)/IGNORE(deprecated) are also excluded. */
+static const struct {
+    const char *str;
+    sl_wifi_region_code_t code;
+} s_wifi_region_table[] = {
+    { "us",    SL_WIFI_REGION_US },
+    { "eu",    SL_WIFI_REGION_EU },
+    { "jp",    SL_WIFI_REGION_JP },
+    { "kr",    SL_WIFI_REGION_KR },
+    { "cn",    SL_WIFI_REGION_CN },
+};
+#define SL_NET_WIFI_REGION_TABLE_SIZE (sizeof(s_wifi_region_table) / sizeof(s_wifi_region_table[0]))
+
+static sl_wifi_region_code_t sl_net_wifi_region_lookup(const char *country_code)
+{
+    uint32_t i;
+    if (country_code == NULL) return SL_WIFI_IGNORE_REGION;
+    for (i = 0; i < SL_NET_WIFI_REGION_TABLE_SIZE; i++) {
+        const char *s = s_wifi_region_table[i].str;
+        size_t j;
+        for (j = 0; s[j] != '\0' && country_code[j] != '\0'; j++) {
+            char a = s[j], b = country_code[j];
+            if (a >= 'A' && a <= 'Z') a = (char)(a + ('a' - 'A'));
+            if (b >= 'A' && b <= 'Z') b = (char)(b + ('a' - 'A'));
+            if (a != b) break;
+        }
+        if (s[j] == '\0' && country_code[j] == '\0') return s_wifi_region_table[i].code;
+    }
+    return SL_WIFI_IGNORE_REGION;
+}
+
+/// @brief Configure WiFi region (country) code. Only effective at the next sl_wifi_init,
+///        so it requires both client and AP netifs to be DEINIT.
+/// @param country_code Region string, e.g. "us", "cn", "eu", "jp", "world", "kr"
+/// @return SL_STATUS_OK / SL_STATUS_INVALID_PARAMETER / SL_STATUS_INVALID_STATE
+int sl_net_wifi_set_region_code(const char *country_code)
+{
+    sl_wifi_region_code_t code = sl_net_wifi_region_lookup(country_code);
+    if (code == SL_WIFI_IGNORE_REGION) return SL_STATUS_INVALID_PARAMETER;
+    if (sl_net_client_netif_state() != NETIF_STATE_DEINIT ||
+        sl_net_ap_netif_state() != NETIF_STATE_DEINIT) {
+        return SL_STATUS_INVALID_STATE;
+    }
+    /* Keep every WiFi device config in sync so the region applies regardless of
+     * which mode (normal concurrent / remote-wakeup-wifi / remote-wakeup-ble) inits next. */
+    device_configuration.region_code = code;
+    remote_wake_up_wifi_cfg.region_code = code;
+#if IS_ENABLE_BLE
+    remote_wake_up_ble_cfg.region_code = code;
+#endif
+    return SL_STATUS_OK;
+}
+
+/// @brief Get the currently active WiFi region string (applied at last init).
+/// @param buf Output buffer
+/// @param len Buffer size
+/// @return SL_STATUS_OK / SL_STATUS_INVALID_PARAMETER
+int sl_net_wifi_get_region_code(char *buf, size_t len)
+{
+    uint32_t i;
+    const char *str = "us"; /* fallback for unmapped active region (DEFAULT/IGNORE) */
+    if (buf == NULL || len == 0) return SL_STATUS_INVALID_PARAMETER;
+    for (i = 0; i < SL_NET_WIFI_REGION_TABLE_SIZE; i++) {
+        if (s_wifi_region_table[i].code == device_configuration.region_code) {
+            str = s_wifi_region_table[i].str;
+            break;
+        }
+    }
+    strncpy(buf, str, len - 1);
+    buf[len - 1] = '\0';
+    return SL_STATUS_OK;
+}
+
+uint32_t sl_net_wifi_get_supported_region_count(void)
+{
+    return (uint32_t)SL_NET_WIFI_REGION_TABLE_SIZE;
+}
+
+int sl_net_wifi_get_region_code_by_index(uint32_t idx, char *buf, size_t len)
+{
+    if (buf == NULL || len == 0 || idx >= SL_NET_WIFI_REGION_TABLE_SIZE) {
+        return SL_STATUS_INVALID_PARAMETER;
+    }
+    strncpy(buf, s_wifi_region_table[idx].str, len - 1);
+    buf[len - 1] = '\0';
+    return SL_STATUS_OK;
+}
+
 /// @brief Initialize WiFi network interface
 /// @param None
-/// @return Error code 
+/// @return Error code
 int sl_net_netif_init(void)
 {
     if (is_wifi_ant()) return SL_STATUS_INVALID_STATE;
@@ -2424,12 +2755,27 @@ int sl_net_netif_filter_broadcast_ctrl(uint8_t enable)
     return status;
 }
 
-extern sl_wifi_system_performance_profile_t current_performance_profile;
-int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
+int sl_net_netif_low_power_mode_ctrl(uint8_t enable, const sl_net_lpwr_config_t *cfg){
     sl_status_t status = SL_STATUS_OK;
-    sl_wifi_performance_profile_v2_t performance_profile = {0};
+    sl_wifi_performance_profile_v2_t performance_profile = {
+        .profile           = HIGH_PERFORMANCE,
+        .dtim_aligned_type = SL_SI91X_ALIGN_WITH_BEACON,
+        .num_of_dtim_skip  = 0,
+        .listen_interval   = 0,
+        .monitor_interval  = 0,
+        .twt_request       = {0},
+        .twt_selection     = {0},
+        .beacon_miss_ignore_limit = 1,
+    };
+    sl_wifi_performance_profile_v2_t current_profile     = {0};
     if (sl_net_thread_ID == NULL) return SL_STATUS_INVALID_STATE;
     osMutexAcquire(sl_net_mutex, osWaitForever);
+    // 4.1.1: the SDK no longer maintains the current_performance_profile global
+    // (initialized to HIGH_PERFORMANCE and never written), so reading it always
+    // yields HIGH_PERFORMANCE and the exit-to-high-perf branch below was dead
+    // code (low-power mode could be entered but never left). Query the live
+    // profile via the getter instead.
+    sli_wifi_get_current_performance_profile(&current_profile);
 
     do {
         if (sl_net_ap_netif_state() == NETIF_STATE_DEINIT && sl_net_client_netif_state() == NETIF_STATE_DEINIT && remote_wakeup_mode == WAKEUP_MODE_NORMAL) {
@@ -2437,7 +2783,7 @@ int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
             break;
         }
 
-        if (enable && current_performance_profile == HIGH_PERFORMANCE) {
+        if (enable && current_profile.profile == HIGH_PERFORMANCE) {
 #if IS_ENABLE_BLE
             // If BLE wakeup mode and not scanning / connecting, return not supported
             if (remote_wakeup_mode == WAKEUP_MODE_BLE && !sl_ble_is_scanning() && sl_ble_connected_num() == 0) {
@@ -2447,6 +2793,16 @@ int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
 #endif
             
             performance_profile.profile = ASSOCIATED_POWER_SAVE_LOW_LATENCY;
+            if (cfg != NULL) {
+                if (cfg->profile == 1) performance_profile.profile = ASSOCIATED_POWER_SAVE;
+                performance_profile.num_of_dtim_skip         = cfg->num_of_dtim_skip;
+                performance_profile.monitor_interval          = cfg->monitor_interval;
+                performance_profile.beacon_miss_ignore_limit  = cfg->beacon_miss_ignore_limit ? cfg->beacon_miss_ignore_limit : 1;
+                LOG_DRV_INFO("lpwr cfg: profile=%s dtim_skip=%u monitor=%ums bmiss=%u\r\n",
+                             performance_profile.profile == ASSOCIATED_POWER_SAVE ? "MAX_PSP" : "LOW_LATENCY",
+                             cfg->num_of_dtim_skip, cfg->monitor_interval,
+                             performance_profile.beacon_miss_ignore_limit);
+            }
             if (remote_wakeup_mode == WAKEUP_MODE_WIFI || remote_wakeup_mode == WAKEUP_MODE_NORMAL) {
                 status = sl_wifi_filter_broadcast(5000, 1, 1);
                 if (status != SL_STATUS_OK) {
@@ -2468,7 +2824,7 @@ int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
                 LOG_DRV_ERROR("Failed to set performance profile: 0x%lX\r\n", status);
                 break;
             }
-        } else if (current_performance_profile != HIGH_PERFORMANCE) {
+        } else if (current_profile.profile != HIGH_PERFORMANCE) {
             performance_profile.profile = HIGH_PERFORMANCE;
 #if IS_ENABLE_BLE
             if (remote_wakeup_mode == WAKEUP_MODE_BLE) {
@@ -2484,7 +2840,7 @@ int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
                 LOG_DRV_ERROR("Failed to set performance profile: 0x%lX\r\n", status);
                 break;
             }
-            if (status == SL_STATUS_OK && current_performance_profile != performance_profile.profile) {
+            if (status == SL_STATUS_OK && current_profile.profile != performance_profile.profile) {
                 status = sl_wifi_set_performance_profile_v2(&performance_profile);
             }
         }
@@ -2492,6 +2848,143 @@ int sl_net_netif_low_power_mode_ctrl(uint8_t enable){
     
     osMutexRelease(sl_net_mutex);
     return status;
+}
+
+// ---- TWT (Target Wake Time) async-result rendezvous ----
+// sl_wifi_target_wake_time_auto_selection_v2() returns OK as soon as the firmware
+// ACCEPTS the config command, not when the AP actually agrees a TWT session. The
+// real outcome arrives later via the SL_WIFI_TWT_RESPONSE_EVENTS callback. SYNC
+// mode of sl_net_netif_twt_ctrl() blocks on s_twt_cb_sem until that callback posts
+// the result; ASYNC returns the command-accepted status right away (read the
+// negotiated outcome from the callback log). The wait is done OUTSIDE sl_net_mutex
+// so the event-thread callback and the rest of the netif stack are not stalled.
+static volatile sl_wifi_event_t s_twt_cb_event;
+static volatile sl_status_t     s_twt_cb_status;
+static osSemaphoreId_t          s_twt_cb_sem    = NULL;
+static uint8_t                  s_twt_cb_inited = 0;
+
+static const char *sl_net_twt_event_name(sl_wifi_event_t ev)
+{
+    switch (ev) {
+    case SL_WIFI_TWT_UNSOLICITED_SESSION_SUCCESS_EVENT: return "SESSION_SUCCESS";
+    case SL_WIFI_TWT_RESPONSE_EVENT:                    return "GENERIC_RESPONSE";
+    case SL_WIFI_TWT_INACTIVE_NO_AP_SUPPORT_EVENT:      return "NO_AP_SUPPORT";
+    case SL_WIFI_TWT_AP_REJECTED_EVENT:                 return "AP_REJECTED";
+    case SL_WIFI_TWT_FAIL_MAX_RETRIES_REACHED_EVENT:    return "MAX_RETRIES";
+    case SL_WIFI_TWT_TEARDOWN_SUCCESS_EVENT:            return "TEARDOWN_SUCCESS";
+    case SL_WIFI_TWT_AP_TEARDOWN_SUCCESS_EVENT:         return "AP_TEARDOWN_SUCCESS";
+    case SL_WIFI_TWT_OUT_OF_TOLERANCE_EVENT:            return "OUT_OF_TOLERANCE";
+    case SL_WIFI_TWT_RESPONSE_NOT_MATCHED_EVENT:        return "RESPONSE_NOT_MATCHED";
+    case SL_WIFI_TWT_UNSUPPORTED_RESPONSE_EVENT:        return "UNSUPPORTED_RESPONSE";
+    case SL_WIFI_TWT_INACTIVE_DUE_TO_ROAMING_EVENT:     return "INACTIVE_ROAMING";
+    case SL_WIFI_TWT_INACTIVE_DUE_TO_DISCONNECT_EVENT:  return "INACTIVE_DISCONNECT";
+    case SL_WIFI_TWT_INFO_FRAME_EXCHANGE_FAILED_EVENT:  return "INFO_FRAME_FAILED";
+    case SL_WIFI_RESCHEDULE_TWT_SUCCESS_EVENT:          return "RESCHEDULE_SUCCESS";
+    default:                                            return "OTHER";
+    }
+}
+
+// SL_WIFI_TWT_RESPONSE_EVENTS callback: runs in the SDK event thread. Records the
+// negotiated outcome and wakes any SYNC waiter.
+static sl_status_t sl_net_twt_response_cb(sl_wifi_event_t event,
+                                          sl_status_t status_code,
+                                          sl_wifi_twt_response_t *data,
+                                          uint32_t data_length,
+                                          void *arg)
+{
+    (void)data_length; (void)arg;
+    s_twt_cb_event  = event;
+    s_twt_cb_status = status_code;
+    LOG_DRV_INFO("TWT callback: %s (event=0x%lX status=0x%lX)",
+                 sl_net_twt_event_name(event), (unsigned long)event, (unsigned long)status_code);
+    // Dump the AP-negotiated schedule: wake_interval = mantissa << exp (µs).
+    // All-zero ⇒ no real schedule negotiated (AP gave nothing useful).
+    if (data != NULL) {
+        uint32_t wake_us = (uint32_t)((uint64_t)data->wake_int_mantissa << data->wake_int_exp);
+        LOG_DRV_INFO("TWT negotiated: wake_int=%luus dur=%u(unit=%u) nego=%u flow_id=%u",
+                     (unsigned long)wake_us, data->wake_duration, data->wake_duration_unit,
+                     data->negotiation_type, data->twt_flow_id);
+    }
+    if (s_twt_cb_sem != NULL) osSemaphoreRelease(s_twt_cb_sem);
+    return SL_STATUS_OK;
+}
+
+// TWT setup/teardown. Gates on remote wakeup mode (TWT is a remote-wakeup
+// power-save feature). Uses the SDK auto-select API: throughput/latency hints in
+// cfg (or SDK defaults when NULL) drive the firmware's wake-interval/duration
+// derivation. mode=SYNC blocks up to timeout_ms for the real AP-negotiation
+// result instead of the meaningless command-accepted status; mode=ASYNC returns
+// immediately. Pre-condition: active Wi-Fi client connection (SDK-validated).
+int sl_net_netif_twt_ctrl(uint8_t enable, const sl_net_twt_config_t *cfg,
+                          sl_net_twt_mode_t mode, uint32_t timeout_ms)
+{
+    sl_status_t status;
+    // Use the public v2 API. Measured: only average_tx_throughput/tx_latency/
+    // rx_latency affect the negotiated schedule (wake_int ∝ 1/throughput); the
+    // internal fields (default_wake_interval_ms etc.) are ignored by firmware, so
+    // v2's hardcoded internal defaults are harmless. The sli_ lower layer is
+    // SDK-private and the v1 API is @deprecated — prefer v2.
+    sl_wifi_twt_selection_v2_t twt = {
+        .twt_enable = enable ? 1 : 0,
+    };
+
+    if (sl_net_thread_ID == NULL) return SL_STATUS_INVALID_STATE;
+
+    osMutexAcquire(sl_net_mutex, osWaitForever);
+    if (remote_wakeup_mode == WAKEUP_MODE_NORMAL) {
+        osMutexRelease(sl_net_mutex);
+        return SL_STATUS_INVALID_STATE;
+    }
+
+    // Lazy one-time setup of the result semaphore + response callback (wifi is up
+    // at this point, so the callback registration is valid).
+    if (!s_twt_cb_inited) {
+        s_twt_cb_sem = osSemaphoreNew(4, 0, NULL);
+        sl_wifi_set_twt_config_callback_v2(sl_net_twt_response_cb, NULL);
+        s_twt_cb_inited = 1;
+    }
+    // SYNC: drain stale tokens before sending so the next token is from this op.
+    if (mode == SL_NET_TWT_SYNC) {
+        while (osSemaphoreAcquire(s_twt_cb_sem, 0) == osOK) { /* drain */ }
+    }
+
+    if (enable && cfg != NULL) {
+        twt.average_tx_throughput = cfg->average_tx_throughput;
+        twt.tx_latency            = cfg->tx_latency;
+        twt.rx_latency            = cfg->rx_latency;
+    }
+    LOG_DRV_INFO("TWT req: thr=%lu tx_lat=%lums rx_lat=%lums",
+                 (unsigned long)twt.average_tx_throughput, (unsigned long)twt.tx_latency,
+                 (unsigned long)twt.rx_latency);
+    status = sl_wifi_target_wake_time_auto_selection_v2(&twt);
+    osMutexRelease(sl_net_mutex);
+
+    if (status != SL_STATUS_OK) {
+        LOG_DRV_ERROR("TWT command rejected: 0x%lX\r\n", (unsigned long)status);
+        return status;   // firmware refused the command itself
+    }
+    if (mode == SL_NET_TWT_ASYNC) return SL_STATUS_OK;   // command accepted
+
+    // SYNC: block for the AP-negotiation callback (outside the mutex).
+    if (osSemaphoreAcquire(s_twt_cb_sem, timeout_ms) != osOK) {
+        LOG_DRV_ERROR("TWT sync wait timed out (%lu ms)\r\n", (unsigned long)timeout_ms);
+        return SL_STATUS_TIMEOUT;
+    }
+    int ok = enable ? (s_twt_cb_event == SL_WIFI_TWT_UNSOLICITED_SESSION_SUCCESS_EVENT
+                       // 0x9 generic response: this AP/firmware combo reports TWT setup
+                       // success as the base event instead of SESSION_SUCCESS. Confirmed
+                       // by the firmware returning 0x10071 ("session already active") on
+                       // any subsequent twt command.
+                       || s_twt_cb_event == SL_WIFI_TWT_RESPONSE_EVENT)
+                    : (s_twt_cb_event == SL_WIFI_TWT_TEARDOWN_SUCCESS_EVENT
+                       || s_twt_cb_event == SL_WIFI_TWT_AP_TEARDOWN_SUCCESS_EVENT);
+    if (!ok) {
+        LOG_DRV_ERROR("TWT %s failed: %s (0x%lX)\r\n",
+                      enable ? "setup" : "teardown",
+                      sl_net_twt_event_name(s_twt_cb_event), (unsigned long)s_twt_cb_status);
+    }
+    if (ok) return SL_STATUS_OK;
+    return (s_twt_cb_status != SL_STATUS_OK) ? s_twt_cb_status : SL_STATUS_FAIL;
 }
 
 // Resolve a host name to an IP address using DNS
@@ -2516,17 +3009,17 @@ sl_status_t sl_net_dns_resolve_hostname(const char *host_name,
     dns_query_request.ip_version[0] = (dns_resolution_ip == SL_NET_DNS_TYPE_IPV4) ? 4 : 6;
     memcpy(dns_query_request.url_name, host_name, sizeof(dns_query_request.url_name));
 
-    status = sli_si91x_driver_send_command(SLI_WLAN_REQ_DNS_QUERY,
+    status = sli_wifi_send_command(SLI_WIFI_REQ_DNS_QUERY,
         SLI_SI91X_NETWORK_CMD,
         &dns_query_request,
         sizeof(dns_query_request),
         wait_period,
         NULL,
-        &buffer);
+        (void **)&buffer);
 
     // Check if the command failed and free the buffer if it was allocated
     if ((status != SL_STATUS_OK) && (buffer != NULL)) {
-    sli_si91x_host_free_buffer(buffer);
+    sli_buffer_manager_free_buffer(buffer);
     }
     VERIFY_STATUS_AND_RETURN(status);
 
@@ -2536,7 +3029,7 @@ sl_status_t sl_net_dns_resolve_hostname(const char *host_name,
 
     // Convert the SI91X DNS response to the sl_ip_address format
     sli_convert_si91x_dns_response(sl_ip_address, dns_response);
-    sli_si91x_host_free_buffer(buffer);
+    sli_buffer_manager_free_buffer(buffer);
     return SL_STATUS_OK;
 }
 

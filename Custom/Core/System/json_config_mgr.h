@@ -224,6 +224,7 @@ typedef struct {
     uint32_t ap_sleep_time;                 // AP sleep time in seconds
     char ssid[32];                          // AP SSID
     char password[64];                      // AP password
+    char wifi_country_code[NETIF_WIFI_COUNTRY_CODE_LEN]; // Legacy WiFi region (e.g. "us","cn"); applied at next boot
     network_scan_result_t known_networks[16]; // Known network configuration
     uint32_t known_network_count;           // Known network count
     
@@ -620,7 +621,10 @@ typedef struct {
     uint16_t          schedule_minutes[CAPTURE_SCHEDULE_MAX_NODES]; /* 0..1439 */
 
     /* Housekeeping */
-    uint32_t          keep_sent_hours;        /* 0 = delete immediately on success; default 168 (7d) */
+    uint32_t          keep_sent_hours;        /* 0 = delete on upload success;
+                                               * CAPUP_KEEP_SENT_MAX_HOURS =
+                                               * keep forever (delete only on
+                                               * full / count cap); default = max */
     uint32_t          max_pending_records;    /* hard cap on queue length; default 200 */
 
     /* Wake-capture network: which netif to bring up on the wake path.
@@ -628,6 +632,16 @@ typedef struct {
      * COMM_TYPE_NONE (0) = default (use system comm-pref logic, init all). */
     uint32_t          upload_comm_type;
 } capture_upload_config_t;
+
+/* Upper bound of keep_sent_hours. A value >= this means "keep forever": no
+ * age-based purge at all - records are deleted ONLY by the storage-full or
+ * record-count-limit cleanup. This protects history on user-swapped SD cards
+ * (a time purge must not delete records it didn't create just for being old).
+ * 0 keeps its original meaning: delete immediately after a successful upload.
+ * Overflow audit: the only arithmetic on this field is
+ * (uint64_t)keep_sent_hours * 3600 in purge_old_sent - 72000h * 3600 =
+ * 259,200,000s, fits uint32 (let alone the uint64 it's computed in). */
+#define CAPUP_KEEP_SENT_MAX_HOURS  (72000u)   /* ~= 8.2 years; sentinel = keep forever */
 
 // RTMP config is now part of video_stream_mode_config_t
 // These macros are kept for compatibility

@@ -6,6 +6,7 @@
 #endif
 
 #include "netif_manager.h"
+#include "sl_status.h"  /* SL_STATUS_* codes returned by the region helpers below */
 
 /**************************************** WiFi Network Interface Related Interfaces *******************************************/
 int sl_net_client_netif_init(void);
@@ -34,14 +35,66 @@ typedef enum {
 } sl_net_wakeup_mode_t;
 
 int sl_net_netif_init(void);
+/// @brief Skip the fw < 2.16.5 DHCP-server compatibility check for STA-only
+///        boots (fast wakeup path). Call before netif init; the check still
+///        runs before the AP is initialized. No-op in non-self-DHCP builds.
+void sl_net_netif_skip_fw_dhcps_compat_check(void);
 sl_net_wakeup_mode_t sl_net_netif_get_wakeup_mode(void);
 int sl_net_netif_romote_wakeup_mode_ctrl(sl_net_wakeup_mode_t wakeup_mode);
 int sl_net_netif_filter_broadcast_ctrl(uint8_t enable);
-int sl_net_netif_low_power_mode_ctrl(uint8_t enable);
+/// @brief Low-power-mode tuning knobs for connected-sleep power testing. When
+///        cfg is NULL the function keeps the SDK's existing defaults. NOTE:
+///        listen_interval is intentionally omitted — it only takes effect when
+///        SL_WIFI_JOIN_FEAT_PS_CMD_LISTEN_INTERVAL_VALID is set at join time, so
+///        it is not a runtime knob. Use num_of_dtim_skip to stretch sleep instead.
+typedef struct {
+    uint8_t  profile;                  ///< 0 = LOW_LATENCY / FAST PSP (default), 1 = ASSOCIATED_POWER_SAVE / MAX PSP.
+    uint8_t  num_of_dtim_skip;         ///< DTIM beacons to skip between wakes (0 = none).
+    uint16_t monitor_interval;         ///< Monitor interval, ms; LOW_LATENCY only (0 = SDK default 50).
+    uint8_t  beacon_miss_ignore_limit; ///< Missed beacons tolerated in sleep (1-10; 0 = default 1).
+} sl_net_lpwr_config_t;
+
+int sl_net_netif_low_power_mode_ctrl(uint8_t enable, const sl_net_lpwr_config_t *cfg);
+
+/// @brief TWT (Target Wake Time) auto-selection config. Only the throughput /
+///        latency hints below are effective; the SDK derives the wake interval
+///        and service-period duration from them. Mirrors the v2 SDK struct.
+typedef struct {
+    uint16_t average_tx_throughput; ///< Expected avg Tx throughput, Kbps (0-10000 = 0-10 Mbps).
+    uint32_t tx_latency;            ///< Allowed Tx latency, ms (0 = same as rx_latency; else 200 ms - 6 h).
+    uint32_t rx_latency;            ///< Max RX latency, ms (0 = SDK default 2 s; else 2 s - 6 h).
+} sl_net_twt_config_t;
+
+/// @brief TWT call mode. ASYNC returns as soon as the firmware accepts the config
+///        command (the real AP-negotiation outcome arrives later via the TWT
+///        response callback); SYNC blocks until that callback fires (or timeout).
+typedef enum {
+    SL_NET_TWT_ASYNC = 0,
+    SL_NET_TWT_SYNC  = 1,
+} sl_net_twt_mode_t;
+
+/// @brief Enable/disable TWT. enable=1 sets up a session using cfg (SDK defaults
+///        when NULL); enable=0 tears down. mode=SYNC blocks up to timeout_ms for
+///        the real AP-negotiation result instead of the meaningless
+///        command-accepted status; mode=ASYNC returns immediately. Only valid in
+///        remote wakeup mode (SL_STATUS_INVALID_STATE in WAKEUP_MODE_NORMAL);
+///        requires an active Wi-Fi client connection.
+int sl_net_netif_twt_ctrl(uint8_t enable, const sl_net_twt_config_t *cfg,
+                          sl_net_twt_mode_t mode, uint32_t timeout_ms);
+
 int sl_net_netif_ctrl(const char *if_name, netif_cmd_t cmd, void *param);
 int sl_net_start_scan(wireless_scan_callback_t callback);
 wireless_scan_result_t *sl_net_get_strorage_scan_result(void);
 int sl_net_update_strorage_scan_result(uint32_t timeout_ms);
+
+/**************************************** WiFi Region (Country) Code *******************************************/
+/// @brief Configure WiFi region code. Only effective when both WiFi netifs are DEINIT
+///        (applied at the next init). Strings: "us","eu","jp","world","kr","cn".
+int sl_net_wifi_set_region_code(const char *country_code);
+/// @brief Get the currently active WiFi region string.
+int sl_net_wifi_get_region_code(char *buf, size_t len);
+uint32_t sl_net_wifi_get_supported_region_count(void);
+int sl_net_wifi_get_region_code_by_index(uint32_t idx, char *buf, size_t len);
 
 void sli_firmware_error_callback(int error_code);
 /***************************************************************************************************/

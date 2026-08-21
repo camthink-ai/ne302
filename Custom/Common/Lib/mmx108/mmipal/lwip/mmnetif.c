@@ -142,7 +142,7 @@ static void mmnetif_vif_state(const struct mmwlan_vif_state *state, void *arg)
             {
                 vifname = "AP";
             }
-            printf("Morse %s interface up with MAC address %02x:%02x:%02x:%02x:%02x:%02x\n",
+            printf("Morse %s interface up with MAC address %02x:%02x:%02x:%02x:%02x:%02x\r\n",
                    vifname,
                    netif->hwaddr[0],
                    netif->hwaddr[1],
@@ -269,7 +269,7 @@ err_t mmnetif_init(struct netif *netif)
     status = mmwlan_register_vif_state_cb(MMWLAN_VIF_UNSPECIFIED, mmnetif_vif_state, netif);
     MMOSAL_ASSERT(status == MMWLAN_SUCCESS);
 
-    printf("Morse LwIP interface initialised.\n");
+    printf("Morse LwIP interface initialised.\r\n");
 
     initialised = true;
 

@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import captureSettings, {
   type RecordInfo, type RecordState, type QueueStatus,
 } from '@/services/api/captureSettings';
-import fileManagement from '@/services/api/fileManagement';
+import fileManagement, { PREVIEW_IMAGE_MAX_SIZE } from '@/services/api/fileManagement';
 import type { FsType } from '@/services/api/fileManagement';
 
 function formatTimestamp(ts: number): string {
@@ -132,6 +132,20 @@ to: appliedTo,
       const res: any = await fileManagement.preview(fsType, path, true);
       const blob = res instanceof Blob ? res : res?.data;
       if (blob instanceof Blob) {
+        /* Backend returns a JSON {too_large:true} error (as a blob, since we
+         * requested responseType blob) when the image exceeds the preview
+         * limit — detect it instead of rendering a broken image. Primary is
+         * pre-checked by size, but inference size isn't tracked, so catch it
+         * here. */
+        if (blob.type && blob.type.includes('json')) {
+          try {
+            const j = JSON.parse(await blob.text());
+            if (j && j.too_large) {
+              toast.error(i18n._('sys.capture_settings.preview_too_large') ?? 'Exceeds preview size');
+              return;
+            }
+          } catch { /* not a JSON error — fall through and render */ }
+        }
         setPreviewUrl(URL.createObjectURL(blob));
       } else {
         toast.error(i18n._('sys.capture_settings.preview_failed') ?? 'Preview failed');
@@ -419,9 +433,15 @@ to: appliedTo,
 
           {/* Row 2: action buttons */}
           <div className="flex gap-2 mt-1 ml-6">
-            <Button variant="outline" size="sm" onClick={() => previewImage(r, 'p')}>
-              {i18n._('sys.capture_settings.preview_primary')}
-            </Button>
+            {r.size > PREVIEW_IMAGE_MAX_SIZE ? (
+              <span className="text-xs text-gray-400 self-center">
+                🚫 {i18n._('sys.capture_settings.preview_too_large')}
+              </span>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => previewImage(r, 'p')}>
+                {i18n._('sys.capture_settings.preview_primary')}
+              </Button>
+            )}
             {r.has_inference && (
               <Button variant="outline" size="sm" onClick={() => previewImage(r, 'i')}>
                 {i18n._('sys.capture_settings.preview_inference')}

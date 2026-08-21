@@ -449,6 +449,41 @@ static FS_Type_t resolve_storage_target(capture_storage_t cs)
     }
 }
 
+/* AUTO storage: track SD hot-plug between config reloads. resolve_storage_target
+ * only runs at init/reload, so without this a card inserted after boot never
+ * becomes the capture target until reboot. Upgrade to SD only once the media is
+ * actually OPEN (usable); fall back to FLASH only when the card is physically
+ * ABSENT - never during the async fx_media_open window at boot. persist_record
+ * re-runs ensure_dirs itself, so switching is just the enum write. Called from
+ * enqueue_capture (captures land on the new target) and get_status (UI
+ * actual_fs tracks the card). Both checks are flag/GPIO reads - no IO. */
+static void auto_storage_track(void)
+{
+    if (g_up.cfg.storage != CAPTURE_STORE_AUTO || !g_up.initialized) return;
+    if (g_up.active_fs == FS_FLASH && sd_is_media_open()) {
+        g_up.active_fs = FS_SD;
+        /* storage_full is per-volume ("THIS volume rejected a write") - the
+         * flag recorded the old volume's state and must not leak onto the new
+         * one (STOP guard would reject writes to a fresh SD forever). If the
+         * new volume is actually full, the first persist fails and re-sets.
+         * The RAM count cache holds the OLD volume's manifest counts - get_status
+         * would keep serving them (it only rebuilds when dirty), same trap as
+         * reload_config, which invalidates for the same reason. */
+        storage_full_set(AICAM_FALSE);
+        g_count_cache_dirty = true;
+        LOG_SVC_INFO("upload: auto storage switched to SD (hot-plug)");
+    } else if (g_up.active_fs == FS_SD && !sd_is_media_open() && !sd_is_detected()) {
+        /* sd_is_detected() debounces (5x osDelay(1) = ~5ms) - gate it behind the
+         * free sd_is_media_open() RAM read so the steady state (card in, media
+         * open) never pays it. media-open-false + card-present is the boot
+         * fx_media_open window: correctly no downgrade there. */
+        g_up.active_fs = FS_FLASH;
+        storage_full_set(AICAM_FALSE);   /* same: flag belonged to the SD */
+        g_count_cache_dirty = true;
+        LOG_SVC_INFO("upload: auto storage fell back to FLASH (SD removed)");
+    }
+}
+
 /* Non-blocking FS readiness check for ensure_dirs. Returns true only when the
  * backing FS is actually mounted/open - so the init-time call (SD media may
  * still be opening asynchronously in sdProcess) does NOT cache a failed mkdir
@@ -514,7 +549,7 @@ static aicam_result_t ensure_dirs(FS_Type_t fs)
              * cleanup_for_space + retry futile (a ~30s hang on a full FS). Leaving
              * s_ensured_fs unset lets the retry re-create the tree once cleanup
              * has freed space. */
-            LOG_SVC_ERROR("ensure_dirs: mkdir failed path=%s", dirs[i]);
+            LOG_SVC_ERROR("ensure_dirs: mkdir failed fs=%d path=%s", fs, dirs[i]);
             ret = AICAM_ERROR;
         }
     }
@@ -1542,6 +1577,13 @@ static aicam_result_t purge_visitor(FS_Type_t fs, const char *id, void *user)
 
 static aicam_result_t purge_old_sent(FS_Type_t fs)
 {
+    /* CAPUP_KEEP_SENT_MAX_HOURS (72000) = keep forever: no age-based purge.
+     * Records are then deleted ONLY by storage-full (cleanup_for_space) or the
+     * FLASH record-count cap (cleanup_for_count). This is the default - a time
+     * purge must not delete history it didn't create just because a user
+     * swapped in an old SD card. 0 keeps its meaning: delete on upload. */
+    if (g_up.cfg.keep_sent_hours >= CAPUP_KEEP_SENT_MAX_HOURS) return AICAM_OK;
+
     uint64_t now = now_unix();
     uint64_t cutoff_secs = (uint64_t)g_up.cfg.keep_sent_hours * 3600u;
     /* keep_sent_hours=0 → cutoff_ts = now → delete all sent.
@@ -1580,7 +1622,10 @@ static aicam_result_t record_load(FS_Type_t fs, const char *id,
     struct stat st = {0};
     if (disk_file_stat(fs, img_path, &st) != 0 || st.st_size <= 0) {
         cJSON_Delete(*out_meta); *out_meta = NULL;
-        return AICAM_ERROR;
+        /* Distinct code so callers can tell "source image gone" (permanent)
+         * from other load failures (transient) and fail the record outright
+         * instead of retrying it forever. */
+        return AICAM_ERROR_NOT_FOUND;
     }
     uint8_t *jpeg = (uint8_t *)buffer_calloc(1, (size_t)st.st_size);
     if (!jpeg) { cJSON_Delete(*out_meta); *out_meta = NULL; return AICAM_ERROR_NO_MEMORY; }
@@ -1652,6 +1697,35 @@ static void record_mark_failed(FS_Type_t fs, const char *id, const char *err)
     }
 }
 
+/* Source image missing/unreadable — the record can never be uploaded, so this
+ * is a PERMANENT failure (not a transient network error). Bump retry, record
+ * the reason, and move straight to FAILED unconditionally (don't gate on
+ * retry_max_attempts). Without this, such a record stuck in PENDING forever:
+ * the load bailed before the normal retry-bump path, so retry_count never
+ * advanced and the flush pass retried it on every pass for nothing. */
+static void record_mark_source_missing(FS_Type_t fs, const char *id)
+{
+    char meta_path[128];
+    path_for_meta(meta_path, sizeof(meta_path), id);
+    cJSON *meta = NULL;
+    if (parse_meta_file(fs, meta_path, &meta) != AICAM_OK) return;
+
+    cJSON *rt = cJSON_GetObjectItem(meta, "retry_count");
+    int retry = (rt ? (int)rt->valueint : 0) + 1;
+    cJSON_ReplaceItemInObject(meta, "retry_count", cJSON_CreateNumber(retry));
+    cJSON_ReplaceItemInObject(meta, "last_error", cJSON_CreateString("source_image_missing"));
+
+    char tmp_path[136];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", meta_path);
+    if (write_meta_json(fs, tmp_path, meta) == AICAM_OK) {
+        if (disk_file_rename(fs, tmp_path, meta_path) != 0) (void)disk_file_remove(fs, tmp_path);
+    }
+    cJSON_Delete(meta);
+
+    (void)move_record(fs, id, RECORD_STATE_PENDING, RECORD_STATE_FAILED);
+    LOG_SVC_WARN("upload: %s source image missing — moved to FAILED", id);
+}
+
 /* MQTT pipeline publish: load + publish (no ack wait). On success returns
  * AICAM_OK and *out_msg_id = the MQTT packet id. On failure bumps retry and
  * returns the error. Caller frees nothing - jpeg is freed internally. */
@@ -1666,6 +1740,7 @@ static aicam_result_t record_publish_mqtt(FS_Type_t fs, const char *id, int *out
     upload_proto_t proto = UPLOAD_PROTO_MQTT;
 
     aicam_result_t r = record_load(fs, id, &meta, &jpeg, &jpeg_size, &m, &proto);
+    if (r == AICAM_ERROR_NOT_FOUND) { record_mark_source_missing(fs, id); return r; }
     if (r != AICAM_OK) return r;
 
     aicam_result_t result = AICAM_ERROR;
@@ -1821,6 +1896,7 @@ static aicam_result_t upload_one_record_webhook(FS_Type_t fs, const char *id)
     upload_proto_t proto = UPLOAD_PROTO_WEBHOOK;
 
     aicam_result_t r = record_load(fs, id, &meta, &jpeg, &jpeg_size, &m, &proto);
+    if (r == AICAM_ERROR_NOT_FOUND) { record_mark_source_missing(fs, id); return r; }
     if (r != AICAM_OK) return r;
 
     aicam_result_t result = AICAM_ERROR;
@@ -1874,7 +1950,10 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id,
     path_for_data(img_path, sizeof(img_path), id, 'p');
     struct stat st = {0};
     if (disk_file_stat(fs, img_path, &st) != 0 || st.st_size <= 0) {
+        /* Source image gone — permanent failure. Mark FAILED so it leaves
+         * PENDING instead of retrying forever (see record_mark_source_missing). */
         cJSON_Delete(meta);
+        record_mark_source_missing(fs, id);
         return AICAM_ERROR;
     }
     uint8_t *jpeg = (uint8_t *)buffer_calloc(1, (size_t)st.st_size);
@@ -2390,7 +2469,13 @@ aicam_result_t upload_coordinator_init(void *config)
 
     if (g_up.active_fs != FS_MAX) {
         ensure_dirs_with_space_check(g_up.active_fs);
-        rebuild_index_if_needed(g_up.active_fs);
+        /* Only probe the index when the backing FS is actually ready.
+         * Otherwise (e.g. SD media still opening in sdProcess) disk_file_stat
+         * fails and rebuild_index_if_needed logs a misleading "index dir
+         * missing" warning every boot even though the tree is fine. */
+        if (fs_ready_for_dirs(g_up.active_fs)) {
+            rebuild_index_if_needed(g_up.active_fs);
+        }
     }
     uint64_t t4 = rtc_get_uptime_ms();
 
@@ -2769,6 +2854,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
     snprintf(id, sizeof(id), "cap_%08lu_%05u", (unsigned long)ts, (unsigned)seq);
 
     capture_mode_t mode = g_up.cfg.mode;
+    auto_storage_track();
     FS_Type_t fs = g_up.active_fs;
 
     /* INSTANT + storage=NONE → in-memory upload only, no persistence needed. */
@@ -2813,11 +2899,29 @@ aicam_result_t upload_coordinator_enqueue_capture(
      * lfs_file_write, 10-30s). For INSTANT, skip the doomed write and upload
      * direct from RAM. Other modes: reject now instead of after the hang. */
     if (g_up.storage_full && g_up.cfg.policy == STORAGE_POLICY_STOP) {
-        if (mode == CAPTURE_MODE_INSTANT) {
-            UPLOAD_LOG("storage_full + STOP - INSTANT fast-path, direct publish\r\n");
-            return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in, ai_result);
+        /* The flag can outlive its cause on SD without any web poll: card
+         * swapped for an empty one, or files deleted on a PC. FileX keeps the
+         * free byte count in RAM, so this re-check is O(1) - no FAT scan.
+         * FLASH deliberately NOT probed here: its free check is a full
+         * lfs_fs_size traverse (seconds with many files) - too slow for the
+         * wake path; flash-side staleness is handled by the get_status poll
+         * and the auto_storage_track volume-switch clear. */
+        if (fs == FS_SD) {
+            uint64_t free_b = 0, total_b = 0;
+            if (get_storage_free_bytes(fs, &free_b, &total_b) == AICAM_OK &&
+                free_b > CLEANUP_HEADROOM_BYTES) {
+                storage_full_set(AICAM_FALSE);
+                LOG_SVC_INFO("upload: storage_full cleared (SD now has %lu KB free)",
+                             (unsigned long)(free_b / 1024u));
+            }
         }
-        return AICAM_ERROR_NO_MEMORY;
+        if (g_up.storage_full) {
+            if (mode == CAPTURE_MODE_INSTANT) {
+                UPLOAD_LOG("storage_full + STOP - INSTANT fast-path, direct publish\r\n");
+                return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in, ai_result);
+            }
+            return AICAM_ERROR_NO_MEMORY;
+        }
     }
 
     /* FLASH record-count cap. LittleFS directory operations (opendir/readdir)
@@ -2932,11 +3036,11 @@ aicam_result_t upload_coordinator_get_status(upload_coordinator_status_t *out)
 {
     if (!out) return AICAM_ERROR_INVALID_PARAM;
     memset(out, 0, sizeof(*out));
+    auto_storage_track();
     out->mode = g_up.cfg.mode;
     out->storage = g_up.cfg.storage;
     out->initialized = g_up.initialized;
     out->running = g_up.running;
-    out->storage_full = g_up.storage_full;
     out->actual_fs = g_up.active_fs;
 
     FS_Type_t fs = g_up.active_fs;
@@ -2956,8 +3060,18 @@ aicam_result_t upload_coordinator_get_status(upload_coordinator_status_t *out)
         if (get_storage_free_bytes(fs, &free_b, &total_b) == AICAM_OK) {
             out->bytes_used_kb = (total_b - free_b) / 1024u;
             out->bytes_available_kb = free_b / 1024u;
+            /* storage_full is sticky: set on a failed write, cleared only by a
+             * successful write. With STOP policy the enqueue guard never lets a
+             * write through once the flag is set, so freeing space via the file
+             * manager (which doesn't notify this service) left it stuck on
+             * "storage full" forever - even across reboots (NVS-restored).
+             * Reality check with the probe we already ran: real headroom above
+             * CLEANUP_HEADROOM_BYTES means the flag is stale. */
+            if (g_up.storage_full && free_b > CLEANUP_HEADROOM_BYTES)
+                storage_full_set(AICAM_FALSE);
         }
     }
+    out->storage_full = g_up.storage_full;   /* after the staleness check above */
     wake_event_t ev;
     out->next_scheduled_at = wake_scheduler_next_event(now_unix(), 24 * 3600, &ev);
     return AICAM_OK;

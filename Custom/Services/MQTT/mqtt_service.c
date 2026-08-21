@@ -3766,6 +3766,12 @@ static aicam_bool_t mqtt_build_topics(const char *mac_str, mqtt_service_config_t
     char mac_hex[7];
     snprintf(mac_hex, sizeof(mac_hex), "%02X%02X%02X", m[3], m[4], m[5]);
 
+    if (strcmp(cfg->base_config.client_id, "AICAM-000000") == 0) {
+        snprintf(cfg->base_config.client_id, sizeof(cfg->base_config.client_id),
+                 "NE302-%s", mac_hex);
+        changed = AICAM_TRUE;
+    }
+
     // simplify condition judgment logic
     if (cfg->data_receive_topic[0] == '\0' ||
         strcmp(cfg->data_receive_topic, "aicam/data/receive") == 0)
@@ -3813,10 +3819,7 @@ void mqtt_service_update_client_id_and_topic(void)
         buffer_free(mqtt_config);
         return;
     }
-    if (strcmp(mqtt_config->base_config.client_id, "AICAM-000000") == 0) {
-        snprintf(mqtt_config->base_config.client_id, sizeof(mqtt_config->base_config.client_id), "NE302-%06X", (unsigned int)rtc_get_timeStamp());
-        changed = AICAM_TRUE;
-    }
+    // Client ID sentinel is rewritten with the MAC suffix inside mqtt_build_topics()
 
     //get device mac address
     device_info_config_t* device_info = (device_info_config_t*)buffer_calloc(1, sizeof(device_info_config_t));

@@ -100,6 +100,7 @@ typedef enum {
     CAM_CMD_GET_STARTUP_SKIP_FRAMES,    // Get current startup skip frames setting
     CAM_CMD_UNSHARE_PIPE1_BUFFER,
     CAM_CMD_UNSHARE_PIPE2_BUFFER,
+    CAM_CMD_APPLY_ISP_IQ,  // Hot-swap ISP IQ params on a running pipeline
 } CAM_CMD_E;
 
 typedef enum {
@@ -226,5 +227,13 @@ void camera_apply_grayscale_iq(ISP_IQParamTypeDef *iq, aicam_bool_t grayscale);
  * @brief Reserved: PIPE1 stays RGB565; grayscale is ISP-only (see camera_apply_grayscale_iq).
  */
 void camera_configure_pipe1_grayscale(pipe_params_t *pipe1, aicam_bool_t grayscale);
+
+/**
+ * @brief Apply ISP IQ parameters to running hardware registers (hot-swap).
+ * @param hIsp ISP handle (must not be NULL).
+ * @param iq New IQ parameters to write to hardware.
+ * @return AICAM_OK on success, AICAM_ERROR_INVALID_PARAM if hIsp or iq is NULL.
+ */
+int camera_apply_isp_iq_runtime(ISP_HandleTypeDef *hIsp, ISP_IQParamTypeDef *iq);
 
 #endif

@@ -211,13 +211,13 @@ export default function Light() {
                {lightConfig?.connected && (
                   <>
                      <Separator />
-                     <div className="flex justify-between">
-                        <Label>{i18n._('sys.hardware_management.fill_light')}</Label>
+                     <div className="flex justify-between gap-2">
+                        <Label className="shrink-0">{i18n._('sys.hardware_management.fill_light')}</Label>
                         <Select value={lightConfig.mode} onValueChange={handleSetMode}>
                            <SelectTrigger className=" bg-transparent border-0 !shadow-none !outline-none
                                   focus:!outline-none focus:!ring-0 focus:!ring-offset-0 focus:!shadow-none focus:!border-transparent
                                   focus-visible:!outline-none focus-visible:!ring-0 focus-visible:!ring-offset-0
-                                  text-right"
+                                  text-right min-w-0"
                            >
                               <SelectValue
                                 placeholder={i18n._('sys.hardware_management.fill_light_desc')}

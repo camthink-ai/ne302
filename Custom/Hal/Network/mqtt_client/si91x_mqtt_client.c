@@ -465,6 +465,19 @@ int si91x_mqtt_client_connnect_sync(uint32_t timeout_ms)
 
 int si91x_mqtt_client_publish(const char *topic, const char *data, int data_len, int qos, int retain)
 {
+    /* Si91x embedded MQTT commands go through the CE_TX pool (block =
+     * SLI_WIFI_EXTENDED_BLOCK_SIZE = 2324B). sli_wifi_send_command memcpy's the whole
+     * publish_request into this fixed block (data_length & 0xFFF). An oversized payload
+     * overflows it by ~46KB and corrupts the shared heap (incl. common pool metadata), so
+     * the next buffer alloc in the same call dereferences bad metadata -> HardFault.
+     * Confirmed by 3 crash backtraces: remote wakeup switches api_type=SI91X, then an image
+     * publish hits this path. Large payloads (images) must go via MS/socket. Limit sized
+     * with margin at 1800. */
+    if (data_len > 1800) {
+        LOG_DRV_ERROR("[SI91X MQTT]publish %dB > 1800 (CE_TX block 2324B), drop to avoid heap overflow\r\n", data_len);
+        return MQTT_ERR_SIZE;
+    }
+
     sl_status_t status = SL_STATUS_OK;
     sl_mqtt_client_message_t message_to_be_published = {0};
 
@@ -492,6 +505,13 @@ int si91x_mqtt_client_publish(const char *topic, const char *data, int data_len,
 
 int si91x_mqtt_client_publish_sync(const char *topic, const char *data, int data_len, int qos, int retain, uint32_t timeout_ms)
 {
+    /* Same as si91x_mqtt_client_publish -- CE_TX block is 2324B; an oversized
+     * payload overflows and corrupts the shared heap. */
+    if (data_len > 1800) {
+        LOG_DRV_ERROR("[SI91X MQTT]publish_sync %dB > 1800 (CE_TX block 2324B), drop to avoid heap overflow\r\n", data_len);
+        return MQTT_ERR_SIZE;
+    }
+
     sl_status_t status = SL_STATUS_OK;
     sl_mqtt_client_message_t message_to_be_published = {0};
 

@@ -854,6 +854,10 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save HaLow country code to NVS");
 
+    result = json_config_nvs_write_string(NVS_KEY_WIFI_COUNTRY_CODE, config->wifi_country_code);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save WiFi country code to NVS");
+
     result = json_config_nvs_write_string(NVS_KEY_HALOW_BSSID, config->halow_bssid);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save HaLow BSSID to NVS");
@@ -2126,6 +2130,10 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
     result = json_config_nvs_read_string(NVS_KEY_HALOW_COUNTRY_CODE, config->network_service.halow_country_code, sizeof(config->network_service.halow_country_code));
     if (result != AICAM_OK)
         json_config_nvs_write_string(NVS_KEY_HALOW_COUNTRY_CODE, config->network_service.halow_country_code);
+
+    result = json_config_nvs_read_string(NVS_KEY_WIFI_COUNTRY_CODE, config->network_service.wifi_country_code, sizeof(config->network_service.wifi_country_code));
+    if (result != AICAM_OK)
+        json_config_nvs_write_string(NVS_KEY_WIFI_COUNTRY_CODE, config->network_service.wifi_country_code);
 
     result = json_config_nvs_read_string(NVS_KEY_HALOW_BSSID, config->network_service.halow_bssid, sizeof(config->network_service.halow_bssid));
     if (result != AICAM_OK)

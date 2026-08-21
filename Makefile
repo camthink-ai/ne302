@@ -134,7 +134,7 @@ WAKECORE_VERSION_STR := $(call version_string,$(WAKECORE_VERSION),$(WAKECORE_EFF
 ######################################
 # WiFi Firmware Version (derived from the SiWG917 .rps file)
 ######################################
-# The WiFi firmware is a vendor .rps blob under Custom/Common/Lib/SiliconLabs_SDK/firmware;
+# The WiFi firmware is a vendor .rps blob under Custom/Common/Lib/SiliconLabs_SDK*/firmware;
 # its version is parsed from the filename (e.g. SiWG917-B.2.15.5.0.0.2.rps).
 # pack_to_hex.py --wifi-meta prints "<4part-version> <rps-stem>"; we pick the two tokens.
 __WIFI_META := $(shell python $(PKG_SCRIPT_DIR)/pack_to_hex.py --wifi-meta 2>/dev/null)

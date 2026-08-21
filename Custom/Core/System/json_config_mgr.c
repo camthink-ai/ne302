@@ -155,9 +155,10 @@
      },
      
      .network_service = {
-         .ap_sleep_time = 600,      // 10 minutes default sleep time
+         .ap_sleep_time = 0,        // Default AP sleep time (0 = no sleep)
          .ssid = "AICAM-AP",        // Default AP SSID
          .password = "",            // Default AP password
+         .wifi_country_code = "",   // Default: empty -> firmware default region (US)
          .known_network_count = 0,
          .preferred_comm_type = 0,  // No preferred type
          .enable_auto_priority = AICAM_TRUE,  // Enable auto priority
@@ -1633,7 +1634,7 @@ void json_config_capture_upload_defaults(capture_upload_config_t *config)
     config->retry_max_attempts   = 5;
     config->batch_count          = 10;
     config->schedule_node_count  = 0;
-    config->keep_sent_hours      = 168;     /* 7 days */
+    config->keep_sent_hours      = CAPUP_KEEP_SENT_MAX_HOURS;  /* keep forever; delete only on full/count cap */
     config->max_pending_records  = 200;
     config->upload_comm_type     = 0;  /* COMM_TYPE_NONE = default logic */
 }
@@ -1665,7 +1666,8 @@ aicam_result_t json_config_set_capture_upload_config(const capture_upload_config
     for (uint8_t i = 0; i < CAPTURE_SCHEDULE_MAX_NODES; i++) {
         if (norm.schedule_minutes[i] > 1439) norm.schedule_minutes[i] = 0;
     }
-    if (norm.keep_sent_hours > 24 * 30) norm.keep_sent_hours = 24 * 30;
+    if (norm.keep_sent_hours > CAPUP_KEEP_SENT_MAX_HOURS)
+        norm.keep_sent_hours = CAPUP_KEEP_SENT_MAX_HOURS;
     if (norm.max_pending_records == 0)  norm.max_pending_records = 200;
     if (norm.max_pending_records > 1000) norm.max_pending_records = 1000;
 

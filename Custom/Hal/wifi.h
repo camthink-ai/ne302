@@ -14,6 +14,16 @@
 
 #define NVS_KEY_WIFI_MODE           "wifi_mode"
 #define NVS_KEY_WIFI_UPDATE_TIMES   "wifi_update_times"
+/* Which image wifi_update_process() pushes on the next update boot:
+ *   FILE  = first-boot/recovery: load `siwg917` from the file system (SD),
+ *           fall back to flash if the file is absent.
+ *   FLASH = web OTA: use the .rps just written to WIFI_FW_BASE.
+ * Recorded by the trigger (wifi_enter_update_mode vs wifi_mark_update_pending)
+ * so the two paths don't share one order — otherwise a stray siwg917 on SD
+ * hijacks a web-uploaded firmware. */
+#define NVS_KEY_WIFI_FW_SOURCE      "wifi_fw_src"
+#define WIFI_FW_SOURCE_FILE         "file"
+#define WIFI_FW_SOURCE_FLASH        "flash"
 //! Type of FW update
 #define M4_FW_UPDATE  0 // Only Supported for SoC
 #define NWP_FW_UPDATE 1

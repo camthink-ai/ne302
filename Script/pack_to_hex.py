@@ -77,12 +77,12 @@ def find_latest_wifi_firmware(project_root: Path) -> Optional[Path]:
     """
     Find the latest WiFi firmware file (.rps file).
     """
-    wifi_dir = project_root / 'Custom' / 'Common' / 'Lib' / 'SiliconLabs_SDK' / 'firmware'
-    if not wifi_dir.exists():
-        return None
-    
-    # Find all matching .rps files
-    files = list(wifi_dir.glob('SiWG917-B.*.rps'))
+    # Search every SiliconLabs_SDK*/firmware dir so the active SDK's firmware is
+    # found regardless of its version-suffixed name (SiliconLabs_SDK, _4_1_1, ...).
+    lib_root = project_root / 'Custom' / 'Common' / 'Lib'
+    files = []
+    for wifi_dir in lib_root.glob('SiliconLabs_SDK*/firmware'):
+        files.extend(wifi_dir.glob('SiWG917-B.*.rps'))
     if not files:
         return None
     

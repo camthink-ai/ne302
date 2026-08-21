@@ -681,6 +681,66 @@ aicam_result_t file_upload_handler(http_handler_context_t *ctx)
     return ret;
 }
 
+/* Recursively remove a file or directory tree. Both LittleFS (lfs_remove) and
+ * FAT (fx_directory_delete) refuse to remove a non-empty directory, so deleting
+ * a populated folder means walking it, deleting every child (recursing into
+ * subdirs), then removing the now-empty directory itself.
+ *
+ * SD/FileX quirk: readdir iterates the media's GLOBAL default directory
+ * (sd_filex_opendir calls fx_directory_default_set and never restores it), so
+ * nesting opendir/readdir would clobber the parent's cursor. We therefore
+ * collect all child names up front, close the dir, THEN recurse.
+ *
+ * Returns 0 on full success, -1 on any failure (the tree may be partially
+ * deleted). Depth- and per-dir-count-capped to bound stack/heap use. */
+#define RM_MAX_DEPTH   16
+#define RM_MAX_ENTRIES 128
+static int remove_recursive(FS_Type_t fs, const char *path, int depth)
+{
+    struct stat st;
+    if (disk_file_stat(fs, path, &st) != 0) return -1;
+    if (!(st.st_mode & S_IFDIR)) {
+        return disk_file_remove(fs, path);                 /* regular file */
+    }
+    if (depth >= RM_MAX_DEPTH) return -1;                   /* too deep — bail */
+
+    char (*names)[256] = (char (*)[256])hal_mem_alloc_large((size_t)RM_MAX_ENTRIES * 256);
+    if (!names) return -1;
+    int n = 0;
+
+    void *dd = disk_file_opendir(fs, path);
+    if (!dd) { hal_mem_free(names); return -1; }
+    if (fs == FS_SD) {
+        sd_entry_t e;
+        while (disk_file_readdir(fs, dd, (char *)&e) > 0 && n < RM_MAX_ENTRIES) {
+            if (e.name[0] == '.' && (e.name[1] == '\0' ||
+                (e.name[1] == '.' && e.name[2] == '\0'))) continue;   /* "." / ".." */
+            strncpy(names[n], e.name, 255); names[n][255] = '\0';
+            n++;
+        }
+    } else {
+        flash_entry_t e;
+        while (disk_file_readdir(fs, dd, (char *)&e) > 0 && n < RM_MAX_ENTRIES) {
+            if (e.name[0] == '.' && (e.name[1] == '\0' ||
+                (e.name[1] == '.' && e.name[2] == '\0'))) continue;
+            strncpy(names[n], e.name, 255); names[n][255] = '\0';
+            n++;
+        }
+    }
+    disk_file_closedir(fs, dd);                              /* close BEFORE recursing */
+
+    int rc = 0;
+    for (int i = 0; i < n; i++) {
+        char child[MAX_PATH_LEN];
+        build_full_path(path, names[i], child, sizeof(child));
+        if (remove_recursive(fs, child, depth + 1) != 0) rc = -1;
+    }
+    hal_mem_free(names);
+
+    if (disk_file_remove(fs, path) != 0) rc = -1;           /* remove now-empty dir */
+    return rc;
+}
+
 /**
  * @brief DELETE /api/v1/files?fs=flash|sd&path=/file.txt
  */
@@ -694,6 +754,9 @@ aicam_result_t file_delete_handler(http_handler_context_t *ctx)
     char file_path[MAX_PATH_LEN] = {0};
     get_query_param(ctx, "fs", fs_str, sizeof(fs_str));
     get_query_param(ctx, "path", file_path, sizeof(file_path));
+    char recursive_str[8] = {0};
+    get_query_param(ctx, "recursive", recursive_str, sizeof(recursive_str));
+    bool recursive = (strcmp(recursive_str, "true") == 0);
 
     if (file_path[0] == '\0') {
         return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "File path is required");
@@ -710,14 +773,17 @@ aicam_result_t file_delete_handler(http_handler_context_t *ctx)
         return api_response_error(ctx, API_ERROR_NOT_FOUND, "File not found");
     }
 
-    // Cannot delete root or a non-empty directory through this API (safety)
-    if (st.st_mode & S_IFDIR) {
-        return api_response_error(ctx, API_ERROR_INVALID_REQUEST,
-                                  "Use DELETE with ?recursive=true to delete directories");
-    }
-
-    int result = disk_file_remove(fs_type, file_path);
+    bool is_dir = (st.st_mode & S_IFDIR) != 0;
+    /* recursive=true on a directory → walk and delete the whole tree (both
+     * filesystems reject remove() on a non-empty dir). Otherwise a plain
+     * remove: empty dirs succeed, non-empty dirs fail with DIR_NOT_EMPTY. */
+    int result = (is_dir && recursive) ? remove_recursive(fs_type, file_path, 0)
+                                       : disk_file_remove(fs_type, file_path);
     if (result != 0) {
+        if (is_dir) {
+            return api_response_error(ctx, API_BUSINESS_ERROR_DIR_NOT_EMPTY,
+                                      "Failed to delete folder; it may be non-empty or in use");
+        }
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to delete file");
     }
 

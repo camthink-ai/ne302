@@ -332,7 +332,7 @@ export default function Graphics() {
                                 <div>
                                   <p>
                                     {i18n._(
-                                      'sys.hardware_management.camera_config_reboot_hint'
+                                      'sys.hardware_management.isp_mode_hint'
                                     )}
                                   </p>
                                 </div>
@@ -348,9 +348,9 @@ export default function Graphics() {
                                 await setHardwareInfoReq(
                                   buildImageConfigRequest({ isp_mode: next })
                                 );
-                                toast.warning(
+                                toast.success(
                                   i18n._(
-                                    'sys.hardware_management.isp_mode_reboot_toast'
+                                    'sys.hardware_management.isp_mode_applied_toast'
                                   )
                                 );
                               } catch (error) {
@@ -358,7 +358,7 @@ export default function Graphics() {
                               }
                             }}
                           >
-                            <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 w-fit">
+                            <SelectTrigger className="border-0 shadow-none focus-visible:ring-0 w-fit min-w-0">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -491,9 +491,9 @@ export default function Graphics() {
                                 await setHardwareInfoReq(
                                   buildImageConfigRequest({ grayscale: checked })
                                 );
-                                toast.warning(
+                                toast.success(
                                   i18n._(
-                                    'sys.hardware_management.grayscale_reboot_hint'
+                                    'sys.hardware_management.grayscale_applied_hint'
                                   )
                                 );
                               } catch (error) {

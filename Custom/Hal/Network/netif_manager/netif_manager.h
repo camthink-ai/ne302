@@ -16,7 +16,7 @@
 
 #define NETIF_WIFI_STA_DEFAULT_SSID         "CAMTHINK_DEV"
 #define NETIF_WIFI_STA_DEFAULT_PW           "12345678."
-#define NETIF_WIFI_STA_DEFAULT_DHCP_TIMEOUT (30000)
+#define NETIF_WIFI_STA_DEFAULT_DHCP_TIMEOUT (15000)
 #define NETIF_WIFI_STA_DEFAULT_IP           0xC86EA8C0      // 192.168.110.200
 #define NETIF_WIFI_STA_DEFAULT_MASK         0x00FFFFFF      // 255.255.255.0
 #define NETIF_WIFI_STA_DEFAULT_GW           0x016EA8C0      // 192.168.110.1
@@ -30,7 +30,7 @@
 #define NETIF_WIFI_AP_MAX_CLIENT_NUM        (5)
 
 #define NETIF_ETH_WAN_IS_ENABLE             (0)
-#define NETIF_ETH_WAN_DEFAULT_DHCP_TIMEOUT  (30000)
+#define NETIF_ETH_WAN_DEFAULT_DHCP_TIMEOUT  (15000)
 #define NETIF_ETH_WAN_DEFAULT_IP_MODE       (NETIF_IP_MODE_DHCP)
 #define NETIF_ETH_WAN_DEFAULT_IP            {192, 168, 60, 232}
 #define NETIF_ETH_WAN_DEFAULT_MASK          {255, 255, 255, 0}
@@ -42,7 +42,7 @@
 
 #define NETIF_4G_CAT1_IS_ENABLE             (0)
 #define NETIF_4G_CAT1_INIT_TIMEOUT_MS       (10000)
-#define NETIF_4G_CAT1_CNT_TIMEOUT_MS        (30000)
+#define NETIF_4G_CAT1_CNT_TIMEOUT_MS        (20000)
 #define NETIF_4G_CAT1_EXIT_TIMEOUT_MS       (10000)
 #define NETIF_4G_CAT1_EXIT_DELAY_MS         (500)
 #define NETIF_4G_CAT1_PPP_INTERVAL_MS       (1000)
@@ -204,6 +204,8 @@ typedef struct
 
 /** HaLow regdomain code buffer size (matches @ref MMWLAN_COUNTRY_CODE_LEN). */
 #define NETIF_HALOW_COUNTRY_CODE_LEN        (16U)
+/** Legacy WiFi region string buffer size ("world" + NUL, with headroom). */
+#define NETIF_WIFI_COUNTRY_CODE_LEN         (8U)
 
 #if NETIF_WIFI_HALOW_IS_ENABLE
 /// @brief HaLow (mmx108) extended wireless configuration

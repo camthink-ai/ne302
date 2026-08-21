@@ -36,7 +36,7 @@
  * triggers count-based cleanup (WRAP) or rejection (STOP). SD has no limit.
  * Exposed in the header so the web API can surface it in the upload-config
  * response for the UI. */
-#define FLASH_MAX_RECORDS       512u
+#define FLASH_MAX_RECORDS       256u
 
 #ifdef __cplusplus
 extern "C" {

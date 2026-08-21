@@ -103,10 +103,10 @@ static const char *get_mime_type(const char *filename) {
     const uint8_t *asset_flash = asset_data + 1024;
 
     // Validate header (while flash is locked against mode switches / concurrent writers)
-    storage_lock();
+    storage_lock_ext();
     const asset_bin_header_t* header = (const asset_bin_header_t*)asset_flash;
     if (strncmp(header->magic, "WEBASSETS", 8) != 0) {
-        storage_unlock();
+        storage_unlock_ext();
         return AICAM_ERROR_INVALID_DATA;
     }
 
@@ -118,12 +118,12 @@ static const char *get_mime_type(const char *filename) {
     // Copy the whole asset.bin payload into RAM so later accesses don't directly dereference flash-mapped addresses.
     g_asset_blob = (uint8_t*)buffer_calloc(1, asset_file_total_size);
     if (g_asset_blob == NULL) {
-        storage_unlock();
+        storage_unlock_ext();
         return AICAM_ERROR_NO_MEMORY;
     }
     g_asset_blob_size = asset_file_total_size;
     memcpy(g_asset_blob, asset_flash, asset_file_total_size);
-    storage_unlock();
+    storage_unlock_ext();
 
     g_asset_count = file_count;
     web_assets = (web_asset_t*)buffer_calloc(g_asset_count, sizeof(web_asset_t));

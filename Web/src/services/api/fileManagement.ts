@@ -54,6 +54,12 @@ export interface FileEditResponse {
 
 export type FsType = "flash" | "sd";
 
+/** Max image size the backend will preview. Must match
+ *  MAX_PREVIEW_SIZE_IMAGE (2 MB) in api_file_module.c — larger images get a
+ *  too_large JSON error instead of bytes, so the UI pre-checks and hides the
+ *  preview button rather than showing a broken image. */
+export const PREVIEW_IMAGE_MAX_SIZE = 2 * 1024 * 1024;
+
 const fileManagement = {
   /** List directory contents */
   listDir: (fs: FsType, dirPath: string = "/") => request.get("/api/v1/files/list", {

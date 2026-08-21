@@ -78,13 +78,15 @@ const systemSettings = {
     prioritizeNetworkReq: (data: { interface: string }) => request.post('/api/v1/system/network/comm/prioritize', data),
 
     // wifi
-    getNetworkSTAReq: () => request.get('/api/v1/system/network/wifi/sta'),
+    getNetworkSTAReq: (config?: { skipErrorToast?: boolean; signal?: AbortSignal }) => request.get('/api/v1/system/network/wifi/sta', config),
     getAPConfigReq: () => request.get('/api/v1/system/network/wifi/ap'),
     scanWifi: () => request.post('/api/v1/system/network/wifi/scan'),
     setWifi: (data: SetWifiReq) => request.post('/api/v1/system/network/wifi', data),
     setWifiConfig: (data: SetWifiConfigReq) => request.post('/api/v1/system/network/wifi/config', data),
     deleteWifi: (data: DeleteWifiReq) => request.post('/api/v1/system/network/wifi/delete', data),
     disconnectWifi: (data: { interface: string }) => request.post('/api/v1/system/network/wifi/disconnect', data),
+    getWifiRegionReq: () => request.get('/api/v1/system/network/wifi/region'),
+    setWifiRegionReq: (data: { region: string }) => request.put('/api/v1/system/network/wifi/region', data),
 
     // cellular
     getCellularStatusReq: () => request.get('/api/v1/system/network/cellular/status'),

@@ -268,15 +268,15 @@ export default function RtspConfig() {
             <Separator />
 
             {/* Auth mode */}
-            <div className="flex justify-between items-center py-2">
-              <Label className="text-sm text-text-primary">
+            <div className="flex justify-between items-center gap-2 py-2">
+              <Label className="text-sm text-text-primary shrink-0">
                 {i18n._('sys.device_tool.rtsp.auth_mode')}
               </Label>
               <Select
                 value={config.auth_mode}
                 onValueChange={v => setConfig({ ...config, auth_mode: v as RtspAuthMode })}
               >
-                <SelectTrigger className="bg-transparent border-0 !shadow-none !outline-none text-right">
+                <SelectTrigger className="bg-transparent border-0 !shadow-none !outline-none text-right min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -362,11 +362,11 @@ export default function RtspConfig() {
               <Label className="text-sm text-text-primary mb-2 block">
                 {i18n._('sys.device_tool.rtsp.stream_url')}
               </Label>
-              <div className="flex items-center gap-2 bg-gray-100 border border-dashed border-gray-300 rounded-md px-3 py-2">
+              <div className="flex items-center gap-2 min-w-0 overflow-hidden bg-gray-100 border border-dashed border-gray-300 rounded-md px-3 py-2">
                 <span className="text-sm text-orange-500 font-medium shrink-0">
                   {i18n._('sys.device_tool.rtsp.video_stream')}
                 </span>
-                <span className="flex-1 font-mono text-sm text-text-primary truncate select-all">
+                <span className="flex-1 min-w-0 font-mono text-sm text-text-primary truncate select-all">
                   {streamUrl}
                 </span>
                 <button

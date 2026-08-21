@@ -6,7 +6,7 @@
 #include "drtc.h"
 #include "mem_map.h"
 
-#define SD_CHUNK_SIZE           4096
+#define SD_CHUNK_SIZE           (32 * 1024)
 #define SD_CHUNK_ALIGN          32
 #define SD_CHUNK_TYPE           MEM_FAST
 
@@ -26,7 +26,7 @@ osSemaphoreId_t sd_sem_rx;
 
 
 /* USER CODE BEGIN 0 */
-
+static int sd_apply_speed_mode_locked(sd_speed_mode_e mode);   /* core: no media-open gate */
 /* USER CODE END 0 */
 
 /**
@@ -58,7 +58,18 @@ INT fx_stm32_sd_init(unsigned int instance)
 #endif
 
     /* USER CODE BEGIN POST_FX_SD_INIT */
-
+#if (FX_STM32_SD_INIT == 1)
+    /* Boot default: spec-compliant 50MHz High Speed. HAL_SD_Init leaves
+     * UHS-grade cards at CLKDIV=0 (~100MHz, out of spec) in Default Speed;
+     * normalize to HS. `sdswitch overclock` re-enters 100MHz for testing.
+     * Runs on every (re)insert: fx_media_close -> UNINIT clears the driver's
+     * is_initialized flag, so the next fx_media_open re-inits and re-applies. */
+    if (ret == 0) {
+        if (sd_apply_speed_mode_locked(SD_SPEED_HIGH) == 0) {
+            LOG_DRV_DEBUG("SD init: boot mode set to 50MHz HS\r\n");
+        }
+    }
+#endif
     /* USER CODE END POST_FX_SD_INIT */
 
     return ret;
@@ -462,13 +473,26 @@ int sd_filex_remove(void *context, const char *path)
     if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) return -1;
     sd_lock();
     UINT status = fx_file_delete(media, fx_path);
+    if (status == FX_NOT_A_FILE) {
+        /* fx_file_delete cannot remove a directory (returns FX_NOT_A_FILE).
+         * Retry with fx_directory_delete. Without this, any directory removal
+         * on SD — e.g. upload_coordinator's best-effort empty hour/date dir
+         * cleanup, and recursive folder delete — failed with 0x05 every time. */
+        status = fx_directory_delete(media, fx_path);
+    }
     if (status == FX_SUCCESS) {
         UINT fs = fx_media_flush(media);
         if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after delete failed: 0x%02X\r\n", fs);
     }
     sd_unlock();
     if (status != FX_SUCCESS) {
-        LOG_DRV_ERROR("fx_file_delete failed: 0x%02X, path=%s\r\n", status, path);
+        /* FX_DIR_NOT_EMPTY (0x10) is the expected outcome of best-effort
+         * empty-dir cleanup (e.g. deleting a record whose hour dir still holds
+         * other records) — not an error. Stay silent like flash's lfs_remove,
+         * which also returns failure for a non-empty dir without logging. */
+        if (status != FX_DIR_NOT_EMPTY) {
+            LOG_DRV_ERROR("fx delete failed: 0x%02X path=%s\r\n", status, path);
+        }
         return -(int)status;
     }
     return 0;
@@ -809,6 +833,8 @@ int sd_filex_mkdir(void *context, const char *path)
     if (status == FX_SUCCESS) {
         UINT fs = fx_media_flush(media);
         if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after mkdir failed: 0x%02X\r\n", fs);
+    } else {
+        LOG_DRV_ERROR("fx_directory_create failed: 0x%02X path=%s\r\n", status, fx_path);
     }
     sd_unlock();
     return (status == FX_SUCCESS) ? 0 : -1;
@@ -929,8 +955,13 @@ static void sdProcess(void *argument)
         }else{
             /* USER CODE BEGIN fx_app_thread_entry 1 */
             fx_media_close_notify_set(&sd->sdio_disk, media_close_callback);
-            sd->media_status = MEDIA_OPENED;
+            /* Register ops BEFORE publishing MEDIA_OPENED: sd_is_media_open()
+             * gates disk_file(FS_SD) callers (upload storage switch, count
+             * rebuild). If the flag went out first, a reader landing between
+             * the two would see "open" but instances[FS_SD].ops == NULL and
+             * cache an empty result (racy 0 record counts after hot-plug). */
             sd->file_ops_handle = file_ops_register(FS_SD, &sd_file_ops, &sd->sdio_disk);
+            sd->media_status = MEDIA_OPENED;
             sd->mode = SD_MODE_NORMAL;
             file_ops_switch(sd->file_ops_handle);
         }
@@ -956,13 +987,16 @@ static void sdProcess(void *argument)
                     sd->mode = SD_MODE_UNKNOWN;
                 }else{
                     fx_media_close_notify_set(&sd->sdio_disk, media_close_callback);
-                    sd->media_status = MEDIA_OPENED;
-                    sd->mode = SD_MODE_NORMAL;
+                    /* Same publish-last ordering as the boot open above:
+                     * register ops first, MEDIA_OPENED last - readers between
+                     * the two must not see "open" with no registered ops. */
                     if(sd->file_ops_handle == -1){
                         sd->file_ops_handle = file_ops_register(FS_SD, &sd_file_ops, &sd->sdio_disk);
                         LOG_DRV_DEBUG("SD file system register. :%d \r\n", sd->file_ops_handle);
                         file_ops_switch(sd->file_ops_handle);
                     }
+                    sd->media_status = MEDIA_OPENED;
+                    sd->mode = SD_MODE_NORMAL;
                 }
 
             }else if(!SD_IsDetected() && sd->media_status == MEDIA_OPENED){
@@ -1061,13 +1095,14 @@ int sd_format(void)
         LOG_DRV_INFO("SD opened successfully after format.\n");
         sd_disk_info_t info;
         fx_media_close_notify_set(&g_sd.sdio_disk, media_close_callback);
-        g_sd.media_status = MEDIA_OPENED;
-        g_sd.mode = SD_MODE_NORMAL;
+        /* Same publish-last ordering: ops registered before MEDIA_OPENED. */
         if(g_sd.file_ops_handle == -1){
             g_sd.file_ops_handle = file_ops_register(FS_SD, &sd_file_ops, &g_sd.sdio_disk);
             LOG_DRV_DEBUG("SD file system register. :%d \r\n", g_sd.file_ops_handle);
             file_ops_switch(g_sd.file_ops_handle);
         }
+        g_sd.media_status = MEDIA_OPENED;
+        g_sd.mode = SD_MODE_NORMAL;
         if (sd_get_disk_info(&info) == 0) {
             LOG_DRV_INFO("Format verification: Total %lu KB, Free %lu KB\n", 
                    info.total_KBytes, info.free_KBytes);
@@ -1120,11 +1155,273 @@ int sd_get_disk_info(sd_disk_info_t *info)
     return 0;
 }
 
+/* ---- SD bus speed / mode diagnostics ----------------------------------- */
+/* SD spec speed ceilings (HAL keeps its own private copies; redefine here). */
+#define SD_SPEED_NORMAL_HZ   25000000U   /* Default Speed cap */
+#define SD_SPEED_HIGH_HZ     50000000U   /* High Speed cap     */
+
+int sd_get_speed_info(sd_speed_info_t *info)
+{
+    if (info == NULL) {
+        return -1;
+    }
+    memset(info, 0, sizeof(*info));
+    if (!g_sd.is_init) {
+        return -1;   /* card not initialized */
+    }
+
+    HAL_SD_CardInfoTypeDef card;
+    if (HAL_SD_GetCardInfo(&hsd1, &card) != HAL_OK) {
+        return -1;
+    }
+
+    info->card_type = (card.CardType == CARD_SDHC_SDXC) ? "SDHC/SDXC" : "SDSC";
+    /* NOTE: HAL_SD_GetCardInfo() does NOT copy CardSpeed - read the cached HAL
+     * value directly. A UHS-graded card is tagged ULTRA here even though UHS
+     * needs a 1.8V transceiver this build lacks (USE_SD_TRANSCEIVER=0); the
+     * real bus state is in bus_clk_hz / hs_switched below. */
+    switch (hsd1.SdCard.CardSpeed) {
+        case CARD_ULTRA_HIGH_SPEED: info->card_speed = "UltraHigh(UHS-grade, no 1.8V xcvr)"; break;
+        case CARD_HIGH_SPEED:       info->card_speed = "High(<=50MHz)";   break;
+        default:                    info->card_speed = "Normal(<=25MHz)"; break;
+    }
+
+    uint32_t src = HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_SDMMC1);
+    info->src_clk_hz = src;
+    uint32_t clkcr = hsd1.Instance->CLKCR;
+    uint32_t div = clkcr & SDMMC_CLKCR_CLKDIV_Msk;
+    info->clkdiv = div;
+    /* SDMMC_CK = SDMMCCLK / (2 * CLKDIV); CLKDIV == 0 means /2 */
+    info->bus_clk_hz = (div != 0U) ? (src / (2U * div)) : (src / 2U);
+    uint32_t widbus = (clkcr & SDMMC_CLKCR_WIDBUS_Msk) >> SDMMC_CLKCR_WIDBUS_Pos;
+    info->bus_width = (widbus == 0U) ? 1U : (widbus == 1U) ? 4U : 8U;
+    info->hs_switched = g_sd.hs_switched;
+    return 0;
+}
+
+/* Apply a speed mode assuming the card is initialized and in TRANSFER state.
+ * No media-open gate - used both at init (before fx_media_open) and at runtime.
+ *   DEFAULT   : bus <= 25MHz, card mode untouched
+ *   HIGH/AUTO : bus <= 50MHz, CMD6 card to High Speed (AUTO collapses to HS:
+ *               real UHS needs the 1.8V transceiver this build lacks)
+ *   OVERCLOCK : bus ~100MHz (CLKDIV=0). Forces the CARD to Default Speed first
+ *               - HS+100MHz is unstable on UHS cards (HS receivers tuned for
+ *               50MHz); the known-working overclock is DS+100MHz. OUT OF SPEC.
+ * The CLKDIV force works because the HAL's ULTRA cap branch uses Init.ClockDiv
+ * verbatim (see HAL_SD_ConfigWideBusOperation); OVERCLOCK thus relies on the
+ * card being tagged CARD_ULTRA_HIGH_SPEED. */
+static int sd_apply_speed_mode_locked(sd_speed_mode_e mode)
+{
+    uint32_t src = HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_SDMMC1);
+    uint32_t saved_div = hsd1.Init.ClockDiv;
+    HAL_StatusTypeDef st = HAL_OK;
+
+    uint32_t div;
+    switch (mode) {
+        case SD_SPEED_OVERCLOCK: div = 0U; break;                              /* ~100MHz */
+        case SD_SPEED_DEFAULT:   div = (src != 0U) ? src / (2U * SD_SPEED_NORMAL_HZ) : 1U; break;
+        default:                 div = (src != 0U) ? src / (2U * SD_SPEED_HIGH_HZ)   : 1U; break; /* HIGH/AUTO */
+    }
+    if (div == 0U && mode != SD_SPEED_OVERCLOCK) {
+        div = 1U;
+    }
+
+    sd_lock();
+    if (mode == SD_SPEED_OVERCLOCK) {
+        /* Force the card to Default Speed at the current (lower) clock BEFORE
+         * raising it - CMD6 at 100MHz HS would be unreliable. Best-effort:
+         * ignore the return (card may already be in DS). */
+        (void)HAL_SD_ConfigSpeedBusOperation(&hsd1, SDMMC_SPEED_MODE_DEFAULT);
+        hsd1.Init.ClockDiv = 0U;
+        st = HAL_SD_ConfigWideBusOperation(&hsd1, hsd1.Init.BusWide);
+        hsd1.Init.ClockDiv = saved_div;
+    } else {
+        /* DEFAULT/HIGH/AUTO: set the (safe) clock first, then CMD6 to HS. */
+        hsd1.Init.ClockDiv = div;
+        st = HAL_SD_ConfigWideBusOperation(&hsd1, hsd1.Init.BusWide);
+        hsd1.Init.ClockDiv = saved_div;
+        if (st == HAL_OK && (mode == SD_SPEED_HIGH || mode == SD_SPEED_AUTO)) {
+            uint32_t sm = (mode == SD_SPEED_AUTO) ? SDMMC_SPEED_MODE_AUTO
+                                                  : SDMMC_SPEED_MODE_HIGH;
+            st = HAL_SD_ConfigSpeedBusOperation(&hsd1, sm);
+        }
+    }
+    sd_unlock();
+
+    if (st != HAL_OK) {
+        LOG_DRV_ERROR("sd_apply_speed_mode(%d): HAL failed\r\n", (int)mode);
+        return -1;
+    }
+    if (mode == SD_SPEED_OVERCLOCK) {
+        g_sd.hs_switched = false;             /* card forced to Default Speed */
+    } else if (mode == SD_SPEED_HIGH || mode == SD_SPEED_AUTO) {
+        g_sd.hs_switched = true;
+    }
+    /* SD_SPEED_DEFAULT: card mode untouched, hs_switched unchanged */
+    return 0;
+}
+
+int sd_set_speed_mode(sd_speed_mode_e mode)
+{
+    if (g_sd.media_status != MEDIA_OPENED) {
+        LOG_DRV_ERROR("sd_set_speed_mode: media not open\r\n");
+        return -1;
+    }
+    return sd_apply_speed_mode_locked(mode);
+}
+
+#define SD_SPEED_TEST_FILE   "~sdrwtest.tmp"
+
+int sd_speed_test(uint32_t total_kb, uint32_t chunk_kb,
+                  uint32_t *write_kbps, uint32_t *read_kbps)
+{
+    if (write_kbps != NULL) *write_kbps = 0;
+    if (read_kbps  != NULL) *read_kbps  = 0;
+
+    if (g_sd.media_status != MEDIA_OPENED) {
+        LOG_DRV_ERROR("sd_speed_test: media not open\r\n");
+        return -1;
+    }
+    if (total_kb == 0U) total_kb = 2048U;
+    if (chunk_kb == 0U) chunk_kb = 32U;
+
+    uint32_t total_bytes = total_kb * 1024U;
+    /* SDMMC DMA requires an internal-SRAM buffer; the MEM_FAST pool is small
+     * (~184KB, shared with stacks/FX), so try the requested chunk then fall
+     * back to safe sizes so the test still runs under memory pressure. Never
+     * grow beyond the requested chunk. */
+    uint32_t chunk_bytes = chunk_kb * 1024U;
+    uint8_t *buf = NULL;
+    uint32_t try_kb = chunk_kb;
+    const uint32_t steps_kb[] = {chunk_kb, 32, 16, 8, 4};
+    for (size_t i = 0; i < sizeof(steps_kb) / sizeof(steps_kb[0]) && buf == NULL; i++) {
+        try_kb = steps_kb[i];
+        if (try_kb * 1024U > chunk_bytes) {
+            continue;   /* don't grow the chunk */
+        }
+        buf = (uint8_t *)hal_mem_alloc_aligned(try_kb * 1024U, 32, MEM_FAST);
+    }
+    if (buf != NULL) {
+        chunk_bytes = try_kb * 1024U;
+    } else {
+        LOG_DRV_ERROR("sd_speed_test: alloc failed (tried down to %luKB)\r\n",
+                      (unsigned long)try_kb);
+        return -1;
+    }
+    /* DMA-integrity pattern: byte value = offset within chunk (0..255 repeat) */
+    for (uint32_t i = 0; i < chunk_bytes; i++) {
+        buf[i] = (uint8_t)(i & 0xFF);
+    }
+
+    FX_MEDIA *media = &g_sd.sdio_disk;
+    FX_FILE file;
+    UINT status;
+    uint32_t t0 = 0, t1 = 0, t2 = 0, t3 = 0;
+    uint32_t written = 0, read_bytes = 0;
+    int ret = 0;
+
+    sd_lock();
+    (void)fx_file_delete(media, SD_SPEED_TEST_FILE);   /* ignore if absent */
+
+    status = fx_file_create(media, SD_SPEED_TEST_FILE);
+    if (status != FX_SUCCESS && status != FX_ALREADY_CREATED) {
+        LOG_DRV_ERROR("sd_speed_test: fx_file_create 0x%02X\r\n", status);
+        ret = -1;
+        goto done;
+    }
+    status = fx_file_open(media, &file, SD_SPEED_TEST_FILE, FX_OPEN_FOR_WRITE);
+    if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("sd_speed_test: fx_file_open(w) 0x%02X\r\n", status);
+        ret = -1;
+        goto done;
+    }
+
+    t0 = HAL_GetTick();
+    while (written < total_bytes) {
+        uint32_t n = (total_bytes - written < chunk_bytes) ? (total_bytes - written) : chunk_bytes;
+        status = fx_file_write(&file, buf, n);
+        if (status != FX_SUCCESS) {
+            LOG_DRV_ERROR("sd_speed_test: fx_file_write 0x%02X @%lu\r\n", status, written);
+            ret = -2;
+            break;
+        }
+        written += n;
+    }
+    if (ret == 0) {
+        status = fx_media_flush(media);
+        if (status != FX_SUCCESS) {
+            LOG_DRV_ERROR("sd_speed_test: fx_media_flush 0x%02X\r\n", status);
+        }
+    }
+    t1 = HAL_GetTick();
+    fx_file_close(&file);
+
+    if (ret != 0) {
+        goto done;
+    }
+
+    status = fx_file_open(media, &file, SD_SPEED_TEST_FILE, FX_OPEN_FOR_READ);
+    if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("sd_speed_test: fx_file_open(r) 0x%02X\r\n", status);
+        ret = -1;
+        goto done;
+    }
+
+    t2 = HAL_GetTick();
+    while (read_bytes < total_bytes) {
+        uint32_t n = (total_bytes - read_bytes < chunk_bytes) ? (total_bytes - read_bytes) : chunk_bytes;
+        ULONG actual = 0;
+        status = fx_file_read(&file, buf, n, &actual);
+        if (status != FX_SUCCESS && status != FX_END_OF_FILE) {
+            LOG_DRV_ERROR("sd_speed_test: fx_file_read 0x%02X @%lu\r\n", status, read_bytes);
+            ret = -3;
+            break;
+        }
+        read_bytes += actual;
+        if (status == FX_END_OF_FILE || actual < n) break;
+    }
+    t3 = HAL_GetTick();
+
+    /* Untimed integrity sanity check on the first chunk - catches DMA/cache
+     * corruption without skewing the read throughput number. */
+    if (fx_file_seek(&file, 0) == FX_SUCCESS) {
+        ULONG chk = 0;
+        if (fx_file_read(&file, buf, chunk_bytes, &chk) == FX_SUCCESS) {
+            for (ULONG k = 0; k < chk; k++) {
+                if (buf[k] != (uint8_t)(k & 0xFF)) {
+                    LOG_DRV_ERROR("sd_speed_test: data mismatch @%lu\r\n", (unsigned long)k);
+                    ret = -4;
+                    break;
+                }
+            }
+        }
+    }
+    fx_file_close(&file);
+
+done:
+    (void)fx_file_delete(media, SD_SPEED_TEST_FILE);
+    (void)fx_media_flush(media);
+    sd_unlock();
+    hal_mem_free(buf);
+
+    if (ret == 0) {
+        uint32_t ms;
+        ms = t1 - t0;
+        if (write_kbps != NULL) {
+            *write_kbps = (ms > 0U) ? (uint32_t)(((written / 1024U) * 1000U) / ms) : 0U;
+        }
+        ms = t3 - t2;
+        if (read_kbps != NULL) {
+            *read_kbps = (ms > 0U) ? (uint32_t)(((read_bytes / 1024U) * 1000U) / ms) : 0U;
+        }
+    }
+    return ret;
+}
+
 int sd_is_detected(void)
 {
     return SD_IsDetected();
 }
-
 int sd_is_media_open(void)
 {
     /* Non-blocking readiness check: true only after sdProcess has completed

@@ -136,8 +136,11 @@ int storage_get_disk_info(storage_disk_info_t *info);
  * Use this instead of storage_get_disk_info() when you only need to know if the
  * littlefs volume is mounted (e.g. readiness probes in hot paths). */
 bool storage_is_lfs_mounted(void);
+void storage_power_save(void);
 void storage_lock(void);
 void storage_unlock(void);
+void storage_lock_ext(void);
+void storage_unlock_ext(void);
 void storage_format(void);
 int storage_file_ops_switch(void);
 void storage_register(void);

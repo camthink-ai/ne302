@@ -16,6 +16,7 @@
 #include "web_server.h"
 #include "json_config_mgr.h"
 #include "mm_halow_netif.h"
+#include "sl_net_netif.h"
 #if NETIF_WIFI_HALOW_IS_ENABLE
 #include "mmwlan.h"
 #endif
@@ -490,6 +491,10 @@ aicam_result_t network_wifi_sta_handler(http_handler_context_t *ctx) {
         
         cJSON_AddItemToObject(response_json, "scan_results", scan_json);
     }
+
+    // Let the frontend poll for scan completion (async background scan).
+    cJSON_AddBoolToObject(response_json, "scan_in_progress",
+                          communication_is_scan_in_progress() ? 1 : 0);
     
     char* json_string = cJSON_Print(response_json);
     cJSON_Delete(response_json);
@@ -771,6 +776,149 @@ aicam_result_t network_wifi_config_handler(http_handler_context_t *ctx) {
     //hal_mem_free(json_string);
     
     return api_result;
+}
+
+/**
+ * @brief GET /api/v1/system/network/wifi/region - WiFi region (country code)
+ *
+ * Returns the configured region (applies at next boot), the currently active
+ * region, and the list of selectable regions.
+ */
+static void wifi_fill_supported_regions(cJSON *arr)
+{
+    uint32_t count = sl_net_wifi_get_supported_region_count();
+    char buf[NETIF_WIFI_COUNTRY_CODE_LEN];
+
+    if (arr == NULL) {
+        return;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (sl_net_wifi_get_region_code_by_index(i, buf, sizeof(buf)) == 0 && buf[0] != '\0') {
+            cJSON_AddItemToArray(arr, cJSON_CreateString(buf));
+        }
+    }
+}
+
+aicam_result_t network_wifi_region_get_handler(http_handler_context_t *ctx) {
+    network_service_config_t sys_net = {0};
+    char cfg_buf[NETIF_WIFI_COUNTRY_CODE_LEN];
+    char active_buf[NETIF_WIFI_COUNTRY_CODE_LEN];
+    const char *region;
+    cJSON *response_json;
+    cJSON *supported;
+    char *json_string;
+
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+    if (!web_api_verify_method(ctx, "GET")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET method is allowed");
+    }
+    if (!communication_is_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Communication service is not running");
+    }
+
+    /* Configured (pending next-boot) region from NVS; fall back to active runtime region. */
+    cfg_buf[0] = '\0';
+    if (json_config_get_network_service_config(&sys_net) == AICAM_OK && sys_net.wifi_country_code[0] != '\0') {
+        strncpy(cfg_buf, sys_net.wifi_country_code, sizeof(cfg_buf) - 1U);
+        cfg_buf[sizeof(cfg_buf) - 1U] = '\0';
+    } else {
+        (void)sl_net_wifi_get_region_code(cfg_buf, sizeof(cfg_buf));
+    }
+    region = (cfg_buf[0] != '\0') ? cfg_buf : "us";
+
+    active_buf[0] = '\0';
+    (void)sl_net_wifi_get_region_code(active_buf, sizeof(active_buf));
+
+    response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+    cJSON_AddStringToObject(response_json, "region", region);
+    cJSON_AddStringToObject(response_json, "active_region", (active_buf[0] != '\0') ? active_buf : "us");
+    supported = cJSON_CreateArray();
+    wifi_fill_supported_regions(supported);
+    cJSON_AddItemToObject(response_json, "supported_regions", supported);
+
+    json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+    return api_response_success(ctx, json_string, "WiFi region retrieved");
+}
+
+/**
+ * @brief PUT /api/v1/system/network/wifi/region - Configure WiFi region
+ *
+ * Validates, persists to NVS, and best-effort applies live (only when both WiFi
+ * netifs are DEINIT). Otherwise the new region takes effect at the next restart.
+ */
+aicam_result_t network_wifi_region_set_handler(http_handler_context_t *ctx) {
+    cJSON *request_json;
+    const char *region;
+    char region_buf[NETIF_WIFI_COUNTRY_CODE_LEN];
+    network_service_config_t sys_net = {0};
+    cJSON *response_json;
+    char *json_string;
+    aicam_bool_t restart_required = AICAM_TRUE;
+    int set_ret;
+
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+    if (!web_api_verify_method(ctx, "PUT")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only PUT method is allowed");
+    }
+    if (!communication_is_running()) {
+        return api_response_error(ctx, API_ERROR_SERVICE_UNAVAILABLE, "Communication service is not running");
+    }
+
+    request_json = web_api_parse_body(ctx);
+    if (!request_json) {
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON request body");
+    }
+    region = cJSON_GetStringValue(cJSON_GetObjectItem(request_json, "region"));
+    if (region == NULL || region[0] == '\0') {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Missing or invalid 'region'");
+    }
+    strncpy(region_buf, region, sizeof(region_buf) - 1U);
+    region_buf[sizeof(region_buf) - 1U] = '\0';
+    cJSON_Delete(request_json);
+
+    /* Validates the region and attempts a live apply in one call.
+     * INVALID_PARAMETER -> unsupported region; INVALID_STATE -> valid but netifs not DEINIT. */
+    set_ret = sl_net_wifi_set_region_code(region_buf);
+    if (set_ret == SL_STATUS_INVALID_PARAMETER) {
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid or unsupported region");
+    }
+    if (set_ret == SL_STATUS_OK) {
+        restart_required = AICAM_FALSE;
+    }
+
+    if (json_config_get_network_service_config(&sys_net) != AICAM_OK) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to get network service configuration");
+    }
+    strncpy(sys_net.wifi_country_code, region_buf, sizeof(sys_net.wifi_country_code) - 1U);
+    sys_net.wifi_country_code[sizeof(sys_net.wifi_country_code) - 1U] = '\0';
+    if (json_config_set_network_service_config(&sys_net) != AICAM_OK) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to save WiFi region");
+    }
+
+    response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+    cJSON_AddStringToObject(response_json, "region", region_buf);
+    cJSON_AddBoolToObject(response_json, "restart_required", restart_required);
+    cJSON_AddStringToObject(response_json, "message",
+                            restart_required ? "WiFi region saved, applies on next restart"
+                                             : "WiFi region applied");
+
+    json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+    return api_response_success(ctx, json_string, "WiFi region updated");
 }
 
 /**
@@ -3841,6 +3989,20 @@ static const api_route_t network_module_routes[] = {
         .path = API_PATH_PREFIX"/system/network/wifi/delete",
         .method = "POST",
         .handler = network_delete_known_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/wifi/region",
+        .method = "GET",
+        .handler = network_wifi_region_get_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX"/system/network/wifi/region",
+        .method = "PUT",
+        .handler = network_wifi_region_set_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

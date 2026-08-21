@@ -347,6 +347,12 @@ aicam_result_t communication_disconnect_network(const char *if_name);
 aicam_result_t communication_start_network_scan(wireless_scan_callback_t callback);
 
 /**
+ * @brief Query whether a network scan is currently in progress
+ * @return aicam_bool_t AICAM_TRUE if a scan is running
+ */
+aicam_bool_t communication_is_scan_in_progress(void);
+
+/**
  * @brief Get last scan results
  * @param results Array to store scan results
  * @param max_count Maximum number of results to return

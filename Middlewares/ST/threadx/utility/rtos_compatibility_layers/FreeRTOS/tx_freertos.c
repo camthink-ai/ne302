@@ -393,21 +393,30 @@ void *pvPortRealloc(void *pv, size_t xWantedSize)
     return txfr_realloc(pv, xWantedSize);
 }
 
+/* Dedicated nesting counter for the interrupt-restore decision in the critical
+ * section, kept separate from _tx_thread_preempt_disable (which vTaskSuspendAll/
+ * ResumeAll also bump). Sharing that counter let ResumeAll decrement it to 0
+ * before the matching ExitCritical, stranding the portDISABLE_INTERRUPTS() done
+ * by EnterCritical and leaving interrupts disabled (system hang). */
+static volatile UINT txfr_critical_nesting;
+
 void vPortEnterCritical(void)
 {
     portDISABLE_INTERRUPTS();
+    txfr_critical_nesting++;
     _tx_thread_preempt_disable++;
 }
 
 void vPortExitCritical(void)
 {
-    if(_tx_thread_preempt_disable == 0u) {
+    if(txfr_critical_nesting == 0u) {
         TX_FREERTOS_ASSERT_FAIL();
     }
 
+    txfr_critical_nesting--;
     _tx_thread_preempt_disable--;
 
-    if(_tx_thread_preempt_disable == 0u) {
+    if(txfr_critical_nesting == 0u) {
         portENABLE_INTERRUPTS();
     }
 }
@@ -1461,9 +1470,11 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t xSemaphore, TickType_t xTicksToWait)
     }
 
     if(xSemaphore->is_mutex == 1u) {
-        if(xSemaphore->mutex.tx_mutex_owner == tx_thread_identify()) {
-            return pdFALSE;
-        }
+        /* ThreadX mutexes are natively recursive (tx_mutex_get/put track the
+         * ownership count), so a self-take recurses -- identical to
+         * xSemaphoreTakeRecursive below. The previous early-return pdFALSE on
+         * self-take let unchecked portMAX_DELAY callers enter their critical
+         * section with no lock held -> data/heap corruption. */
         ret = tx_mutex_get(&xSemaphore->mutex, timeout);
         if(ret != TX_SUCCESS) {
             return pdFALSE;
@@ -1821,14 +1832,34 @@ BaseType_t xQueueSend(QueueHandle_t xQueue,
     return pdPASS;
 }
 
+/* The queue ops above do NOT call _tx_thread_system_preempt_check(), so the *FromISR
+ * wrappers must tell the caller to yield themselves. Capture the would-execute thread
+ * before the op; if the put/get inside it resumed a higher-priority thread,
+ * _tx_thread_execute_ptr changes and we set pxHigherPriorityTaskWoken so the caller's
+ * portYIELD_FROM_ISR fires. Without this a woken thread (e.g. lwIP tcpip_thread) waits
+ * for the next tick before it runs. */
+static void txfr_isr_check_yield(BaseType_t *pxHigherPriorityTaskWoken, TX_THREAD *p_before)
+{
+    if((pxHigherPriorityTaskWoken != NULL) && (_tx_thread_execute_ptr != p_before)) {
+        *pxHigherPriorityTaskWoken = pdTRUE;
+    }
+}
+
 BaseType_t xQueueSendFromISR(QueueHandle_t xQueue,
                              const void * pvItemToQueue,
                              BaseType_t *pxHigherPriorityTaskWoken)
 {
+    TX_THREAD *p_before = _tx_thread_execute_ptr;
+    BaseType_t ret;
+
     configASSERT(xQueue != NULL);
     configASSERT(pvItemToQueue != NULL);
 
-    return xQueueSend(xQueue, pvItemToQueue, 0u);
+    ret = xQueueSend(xQueue, pvItemToQueue, 0u);
+    if(ret == pdPASS) {
+        txfr_isr_check_yield(pxHigherPriorityTaskWoken, p_before);
+    }
+    return ret;
 }
 
 BaseType_t xQueueSendToBack(QueueHandle_t xQueue,
@@ -1845,10 +1876,17 @@ BaseType_t xQueueSendToBackFromISR(QueueHandle_t xQueue,
                              const void * pvItemToQueue,
                              BaseType_t *pxHigherPriorityTaskWoken)
 {
+    TX_THREAD *p_before = _tx_thread_execute_ptr;
+    BaseType_t ret;
+
     configASSERT(xQueue != NULL);
     configASSERT(pvItemToQueue != NULL);
 
-    return xQueueSend(xQueue, pvItemToQueue, 0u);
+    ret = xQueueSend(xQueue, pvItemToQueue, 0u);
+    if(ret == pdPASS) {
+        txfr_isr_check_yield(pxHigherPriorityTaskWoken, p_before);
+    }
+    return ret;
 }
 
 BaseType_t xQueueSendToFront(QueueHandle_t xQueue,
@@ -1927,10 +1965,17 @@ BaseType_t xQueueSendToFrontFromISR(QueueHandle_t xQueue,
                              const void * pvItemToQueue,
                              BaseType_t *pxHigherPriorityTaskWoken)
 {
+    TX_THREAD *p_before = _tx_thread_execute_ptr;
+    BaseType_t ret;
+
     configASSERT(xQueue != NULL);
     configASSERT(pvItemToQueue != NULL);
 
-    return xQueueSendToFront(xQueue, pvItemToQueue, 0u);
+    ret = xQueueSendToFront(xQueue, pvItemToQueue, 0u);
+    if(ret == pdPASS) {
+        txfr_isr_check_yield(pxHigherPriorityTaskWoken, p_before);
+    }
+    return ret;
 }
 
 BaseType_t xQueueReceive(QueueHandle_t xQueue,
@@ -1980,13 +2025,16 @@ BaseType_t xQueueReceiveFromISR(QueueHandle_t xQueue,
                                 void *pvBuffer,
                                 BaseType_t *pxHigherPriorityTaskWoken)
 {
+    TX_THREAD *p_before = _tx_thread_execute_ptr;
     BaseType_t ret;
 
     configASSERT(xQueue != NULL);
     configASSERT(pvBuffer != NULL);
 
     ret = xQueueReceive(xQueue, pvBuffer, 0u);
-
+    if(ret == pdPASS) {
+        txfr_isr_check_yield(pxHigherPriorityTaskWoken, p_before);
+    }
     return ret;
 }
 
@@ -2217,10 +2265,17 @@ BaseType_t xQueueOverwriteFromISR(QueueHandle_t xQueue,
                                   const void * pvItemToQueue,
                                   BaseType_t *pxHigherPriorityTaskWoken)
 {
+    TX_THREAD *p_before = _tx_thread_execute_ptr;
+    BaseType_t ret;
+
     configASSERT(xQueue != NULL);
     configASSERT(pvItemToQueue != NULL);
 
-    return xQueueOverwrite(xQueue, pvItemToQueue);
+    ret = xQueueOverwrite(xQueue, pvItemToQueue);
+    if(ret == pdPASS) {
+        txfr_isr_check_yield(pxHigherPriorityTaskWoken, p_before);
+    }
+    return ret;
 }
 
 

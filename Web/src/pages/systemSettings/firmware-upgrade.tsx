@@ -145,11 +145,11 @@ export default function FirmwareUpgrade({
     );
 
     const showWifiHint = isUpgradableWifi(versions.wifi, versions.wifi_running);
-    // When flash and running versions match, compare against the expected version
-    // (compiled from version.mk via EXPECTED_WIFI_VERSION).
-    const wifiMatched = isValidVer(versions.wifi)
-        && isValidVer(versions.wifi_running)
-        && versions.wifi === versions.wifi_running;
+    // When flash and running versions match (or nothing is staged in flash,
+    // i.e. wifi === "N/A"), compare the running version against the expected
+    // version (compiled from version.mk via EXPECTED_WIFI_VERSION).
+    const wifiMatched = isValidVer(versions.wifi_running)
+        && (!isValidVer(versions.wifi) || versions.wifi === versions.wifi_running);
     const showWifiExpectedHint = wifiMatched
         && isValidVer(versions.expected_wifi)
         && versions.wifi_running !== versions.expected_wifi;
@@ -157,6 +157,10 @@ export default function FirmwareUpgrade({
     const showFsblExpectedHint = isValidVer(versions.fsbl)
         && isValidVer(versions.expected_fsbl)
         && versions.fsbl !== versions.expected_fsbl;
+    // Staged (flash) firmware itself doesn't match the expected version
+    const stagedOutdated = showWifiHint
+        && isValidVer(versions.expected_wifi)
+        && versions.wifi !== versions.expected_wifi;
 
     const [
         isImportFirmwareDialogOpen,
@@ -366,9 +370,14 @@ export default function FirmwareUpgrade({
                                 ：{versions.wifi_running}
                             </span>
                             <span className="pt-1">
-                                {i18n._(
-                                    'sys.system_management.wifi_upgrade_available_desc'
-                                )}
+                                {stagedOutdated
+                                    ? i18n._(
+                                        'sys.system_management.wifi_upgrade_staged_outdated_desc'
+                                    ).replace('{staged}', versions.wifi)
+                                     .replace('{expected}', versions.expected_wifi)
+                                    : i18n._(
+                                        'sys.system_management.wifi_upgrade_available_desc'
+                                    )}
                             </span>
                         </DialogDescription>
                     </DialogHeader>

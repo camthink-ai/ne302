@@ -104,6 +104,8 @@ static device_service_context_t g_device_service = {0};
  * @param config Camera configuration to apply
  * @return aicam_result_t Operation result
  */
+static void device_service_build_isp_iq_param(const image_config_t *img_cfg, ISP_IQParamTypeDef *out_iq);
+
 static aicam_result_t apply_camera_config_to_hardware(const camera_config_t *config)
 {
     if (!config || !g_device_service.camera_device) {
@@ -431,9 +433,14 @@ void device_service_update_device_mac_address()
  */
 void device_service_update_communication_type()
 {
-    
-    // Check WiFi connection status
-    communication_type_t communication_type = communication_get_selected_type();
+    /* Report the type actually carrying data (active), not the user's UI
+     * selection (selected) — the upload JSON must tell the server how this
+     * payload was delivered. Fall back to selected only when nothing is
+     * connected yet. */
+    communication_type_t communication_type = communication_get_current_type();
+    if (communication_type == COMM_TYPE_NONE) {
+        communication_type = communication_get_selected_type();
+    }
     snprintf(g_device_service.device_info.communication_type, sizeof(g_device_service.device_info.communication_type), "%s", communication_type_to_string(communication_type));
 
     LOG_SVC_DEBUG("Communication type updated: %s", g_device_service.device_info.communication_type);
@@ -898,9 +905,16 @@ aicam_result_t device_service_start(void)
         g_device_service.led_config.connected = AICAM_TRUE;
         g_device_service.led_initialized = AICAM_TRUE;
         
-        // Set initial indicator state: system running, AP not yet started
-        g_device_service.indicator_state = SYSTEM_INDICATOR_RUNNING_AP_OFF;
-        device_service_set_indicator_state(SYSTEM_INDICATOR_RUNNING_AP_OFF);
+        // Set initial indicator state based on actual AP state. on_wifi_ap_ready
+        // runs on the async netif thread and may have already set AP_ON before
+        // device_service start; a blind AP_OFF here clobbers it (timing race).
+        if (communication_is_interface_connected(NETIF_NAME_WIFI_AP)) {
+            g_device_service.indicator_state = SYSTEM_INDICATOR_RUNNING_AP_ON;
+            device_service_set_indicator_state(SYSTEM_INDICATOR_RUNNING_AP_ON);
+        } else {
+            g_device_service.indicator_state = SYSTEM_INDICATOR_RUNNING_AP_OFF;
+            device_service_set_indicator_state(SYSTEM_INDICATOR_RUNNING_AP_OFF);
+        }
     }
     
     // Find and initialize button device
@@ -1073,6 +1087,12 @@ aicam_result_t device_service_get_cached_info(device_info_config_t *info)
 
     /* Battery is dynamic but fast (HAL GPIO read); update it here. */
     update_battery_info(&g_device_service.device_info);
+
+    /* communication_type must reflect the live active connection (the link
+     * actually delivering this upload), not a stale boot-time default.
+     * Refresh here so every MQTT publish — real-time and batch — stamps the
+     * current type (both paths build JSON via this getter). */
+    device_service_update_communication_type();
 
     memcpy(info, &g_device_service.device_info, sizeof(device_info_config_t));
     return AICAM_OK;
@@ -1252,6 +1272,23 @@ aicam_result_t device_service_image_set_config(const image_config_t *config)
         if (result != AICAM_OK) {
             LOG_SVC_ERROR("Failed to apply camera configuration to hardware: %d", result);
             return result;
+        }
+
+        // Hot-swap ISP IQ for isp_mode / grayscale changes — no restart needed
+        {
+            ISP_IQParamTypeDef iq = {0};
+            device_service_build_isp_iq_param(&g_device_service.camera_config.image_config, &iq);
+            result = device_ioctl(g_device_service.camera_device,
+                                CAM_CMD_APPLY_ISP_IQ,
+                                (uint8_t *)&iq,
+                                sizeof(ISP_IQParamTypeDef));
+            if (result != AICAM_OK) {
+                LOG_SVC_ERROR("Failed to apply ISP IQ hot-swap: %d", result);
+                return result;
+            }
+            LOG_SVC_DEBUG("ISP IQ hot-swapped (mode=%u, grayscale=%d)",
+                         g_device_service.camera_config.image_config.isp_mode,
+                         g_device_service.camera_config.image_config.grayscale);
         }
     }
 

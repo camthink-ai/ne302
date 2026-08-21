@@ -47,7 +47,19 @@ C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmregdb
 C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmutils
 C_INCLUDES += -I../Custom/Hal/Network/netif_manager
 
-CFLAGS += -DHALT_ON_ASSERT
+# No -DHALT_ON_ASSERT: that branch of mmosal_impl_assert() disables IRQs then
+# executes a raw bkpt — without a debugger attached it escalates to HardFault
+# (lockup) and silently hangs shipping units. The default branch prints and
+# resets, which is the production-safe behavior.
+
+# === HaLow target chip — toggle to rebuild for the other silicon ===
+#   mm8108 (default) — current NE302 silicon, matches the tested working tree
+#   mm6108           — legacy
+# Override on the command line:  make HALOW_CHIP=mm6108
+HALOW_CHIP ?= mm8108
+ifeq ($(HALOW_CHIP),mm8108)
+CFLAGS += -DHALOW_CHIP_MM8108
+endif
 
 # NE302 SPI HaLow: disable 802.11 PS and long bus idle timeout (default 100 ms sleeps chip).
 CFLAGS += -DMMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS=3600000U

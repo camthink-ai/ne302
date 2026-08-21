@@ -101,7 +101,7 @@ Switch `STEDGEAI_VARIANT` (2.2 / 3.0 / 4.0) and `STEDGEAI_CORE_DIR` for local Gi
 
 ## STEdgeAI Variant Switching
 
-NE301 shares application code across STEdgeAI toolchains. Select the runtime at build time:
+NE302 shares application code across STEdgeAI toolchains. Select the runtime at build time:
 
 ```bash
 source Script/stedgeai-use.sh

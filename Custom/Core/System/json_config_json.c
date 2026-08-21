@@ -297,6 +297,7 @@ static void parse_network_service(cJSON *json, network_service_config_t *cfg)
     json_get_uint32(json, "ap_sleep_time", &cfg->ap_sleep_time);
     json_get_string(json, "ssid", cfg->ssid, sizeof(cfg->ssid));
     json_get_string(json, "password", cfg->password, sizeof(cfg->password));
+    json_get_string(json, "wifi_country_code", cfg->wifi_country_code, sizeof(cfg->wifi_country_code));
     
     // Parse known_networks array
     json_get_uint32(json, "known_network_count", &cfg->known_network_count);
@@ -891,6 +892,7 @@ static cJSON *serialize_network_service(const network_service_config_t *cfg)
     cJSON_AddNumberToObject(json, "ap_sleep_time", cfg->ap_sleep_time);
     cJSON_AddStringToObject(json, "ssid", cfg->ssid);
     cJSON_AddStringToObject(json, "password", cfg->password);
+    cJSON_AddStringToObject(json, "wifi_country_code", cfg->wifi_country_code);
     cJSON_AddNumberToObject(json, "known_network_count", cfg->known_network_count);
 
     // Serialize known_networks array
