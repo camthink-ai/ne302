@@ -141,7 +141,8 @@ void mm_halow_gpios_init()
 
 	__HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
-	
+    __HAL_RCC_GPIOG_CLK_ENABLE();
+
 	/*Configure GPIO pins : MM_HALOW_RESET_Pin */
 	GPIO_InitStruct.Pin = MM_HALOW_RESET_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -167,8 +168,8 @@ void mm_halow_gpios_init()
 	HAL_GPIO_Init(MM_HALOW_SPI_IRQ_GPIO_Port, &GPIO_InitStruct);
 	HAL_GPIO_WritePin(MM_HALOW_SPI_IRQ_GPIO_Port, MM_HALOW_SPI_IRQ_Pin, GPIO_PIN_SET);
 	/* EXTI interrupt init*/
-	HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0);
-	HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+	HAL_NVIC_SetPriority(MM_HALOW_SPI_IRQn, 5, 0);
+	HAL_NVIC_EnableIRQ(MM_HALOW_SPI_IRQn);
 
 	/*Configure GPIO pin : MM_HALOW_BUSY_Pin */
 	GPIO_InitStruct.Pin = MM_HALOW_BUSY_Pin;
@@ -177,8 +178,8 @@ void mm_halow_gpios_init()
 	HAL_GPIO_Init(MM_HALOW_BUSY_GPIO_Port, &GPIO_InitStruct);
 	HAL_GPIO_WritePin(MM_HALOW_BUSY_GPIO_Port, MM_HALOW_BUSY_Pin, GPIO_PIN_RESET);
 	/* EXTI interrupt init*/
-	HAL_NVIC_SetPriority(EXTI15_IRQn, 6, 0);
-	HAL_NVIC_EnableIRQ(EXTI15_IRQn);
+	HAL_NVIC_SetPriority(MM_HALOW_BUSY_IRQn, 6, 0);
+	HAL_NVIC_EnableIRQ(MM_HALOW_BUSY_IRQn);
 }
 
 void mm_halow_component_start(void *arg)

@@ -428,6 +428,7 @@ static void mm_halow_gpios_init(void)
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOG_CLK_ENABLE();
 
     GPIO_InitStruct.Pin = MM_HALOW_RESET_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -449,16 +450,16 @@ static void mm_halow_gpios_init(void)
     GPIO_InitStruct.Pull = GPIO_PULLUP;
     HAL_GPIO_Init(MM_HALOW_SPI_IRQ_GPIO_Port, &GPIO_InitStruct);
     HAL_GPIO_WritePin(MM_HALOW_SPI_IRQ_GPIO_Port, MM_HALOW_SPI_IRQ_Pin, GPIO_PIN_SET);
-    HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+    HAL_NVIC_SetPriority(MM_HALOW_SPI_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(MM_HALOW_SPI_IRQn);
 
     GPIO_InitStruct.Pin = MM_HALOW_BUSY_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
     GPIO_InitStruct.Pull = GPIO_PULLDOWN;
     HAL_GPIO_Init(MM_HALOW_BUSY_GPIO_Port, &GPIO_InitStruct);
     HAL_GPIO_WritePin(MM_HALOW_BUSY_GPIO_Port, MM_HALOW_BUSY_Pin, GPIO_PIN_RESET);
-    HAL_NVIC_SetPriority(EXTI15_IRQn, 6, 0);
-    HAL_NVIC_EnableIRQ(EXTI15_IRQn);
+    HAL_NVIC_SetPriority(MM_HALOW_BUSY_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(MM_HALOW_BUSY_IRQn);
 }
 
 static void mm_halow_gpios_deinit(void)
@@ -468,8 +469,8 @@ static void mm_halow_gpios_deinit(void)
     HAL_GPIO_DeInit(MM_HALOW_SPI_IRQ_GPIO_Port, MM_HALOW_SPI_IRQ_Pin);
     HAL_GPIO_DeInit(MM_HALOW_BUSY_GPIO_Port, MM_HALOW_BUSY_Pin);
 
-    HAL_NVIC_DisableIRQ(EXTI4_IRQn);
-    HAL_NVIC_DisableIRQ(EXTI15_IRQn);
+    HAL_NVIC_DisableIRQ(MM_HALOW_SPI_IRQn);
+    HAL_NVIC_DisableIRQ(MM_HALOW_BUSY_IRQn);
 }
 
 static void mm_halow_link_status_callback(const struct mmipal_link_status *link_status)
