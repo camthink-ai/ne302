@@ -136,7 +136,7 @@ export default function DeviceInformation() {
         {i18n._('sys.menu.device_information')}
       </h2> */}
       <div className="mb-4">
-        <img src={deviceImg} alt="camthink_Vision_AI_camera" />
+        <img src={deviceImg} alt="camthink_Vision_AI_camera" style={{ width: 200, height: 212, objectFit: 'contain' }} />
       </div>
       <Card className="w-full sm:w-xl">
         <CardContent className="flex flex-col gap-4">

@@ -18,7 +18,7 @@ export default function DeviceInfo() {
     const { deviceInfo, getDeviceInfo } = useSystemInfo()
     const { setDeviceNameReq } = systemApis
     const { getCommunicationData, communicationData } = useCommunicationData()
-    const deviceImage = new URL('@/assets/images/camthink_Vision_AI_camera.webp', import.meta.url).href;
+    const deviceImage = new URL('@/assets/images/camthink_Vision_AI_camera_small.webp', import.meta.url).href;
     const [isEdit, setIsEdit] = useState(false)
     const [deviceName, setDeviceName] = useState(deviceInfo?.device_name ?? '')
     const [powerStatus, setPowerStatus] = useState('power')
