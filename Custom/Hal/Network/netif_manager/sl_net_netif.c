@@ -82,7 +82,7 @@ static sl_wifi_device_configuration_t device_configuration = {
                     | SL_SI91X_EXT_FEAT_UART_SEL_FOR_DEBUG_PRINTS
 #endif
 #if defined(SLI_SI917) || defined(SLI_SI915)
-                                                  | SL_SI91X_EXT_FEAT_FRONT_END_SWITCH_PINS_ULP_GPIO_4_5_0
+                                                  | SL_SI91X_EXT_FEAT_FRONT_END_INTERNAL_SWITCH  
 #endif
 
 #if IS_ENABLE_BLE
