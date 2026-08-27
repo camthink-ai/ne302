@@ -4,6 +4,14 @@
 
 # Project configuration
 PROJECT_NAME = ne302
+# Device model id — the SINGLE source of truth for the model gate:
+#   1. injected into the firmware build via COMMON_DEFS (-DOTA_DEVICE_MODEL)
+#   2. stamped into every OTA package header (0x1C) and bundle header (0x24)
+# A package stamped for another model is hard-rejected by the device.
+# NOTE: make does not track flag changes — after editing DEVICE_MODEL, run
+# `make clean` (or at least rebuild the affected projects) or stale objects
+# keep the previous model baked in.
+DEVICE_MODEL ?= 0x3020
 
 # ==============================================
 # Version Management (from version.mk)
@@ -103,7 +111,7 @@ OPT = -g3
 COMMON_CFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections -fstack-usage -std=gnu11
 COMMON_ASFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 COMMON_LDFLAGS = $(MCU_FLAGS) -specs=nano.specs -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--print-memory-usage -u _printf_float
-COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=32 -DBOARD_FLASH_SIZE=64
+COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=32 -DBOARD_FLASH_SIZE=64 -DOTA_DEVICE_MODEL=$(DEVICE_MODEL)
 
 # Export to sub-Makefiles
 export CC AS CP SZ READELF HEX BIN MCU_FLAGS OPT
@@ -230,7 +238,8 @@ define pkg_project
 .PHONY: pkg-$(1)
 pkg-$(1): $(2)
 	@echo "Creating package for $(1)..."
-	@$$(PACKER) $$(BUILD_DIR)/$(3).bin -o $$(BUILD_DIR)/$(3)_v$(7)_pkg.bin -t $(4) -n $(5) -v $(6)  $(if $(8),-s $(8)) -d $(9)
+	@$$(RM) $$(BUILD_DIR)/$(3)_v*_pkg.bin
+	@$$(PACKER) $$(BUILD_DIR)/$(3).bin -o $$(BUILD_DIR)/$(3)_v$(7)_pkg.bin -t $(4) -n $(5) -v $(6)  $(if $(8),-s $(8)) -d $(9) -m $(DEVICE_MODEL)
 	@echo "$(1) package created: $(3)_v$(7)_pkg.bin"
 endef
 
@@ -250,6 +259,28 @@ pkg: $(foreach proj, fsbl app web model wifi,pkg-$(proj))
 	@echo "========================================="
 	@echo "Package Complete!"
 	@echo "========================================="
+
+######################################
+# Full OTA Bundle (one-click upgrade package)
+######################################
+# Wraps the per-firmware *_pkg.bin files (burn order Model->WEB->WiFi->APP->FSBL)
+# plus a 4096-byte bundle header (see Custom/Core/System/ota_bundle.h) into a
+# single file for the web UI "advanced options -> bundle upgrade" flow.
+# The bundle always burns FORCED at the partition table it carries (no AB
+# slots); the device validates the table (fixed partitions must not move) and
+# rebuilds OTA info after the burn. BUNDLE_EXTRA_FLAGS: e.g. --exclude fsbl.
+BUNDLE_EXTRA_FLAGS ?=
+
+.PHONY: pkg-bundle
+pkg-bundle: pkg
+	@echo "========================================="
+	@echo "Creating full OTA bundle..."
+	@echo "========================================="
+	@python $(PKG_SCRIPT_DIR)/ota_bundle_packer.py $(BUILD_DIR) \
+	    -o $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin \
+	    $(BUNDLE_EXTRA_FLAGS) -m $(DEVICE_MODEL)
+	@python $(PKG_SCRIPT_DIR)/verify_ota_package.py $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin > /dev/null
+	@echo "Bundle created: $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin"
 
 ######################################
 # WiFi Firmware image (SiWG917 .rps)

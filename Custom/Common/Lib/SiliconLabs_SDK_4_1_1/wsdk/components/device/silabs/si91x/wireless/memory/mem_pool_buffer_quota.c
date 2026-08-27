@@ -89,7 +89,8 @@ sl_status_t sli_si91x_host_deinit_buffer_manager(void)
   // Ensure all buffer types have been deallocated (buffers are empty)
   result = sl_si91x_check_for_buffer_empty();
   while ((result == false) && (sl_si91x_host_elapsed_time(start) < SL_WIFI_BUFFERS_FREE_WAIT_TIME)) {
-    osDelay(SLI_SYSTEM_MS_TO_TICKS(2));
+    // ponytail: 5ms floor — teardown-time drain polls don't need 2ms granularity
+    osDelay(SLI_SYSTEM_MS_TO_TICKS(5));
     result = sl_si91x_check_for_buffer_empty(); // Check if buffers are empty
   }
 
@@ -123,7 +124,8 @@ sl_status_t sli_si91x_host_allocate_buffer(sl_wifi_buffer_t **buffer,
     return SL_STATUS_INVALID_PARAMETER;
   }
   uint32_t start_time = osKernelGetTickCount();
-  uint32_t delay      = 2;
+  // ponytail: 5ms floor per the anti-spin policy (the 2ms start slipped under it)
+  uint32_t delay      = 5;
   *buffer             = NULL;
   do {
     CORE_DECLARE_IRQ_STATE;

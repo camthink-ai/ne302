@@ -42,6 +42,11 @@ int ota_upgrade_begin(upgrade_handle_t *handle, FirmwareType type, firmware_head
     return upgrade_begin(handle, type, header);
 }
 
+int ota_upgrade_begin_direct(upgrade_handle_t *handle, FirmwareType type, firmware_header_t *header, uint32_t flash_addr)
+{
+    return upgrade_begin_direct(handle, type, header, flash_addr);
+}
+
 int ota_upgrade_write_chunk(upgrade_handle_t *handle, const void *chunk_data, size_t chunk_size)
 {
     return upgrade_write_chunk(handle, chunk_data, chunk_size);

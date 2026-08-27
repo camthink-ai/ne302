@@ -74,7 +74,8 @@ sl_status_t sli_si91x_host_allocate_buffer(sl_wifi_buffer_t **buffer,
     if (temp != NULL) {
       break;
     } else {
-      osDelay(SLI_SYSTEM_MS_TO_TICKS(1));
+      // ponytail: 1ms retry was a 1000 wake/s churn source under heap pressure — floor at 5ms
+      osDelay(SLI_SYSTEM_MS_TO_TICKS(5));
     }
   } while ((osKernelGetTickCount() - start) < wait_duration_ms);
 

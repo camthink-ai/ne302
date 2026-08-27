@@ -65,16 +65,10 @@ export default function UpgradeWaiting() {
 
                 <div className="flex gap-2 mt-2">
                     <Button
-                      variant="outline"
+                      variant="primary"
                       onClick={() => navigate('/login')}
                     >
                         {i18n._('sys.system_management.relogin')}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      onClick={() => navigate('/device-tool')}
-                    >
-                        {i18n._('sys.system_management.reconnect_device')}
                     </Button>
                 </div>
             </div>

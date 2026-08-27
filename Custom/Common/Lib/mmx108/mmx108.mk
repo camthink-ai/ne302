@@ -62,8 +62,8 @@ CFLAGS += -DHALOW_CHIP_MM8108
 endif
 
 # NE302 SPI HaLow: disable 802.11 PS and long bus idle timeout (default 100 ms sleeps chip).
-CFLAGS += -DMMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS=3600000U
-CFLAGS += -DMMWLAN_DEFAULT_PS_MODE=0
+# CFLAGS += -DMMWLAN_DEFAULT_DYNAMIC_PS_TIMEOUT_MS=3600000U
+# CFLAGS += -DMMWLAN_DEFAULT_PS_MODE=0
 
 # HaLow SPI backend (pick at most one):
 #   (default)     HAL SPI6 in Appli/Core/Src/spi.c + mmhal_wlan.c

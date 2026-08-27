@@ -8,6 +8,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import WifiReloadMask from '@/components/wifi-reload-mask';
 import { toast } from 'sonner';
 import { retryFetch, sleep } from '@/utils';
+import { useNavigate } from 'react-router-dom';
+import { precheckWithLayoutWarn, usePartTableWarn } from '@/components/part-table-warn';
 
 const ACCEPT_FILE_TYPE = {
     'application/octet-stream': ['.bin'],
@@ -17,9 +19,13 @@ const MAX_SIZE = 1024 * 1024 * 10;
 export default function ImportFSBL() {
     const { i18n } = useLingui();
     const { uploadOTAFileReq, updateOTAReq, restartDevice, getDeviceInfoReq } = systemApis;
+    const navigate = useNavigate();
     const [fsblFile, setFsblFile] = useState<File | null>(null);
     const [isBurning, setIsBurning] = useState(false);
     const [isRestarting, setIsRestarting] = useState(false);
+    // Layout-drift gate shared with the other single-firmware flows: an FSBL
+    // package built for a different partition table warns before burning.
+    const { ask, dialog: layoutWarnDialog } = usePartTableWarn(() => navigate('/import-bundle'));
 
     // Selecting a file only stores it locally. The actual burn starts on "confirm burn".
     const uploadFSBL = async (file: File) => {
@@ -33,6 +39,11 @@ export default function ImportFSBL() {
         }
         const file = fsblFile;
         try {
+            // Validate the header + layout-drift gate BEFORE the burn mask
+            // goes up; declining just returns to the file-selected state.
+            if (!(await precheckWithLayoutWarn(file, 'fsbl', ask))) {
+                return;
+            }
             setIsBurning(true);
             setIsRestarting(true);
             // /ota/upload writes the firmware to flash (the actual burn); upgrade-local
@@ -47,15 +58,26 @@ export default function ImportFSBL() {
                 auto_upgrade: true,
             });
             await restartDevice({ delay_seconds: 1 }, { skipErrorToast: true });
-            await sleep(8000);
-            const result = await retryFetch(
-                (signal) => getDeviceInfoReq({ skipErrorToast: true, signal }),
-                5000,
-                10,
-            );
+            await sleep(5000);
+            // retryFetch throws when its retries are exhausted (it never
+            // resolves falsy) — catch it so an unreachable device goes to
+            // the guidance page instead of silently unfreezing.
+            let result: unknown = null;
+            try {
+                result = await retryFetch(
+                    (signal) => getDeviceInfoReq({ skipErrorToast: true, signal }),
+                    5000,
+                    2,
+                );
+            } catch {
+                /* handled below */
+            }
             if (result) {
                 setIsBurning(false);
                 toast.success(i18n._('sys.system_management.update_success'));
+            } else {
+                toast.error(i18n._('sys.system_management.network_disconnected'));
+                navigate('/upgrade-waiting');
             }
         } catch (error) {
             console.error('handleUpdate', error);
@@ -123,6 +145,8 @@ export default function ImportFSBL() {
                     </div>
                 </CardContent>
             </Card>
+
+            {layoutWarnDialog}
         </div>
     );
 }

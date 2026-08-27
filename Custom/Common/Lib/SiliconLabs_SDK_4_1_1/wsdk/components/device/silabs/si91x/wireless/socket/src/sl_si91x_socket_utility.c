@@ -1280,10 +1280,13 @@ int sli_si91x_shutdown(int socket, int how)
   }
 
   /* Wait until the socket has sent all outstanding data packets in its queue.
-     Polls si91x_socket->data_buffer_count and sleeps 2 ms per iteration
-     until no transmit buffers remain. */
+     Polls si91x_socket->data_buffer_count and sleeps per iteration until no
+     transmit buffers remain. */
+  /* ponytail: unbounded drain — a wedged TX pipe used to park the closer here
+     at 500 wake/s (2ms sleeps). 10ms keeps the drain responsive but caps the
+     wake storm at 100/s. */
   while (si91x_socket->data_buffer_count) {
-    osDelay(SLI_SYSTEM_MS_TO_TICKS(2));
+    osDelay(SLI_SYSTEM_MS_TO_TICKS(10));
   }
 
   /*If socket is server socket, SHUTDOWN_BY_PORT is to be used irrespective of 'how' parameter.*/

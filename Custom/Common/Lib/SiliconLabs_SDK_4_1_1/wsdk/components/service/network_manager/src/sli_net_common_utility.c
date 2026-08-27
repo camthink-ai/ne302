@@ -664,7 +664,9 @@ static bool sli_handle_disconnect_or_failure_event(const sli_network_manager_mes
   if (ap_connected || !sli_auto_join_retry_ctx.active) {
     if (sli_sync_auto_join_waiting) {
       uint32_t ack_flag = ap_connected ? SLI_NET_RSP_FLAG_AUTO_JOIN_SUCCESS : SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE;
-      if (osEventFlagsSet(sli_network_manager_response_flags, ack_flag) == (uint32_t)osFlagsError) {
+      // ponytail: real flag errors are the 0xFFFFFFFx family — all carry the
+      // osFlagsError indicator bit, so test with `&` (an `==` never fires).
+      if (osEventFlagsSet(sli_network_manager_response_flags, ack_flag) & (uint32_t)osFlagsError) {
         SL_DEBUG_LOG_V2(DEBUG,
                         "Failed to signal auto-join %s ACK\n",
                         ap_connected ? (uintptr_t) "success" : (uintptr_t) "failure");
@@ -691,8 +693,8 @@ static void sli_handle_auto_join_retry_event(void)
 
   if (ap_connected) {
     if (sli_sync_auto_join_waiting
-        && osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_SUCCESS)
-             == (uint32_t)osFlagsError) {
+        && (osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_SUCCESS)
+              & (uint32_t)osFlagsError)) {
       SL_DEBUG_LOG_V2(DEBUG, "Failed to signal auto-join success ACK\r\n");
     }
     if (net_event_handler) {
@@ -713,8 +715,8 @@ static void sli_handle_auto_join_retry_event(void)
 
   if (sli_auto_join_retry_ctx.remaining_attempts <= 1) {
     if (sli_sync_auto_join_waiting
-        && osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
-             == (uint32_t)osFlagsError) {
+        && (osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
+              & (uint32_t)osFlagsError)) {
       SL_DEBUG_LOG_V2(DEBUG, "Failed to signal auto-join failure ACK\r\n");
     }
     if (net_event_handler) {
@@ -914,8 +916,8 @@ static void sli_handle_auto_join_event(const sli_network_manager_message_t *mess
     SL_DEBUG_LOG_V2(ERROR, "Failed to get default Wi-Fi client profile.\r\n");
     sli_sync_client_state.state = SLI_NET_STATE_DISCONNECTED;
     if (sli_sync_auto_join_waiting
-        && osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
-             == (uint32_t)osFlagsError) {
+        && (osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
+              & (uint32_t)osFlagsError)) {
       SL_DEBUG_LOG_V2(ERROR, "Failed to signal auto-join failure ACK\r\n");
     }
     return;
@@ -962,8 +964,8 @@ static void sli_handle_auto_join_event(const sli_network_manager_message_t *mess
                     vap_id);
     sli_sync_client_state.state = SLI_NET_STATE_DISCONNECTED;
     if (sli_sync_auto_join_waiting
-        && osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
-             == (uint32_t)osFlagsError) {
+        && (osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE)
+              & (uint32_t)osFlagsError)) {
       SL_DEBUG_LOG_V2(ERROR, "Failed to signal auto-join failure ACK\r\n");
     }
     return;
@@ -982,7 +984,7 @@ static void sli_handle_auto_join_event(const sli_network_manager_message_t *mess
   if (sli_sync_auto_join_waiting) {
     uint32_t ack_flag = (status == SL_STATUS_OK) ? SLI_NET_RSP_FLAG_AUTO_JOIN_SUCCESS
                                                  : SLI_NET_RSP_FLAG_AUTO_JOIN_FAILURE;
-    if (osEventFlagsSet(sli_network_manager_response_flags, ack_flag) == (uint32_t)osFlagsError) {
+    if (osEventFlagsSet(sli_network_manager_response_flags, ack_flag) & (uint32_t)osFlagsError) {
       SL_DEBUG_LOG_V2(DEBUG, "Failed to signal final sync WiFi client ACK\r\n");
     }
   }
@@ -995,7 +997,7 @@ static void sli_handle_thread_terminate(const sli_network_manager_message_t *mes
   UNUSED_PARAMETER(message);
   SL_DEBUG_LOG_V2(INFO, "\r\n Terminating network manager thread\r\n");
   if (osEventFlagsSet(sli_network_manager_response_flags, SLI_NET_RSP_FLAG_THREAD_TERMINATE_ACK)
-      == (uint32_t)osFlagsError) {
+      & (uint32_t)osFlagsError) {
     SL_DEBUG_LOG_V2(DEBUG, "Failed to signal thread terminate ACK\r\n");
     // Continue anyway - thread must terminate
   }
@@ -1110,6 +1112,13 @@ void sli_network_manager_event_handler(const void *arg)
           SL_DEBUG_LOG_V2(INFO, "Unknown event flag received at NW Manager: 0x%lx\r\n", flags);
           break;
       }
+    } else {
+      // ponytail: with osWaitForever the only non-osOK outcome is an error —
+      // osMessageQueueGet returns instantly (never blocks) when the queue
+      // object is dead/NULL (teardown churn during 0x19 recovery). Without
+      // this guard the loop spins at this thread's priority forever.
+      SL_DEBUG_LOG_V2(ERROR, "network manager: queue get failed %d, backing off\r\n", (int)queue_status);
+      osDelay(10);
     }
   }
 }

@@ -38,6 +38,7 @@
 #include "sl_rsi_utility.h"
 #include "wifi.h"
 #include "debug.h"
+#include "dhcpserver.h"
 #include "generic_utils.h"
 #include "generic_file.h"
 #include "common_utils.h"
@@ -792,9 +793,16 @@ int wifi_get_flash_version(char *buf, size_t size)
 {
     if (!buf || size < 16) return -1;
 
+    // Both reads below dereference the XIP window at WIFI_FW_BASE (0x71A00000).
+    // While another task is inside a littlefs/NVS/OTA op, memory-mapped mode is
+    // temporarily disabled and an unlocked read in that window raises a precise
+    // BusFault. Hold the storage mutex for the whole function (same pattern as
+    // wifi_flash_boot).
+    storage_lock_ext();
     const uint8_t *flash_addr = (const uint8_t *)WIFI_FLASH_BASE_ADDR;
     const flash_header_t *hdr = (const flash_header_t *)flash_addr;
     if (hdr->valid_flags != WIFI_FLASH_VALID_FLAGS) {
+        storage_unlock_ext();
         snprintf(buf, size, "N/A");
         return -1;
     }
@@ -812,7 +820,6 @@ int wifi_get_flash_version(char *buf, size_t size)
     //                      major           [31:24]  major
     //   44               fw_version_ext_info:
     //                      patch_num        [7:0]   security ← SDK naming quirk
-    storage_lock_ext();
     const uint8_t *rps = flash_addr + WIFI_FLASH_HEADER_SIZE;
     uint32_t ver_info = *(const uint32_t *)(rps + 12);
     uint32_t ver_ext  = *(const uint32_t *)(rps + 44);
@@ -1090,6 +1097,61 @@ static int wifi_cmd_spi(int argc, char *argv[])
     return 0;
 }
 
+static int wifi_ap_clients_cmd(int argc, char *argv[])
+{
+    /* Response is ~450B — keep it off the CLI task stack. */
+    static sl_wifi_client_info_response_t fw_clients;
+    static dhcps_client_t lease[DHCPS_MAX_CLIENTS];
+    sl_status_t status;
+    int i, n;
+
+    (void)argc;
+    (void)argv;
+
+    /* Firmware view: stations currently associated with the AP. */
+    memset(&fw_clients, 0, sizeof(fw_clients));
+    status = sl_wifi_get_ap_client_info(SL_WIFI_AP_2_4GHZ_INTERFACE, &fw_clients);
+    if (status == SL_STATUS_OK || status == SL_STATUS_INVALID_COUNT) {
+        LOG_SIMPLE("AP associated clients: %u", (unsigned)fw_clients.client_count);
+        for (i = 0; i < fw_clients.client_count && i < SL_WIFI_MAX_CLIENT_COUNT; i++) {
+            sl_wifi_client_info_t *ci = &fw_clients.client_info[i];
+            uint8_t *m = ci->mac_adddress.octet;   /* (sic) SDK field name */
+            if (ci->ip_address.type == SL_IPV4) {
+                uint8_t *ip = ci->ip_address.ip.v4.bytes;
+                LOG_SIMPLE("  [%d] %02x:%02x:%02x:%02x:%02x:%02x  ip %u.%u.%u.%u",
+                           i + 1, (unsigned)m[0], (unsigned)m[1], (unsigned)m[2],
+                           (unsigned)m[3], (unsigned)m[4], (unsigned)m[5],
+                           (unsigned)ip[0], (unsigned)ip[1], (unsigned)ip[2], (unsigned)ip[3]);
+            } else {
+                LOG_SIMPLE("  [%d] %02x:%02x:%02x:%02x:%02x:%02x",
+                           i + 1, (unsigned)m[0], (unsigned)m[1], (unsigned)m[2],
+                           (unsigned)m[3], (unsigned)m[4], (unsigned)m[5]);
+            }
+        }
+    } else {
+        LOG_SIMPLE("sl_wifi_get_ap_client_info failed: 0x%lX (is AP up?)", status);
+    }
+
+    /* Host view: what the lwIP DHCP server believes, including sticky cached
+     * bindings of stations that already left. Comparing the two lists is how
+     * client/server address split-brains show up. */
+    n = dhcps_get_clients(lease, DHCPS_MAX_CLIENTS);
+    LOG_SIMPLE("DHCP lease table: %d entries", n);
+    for (i = 0; i < n; i++) {
+        LOG_SIMPLE("  [%d] %02x:%02x:%02x:%02x:%02x:%02x -> %u.%u.%u.%u  %s",
+                   i + 1,
+                   (unsigned)lease[i].Client_Mac[0], (unsigned)lease[i].Client_Mac[1],
+                   (unsigned)lease[i].Client_Mac[2], (unsigned)lease[i].Client_Mac[3],
+                   (unsigned)lease[i].Client_Mac[4], (unsigned)lease[i].Client_Mac[5],
+                   (unsigned)ip4_addr1(&lease[i].Client_Address),
+                   (unsigned)ip4_addr2(&lease[i].Client_Address),
+                   (unsigned)ip4_addr3(&lease[i].Client_Address),
+                   (unsigned)ip4_addr4(&lease[i].Client_Address),
+                   lease[i].is_active ? "active" : "cached");
+    }
+    return 0;
+}
+
 debug_cmd_reg_t wifi_cmd_table[] = {
     {"wifiup",     "WiFi update.",      wifi_update_cmd},
     {"wifitest",   "WiFi test.",        wifi_test_cmd},
@@ -1098,6 +1160,7 @@ debug_cmd_reg_t wifi_cmd_table[] = {
     {"wifi_transmit_test_stop",  "WiFi transmit test stop.",       wifi_transmit_test_stop_cmd},
     // {"wifi_ant",  "WiFi antenna test <start|stop>",      wifi_ant_cmd},
     {"wifispi", "wifi spi <hexdata> [count]", wifi_cmd_spi},
+    {"wifi_ap_clients", "Show AP associated clients + DHCP leases.", wifi_ap_clients_cmd},
 };
 
 

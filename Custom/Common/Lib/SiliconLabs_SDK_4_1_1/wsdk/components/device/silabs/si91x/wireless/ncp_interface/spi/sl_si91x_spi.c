@@ -145,7 +145,19 @@ static sl_status_t sli_send_c1c2(uint16_t data)
     // instantly and this 1s poll would monopolise the RT1 HAL thread — console/
     // business die while wdgTask (RT7) keeps feeding IWDG → silent hang, no
     // reboot. Success returns above, so this only costs the retry path.
-    if ((++poll & 0x3F) == 0) {
+    // NOTE: ladder backoff, user form 2026-08-26 — spin the first 10 polls
+    // (a healthy handshake completes in a few), then 1ms → 5ms → 10ms. A/B on
+    // hardware proved flat-1ms vs flat-5ms identical, so handshake latency stays
+    // low here; the recovery-window console death is NOT this delay (it is the
+    // 10-attempt loop blocking ~20s/attempt in sync waits against the dead NWP).
+    // NB: thresholds must cascade largest-first — ascending order leaves the
+    // >20/>50 arms dead (poll>20 implies poll>10) and degenerates to flat 1ms.
+    poll++;
+    if (poll > 50) {
+      osDelay(10);
+    } else if (poll > 20) {
+      osDelay(5);
+    } else if (poll > 10) {
       osDelay(1);
     }
     // If a timeout occurs while waiting for a response, return a timeout status
@@ -182,7 +194,16 @@ static sl_status_t sli_wait_start_token(uint32_t timeout)
     // ponytail: same yield guard as sli_send_c1c2 — a desynced bus returns 0xFF
     // (never == START_TOKEN 0x55) and this poll (up to 10s) would spin without
     // yielding. Normal start-token arrival is a few iters, so < 64 → no cost.
-    if ((++poll & 0x3F) == 0) {
+    // NOTE: ladder backoff matching sli_send_c1c2 (user form 2026-08-26) —
+    // 10 free polls, then 1ms → 5ms → 10ms, largest-first so every arm is
+    // reachable. Delay value exonerated by hardware A/B (flat 1ms ≡ flat 5ms);
+    // recovery-window hangs live elsewhere (sync waits vs dead NWP).
+    poll++;
+    if (poll > 50) {
+      osDelay(10);
+    } else if (poll > 20) {
+      osDelay(5);
+    } else if (poll > 10) {
       osDelay(1);
     }
   }

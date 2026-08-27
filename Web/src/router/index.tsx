@@ -14,6 +14,7 @@ import DeviceInformation from "@/pages/deviceInformation";
 import AuthGuard from "./components/auth-guard";
 import ImportFSBL from "@/pages/ImportFSBL";
 import ImportWifi from "@/pages/ImportWifi";
+import ImportBundle from "@/pages/ImportBundle";
 import UpgradeWaiting from "@/pages/UpgradeWaiting";
 
 const baseRoutes = [
@@ -67,6 +68,10 @@ const baseRoutes = [
   {
     path: "/import-wifi",
     element: <ImportWifi />,
+  },
+  {
+    path: "/import-bundle",
+    element: <ImportBundle />,
   },
   {
     path: "/upgrade-waiting",

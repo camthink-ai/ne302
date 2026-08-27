@@ -33,6 +33,43 @@
 #include "sl_constants.h"
 #include "sli_queue_manager_types.h"
 
+#ifdef SIMULATION_SDK_SPIN_ERROR
+// CLI fault injection ("ifconfig wl error_test sdk_qkill|sdk_qclear") — the
+// VALIDATED reproducer for the 0x19 field death (2026-08-26: qkill + one ping
+// -> raw TX 0x19 x30 -> real recovery -> zombie -> full console death, no
+// watchdog reset, ~90s).
+//
+// It force-fails dequeue WITHOUT touching the queue, so "non-empty + dequeue
+// fails" holds forever — the state the 0x19 recovery churn leaves behind
+// (queues re-init'ed over live nodes, half-torn-down pools). The engines
+// drain with `while (!IS_QUEUE_EMPTY(q)) { dequeue; if (fail) continue; }`
+// (event engine registration/scan loops, command engine control loop) — the
+// `continue` re-tests the same non-empty queue without advancing, so the
+// loop never terminates and never yields: whichever engine thread drains
+// next (command engine tx8 on TX traffic, event engine tx6 on async events)
+// hot-spins at a priority above the console (tx9) and log writer (tx48),
+// while watchdog (tx1) keeps getting fed -> 8h-silence signature.
+//
+// One failing dequeue in the pool's free-queue allocation path also maps to
+// SL_STATUS_ALLOCATION_FAILED (0x19) upstream, so arming before any traffic
+// reproduces the natural field error sequence. Needs one enqueue after
+// arming to enter a drain loop; sdk_qclear disarms. Fix validation: with the
+// drain-loop `continue`->`break` patches applied, this injection must degrade
+// to a logged error instead of killing the console.
+//
+// (Sibling injection sdk_flagkill — NULL the event engine's flags object —
+// was REMOVED 2026-08-26: refuted on hardware. This port's
+// osFlagsErrorParameter is 0xFFFFFFFC, not the CMSIS-spec 0x80000000, and
+// its bit pattern overlaps the engine's TERMINATE flag (1<<23), so the
+// thread self-terminates instead of spinning.)
+static uint8_t sim_queue_dequeue_fail = 0;
+
+void sli_queue_manager_sim_dequeue_fail(uint8_t mode)
+{
+  sim_queue_dequeue_fail = mode;
+}
+#endif
+
 sl_status_t sli_queue_manager_init(sli_queue_t *handle, sli_buffer_manager_pool_types_t queue_node_pool)
 {
   if (NULL == handle) {
@@ -185,6 +222,15 @@ sl_status_t sli_queue_manager_dequeue(sli_queue_t *handle, void **data)
   if (NULL == data) {
     return SL_STATUS_INVALID_PARAMETER;
   }
+
+#ifdef SIMULATION_SDK_SPIN_ERROR
+  // Fault injection: fail WITHOUT touching the queue, so "non-empty +
+  // dequeue fails" holds forever. See the sim block above the init function.
+  if (sim_queue_dequeue_fail) {
+    *data = NULL;
+    return SL_STATUS_FAIL;
+  }
+#endif
 
   status = sli_queue_manager_dequeue_node(handle, &node);
 

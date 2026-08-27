@@ -188,6 +188,9 @@ jobs:
           echo "Packing HEX..."
           make pack-hex STEDGEAI_VARIANT=${{ matrix.stedgeai_variant }}
 
+          echo "Packing full OTA bundle..."
+          make pkg-bundle STEDGEAI_VARIANT=${{ matrix.stedgeai_variant }}
+
           echo "::notice::Build completed successfully"
           echo "::endgroup::"
 
@@ -299,6 +302,7 @@ jobs:
             This release includes the following firmware binaries:
             - **`*_FSBL_signed.bin`** - Files for flashing the FSBL (not for OTA)
             - **`*_pkg.bin`** - Files for OTA
+            - **`*_bundle.bin`** — Full OTA bundle (FSBL+APP+WEB+Model+WiFi in one file); upload via Web UI → System Settings → Firmware Upgrade → Import Firmware → Advanced Options → Full Bundle One-Click Upgrade
             - **`*_WakeCore.bin`** - Files for flashing the WakeCore
             - **`*.hex`** - Combined HEX file for STM32CubeProgrammer one-click flash
 
@@ -312,6 +316,7 @@ jobs:
           files: |
             ./build/*_FSBL_signed.bin
             ./build/*_pkg.bin
+            ./build/*_bundle.bin
             ./build/*_WakeCore.bin
             ./build/*.hex
             ./build/ne302_App.elf

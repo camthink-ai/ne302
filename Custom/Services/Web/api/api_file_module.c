@@ -795,7 +795,7 @@ aicam_result_t file_delete_handler(http_handler_context_t *ctx)
     cJSON_AddStringToObject(response_json, "fs", fs_str);
     cJSON_AddStringToObject(response_json, "path", file_path);
     cJSON_AddStringToObject(response_json, "filename", fname);
-    cJSON_AddBoolToObject(response_json, "deleted", cJSON_True);
+    cJSON_AddBoolToObject(response_json, "deleted", 1);
 
     char *json_str = cJSON_Print(response_json);
     aicam_result_t ret = api_response_success(ctx, json_str, "File deleted successfully");
@@ -894,7 +894,7 @@ aicam_result_t file_preview_handler(http_handler_context_t *ctx)
 
     if ((size_t)st.st_size > max_size) {
         cJSON *response_json = cJSON_CreateObject();
-        cJSON_AddBoolToObject(response_json, "too_large", cJSON_True);
+        cJSON_AddBoolToObject(response_json, "too_large", 1);
         cJSON_AddNumberToObject(response_json, "file_size", (double)st.st_size);
         cJSON_AddNumberToObject(response_json, "max_preview_size", (double)max_size);
         char *json_str = cJSON_Print(response_json);

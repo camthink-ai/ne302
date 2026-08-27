@@ -196,6 +196,7 @@
 #define NVS_KEY_HALOW_RC_MCS             "hw_rc_mcs"
 #define NVS_KEY_HALOW_RC_BW              "hw_rc_bw"
 #define NVS_KEY_HALOW_RC_GI              "hw_rc_gi"
+#define NVS_KEY_HALOW_PS_MODE            "hw_ps"
 
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"

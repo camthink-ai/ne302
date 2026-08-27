@@ -46,6 +46,12 @@ typedef struct {
     uint64_t last_ping_time_ms;             // Last ping send time
     uint64_t last_pong_time_ms;             // Last pong receive time
     aicam_bool_t ping_pending;              // Ping sent but pong not received
+    /* FALSE until this client has received a keyframe prefixed with SPS/PPS.
+     * The encoder emits SPS/PPS only once per session (enc.c latch), so a
+     * client connecting later never sees them in-band - without this gate
+     * jmuxer never sets readyToDecode and silently drops every frame (black
+     * screen + loading loop after each watchdog reconnect). */
+    aicam_bool_t sps_synced;
 } websocket_client_t;
 
 /**
@@ -332,6 +338,12 @@ aicam_result_t websocket_stream_server_start_stream(uint32_t stream_id) {
     g_websocket_server.stream_frame_counter = 0;
     g_websocket_server.stats.stream_active = AICAM_TRUE;
     g_websocket_server.stats.stream_id = stream_id;
+
+    /* New stream session: force every connected client to re-sync at the
+     * next keyframe with fresh SPS/PPS (encoder params may have changed). */
+    for (uint32_t i = 0; i < g_websocket_server.config.max_clients; i++) {
+        g_websocket_server.clients[i].sps_synced = AICAM_FALSE;
+    }
     
     osMutexRelease(g_websocket_server.mutex);
     
@@ -611,6 +623,58 @@ static void ws_frame_fifo_push(const void *packet, size_t size)
 }
 
 
+/* Build the late-joiner frame [header][SPS][PPS][keyframe] in ONE buffer -
+ * the exact byte shape of an encoder session start, which is the only form
+ * a cold jmuxer reliably initializes from (an SPS/PPS-only feed would push
+ * a slice-less sample into MSE; a bare IDR leaves readyToDecode false).
+ * The hub cache stores bare NAL payloads (no start codes), so the annexB
+ * start code is re-inserted before each. Returns a hal_mem_alloc_large
+ * buffer the caller must free, or NULL when the cache is unavailable or
+ * the alloc fails - caller then falls back to the bare keyframe, which is
+ * self-sufficient when the frame itself carries in-band SPS/PPS. */
+#define WS_SPS_PPS_MAX 128
+static const uint8_t ws_annexb_start_code[4] = {0x00, 0x00, 0x00, 0x01};
+
+static uint8_t *ws_build_join_frame(const uint8_t *fifo_frame, uint32_t size,
+                                    size_t *join_size)
+{
+    video_hub_sps_pps_t hub_sp;
+
+    if (video_hub_get_sps_pps(&hub_sp) != AICAM_OK ||
+        hub_sp.sps_size == 0 || hub_sp.pps_size == 0 ||
+        hub_sp.sps_size > WS_SPS_PPS_MAX || hub_sp.pps_size > WS_SPS_PPS_MAX) {
+        LOG_SVC_WARN("WS join-sync: no usable SPS/PPS cache, sending bare keyframe");
+        return NULL;
+    }
+
+    const size_t hdr_size = sizeof(websocket_frame_header_t);
+    uint32_t key_size = size - (uint32_t) hdr_size;
+    uint32_t params_size = 4 + hub_sp.sps_size + 4 + hub_sp.pps_size;
+
+    /* Called with the ws mutex held; lock order ws->hub is safe because the
+     * hub never holds its mutex while calling back into this server
+     * (notify_frame/notify_sps_pps snapshot-and-release). */
+    uint8_t *buf = hal_mem_alloc_large(hdr_size + params_size + key_size);
+    if (buf == NULL) {
+        LOG_SVC_WARN("WS join-sync: alloc failed, sending bare keyframe");
+        return NULL;
+    }
+
+    memcpy(buf, fifo_frame, hdr_size);            /* reuse keyframe header */
+    uint8_t *p = buf + hdr_size;
+    memcpy(p, ws_annexb_start_code, 4); p += 4;
+    memcpy(p, hub_sp.sps_data, hub_sp.sps_size); p += hub_sp.sps_size;
+    memcpy(p, ws_annexb_start_code, 4); p += 4;
+    memcpy(p, hub_sp.pps_data, hub_sp.pps_size); p += hub_sp.pps_size;
+    memcpy(p, fifo_frame + hdr_size, key_size);
+
+    websocket_frame_header_t *hdr = (websocket_frame_header_t *) buf;
+    hdr->frame_size = WS_TO_NETWORK_32(params_size + key_size);
+
+    *join_size = hdr_size + params_size + key_size;
+    return buf;
+}
+
 /* Consumer (web task, MG_EV_POLL): send queued frames to all live clients. */
 static void ws_frame_fifo_drain(void)
 {
@@ -618,6 +682,9 @@ static void ws_frame_fifo_drain(void)
         uint8_t *data;
         uint32_t size;
         uint8_t heap;
+        uint8_t *join_buf = NULL;
+        size_t join_size = 0;
+        aicam_bool_t join_built = AICAM_FALSE;
 
         osMutexAcquire(g_websocket_server.mutex, osWaitForever);
         if (s_ws_fifo_count == 0) {
@@ -631,29 +698,64 @@ static void ws_frame_fifo_drain(void)
         s_ws_fifo_count--;
 
         for (uint32_t i = 0; i < g_websocket_server.config.max_clients; i++) {
-            struct mg_connection *conn = g_websocket_server.clients[i].conn;
-            if (g_websocket_server.clients[i].is_active &&
-                conn &&
-                !conn->is_closing &&
-                ws_stream_is_client_alive(&g_websocket_server.clients[i])) {
-                /* Backpressure cap: a client that stops reading (abrupt
-                 * disconnect before ping/pong detects it) would otherwise
-                 * accumulate mg_ws_send data in conn->send unboundedly - the
-                 * iobuf grew to 4MB and then failed every resize, flooding
-                 * MG_ERROR at frame rate. Drop frames for a stalled client
-                 * instead of buffering past one max frame. */
-                if (conn->send.len < WS_SEND_BUF_CAP) {
-                    mg_ws_send(conn, data, size, WEBSOCKET_OP_BINARY);
-                } else {
-                    LOG_SVC_WARN("WS send-buffer cap hit (%lu bytes), dropping frame for client %u",
-                                 (unsigned long) conn->send.len,
-                                 g_websocket_server.clients[i].client_id);
-                }
+            websocket_client_t *client = &g_websocket_server.clients[i];
+            struct mg_connection *conn = client->conn;
+            if (!(client->is_active &&
+                  conn &&
+                  !conn->is_closing &&
+                  ws_stream_is_client_alive(client))) {
+                continue;
             }
+            /* Backpressure cap: a client that stops reading (abrupt
+             * disconnect before ping/pong detects it) would otherwise
+             * accumulate mg_ws_send data in conn->send unboundedly - the
+             * iobuf grew to 4MB and then failed every resize, flooding
+             * MG_ERROR at frame rate. Drop frames for a stalled client
+             * instead of buffering past one max frame. */
+            if (conn->send.len >= WS_SEND_BUF_CAP) {
+                LOG_SVC_WARN("WS send-buffer cap hit (%lu bytes), dropping frame for client %u",
+                             (unsigned long) conn->send.len,
+                             client->client_id);
+                continue;
+            }
+
+            if (!client->sps_synced) {
+                /* Late joiner: hold P-frames until a keyframe, then send
+                 * SPS/PPS + that keyframe as one frame. Without this the
+                 * client never gets parameter sets (encoder emits them
+                 * once per session, before it connected) and jmuxer drops
+                 * every frame with no error. */
+                const websocket_frame_header_t *hdr =
+                    (const websocket_frame_header_t *) data;
+                if (size < sizeof(*hdr) ||
+                    hdr->magic != WS_TO_NETWORK_32(WS_FRAME_MAGIC) ||
+                    hdr->frame_type != WS_FRAME_TYPE_H264_KEY) {
+                    continue; /* raw/headerless or delta frame - wait */
+                }
+                if (!join_built) {
+                    join_buf = ws_build_join_frame(data, size, &join_size);
+                    if (join_buf == NULL) {
+                        join_buf = data; /* bare-keyframe fallback */
+                        join_size = size;
+                    }
+                    join_built = AICAM_TRUE;
+                }
+                mg_ws_send(conn, join_buf, join_size, WEBSOCKET_OP_BINARY);
+                client->sps_synced = AICAM_TRUE;
+                WS_LOG("[WS] join-sync id=%lu client=%u frame=%luB (sps+pps+key)",
+                       (unsigned long) conn->id, client->client_id,
+                       (unsigned long) join_size);
+                continue;
+            }
+
+            mg_ws_send(conn, data, size, WEBSOCKET_OP_BINARY);
         }
         osMutexRelease(g_websocket_server.mutex);
         if (heap) {
             hal_mem_free(data);
+        }
+        if (join_built && join_buf != data) {
+            hal_mem_free(join_buf);
         }
     }
 }
@@ -829,6 +931,9 @@ static void ws_stream_add_client(struct mg_connection *conn) {
             g_websocket_server.clients[i].last_ping_time_ms = current_time;
             g_websocket_server.clients[i].last_pong_time_ms = current_time;
             g_websocket_server.clients[i].ping_pending = AICAM_FALSE;
+            /* Wait for a keyframe+SPS/PPS join frame before streaming to
+             * this client (see ws_frame_fifo_drain). */
+            g_websocket_server.clients[i].sps_synced = AICAM_FALSE;
             
             // Store client IP for future identification
             strncpy(g_websocket_server.clients[i].client_ip, client_ip, sizeof(g_websocket_server.clients[i].client_ip) - 1);

@@ -1057,11 +1057,14 @@ __attribute__((unused)) static void ota_header_print(const ota_header_t *header)
     printf("Firmware CRC32: 0x%08lX\n", header->fw_crc32);
     
     printf("\n=== Target Information ===\r\n");
-    printf("Target Address: 0x%08lX\r\n", header->target_addr);
+    printf("Part Table CRC: 0x%08lX\r\n", header->part_table_crc);
     printf("Target Size: %lu bytes\r\n", header->target_size);
     printf("Target Offset: 0x%08lX\r\n", header->target_offset);
     printf("Target Partition: %s\r\n", header->target_partition);
     printf("Hardware Version: 0x%08lX\r\n", header->hw_version);
+    printf("Device Model: 0x%04lX%s\r\n", (unsigned long)header->device_model,
+           header->device_model == 0 ? " (unstamped)" :
+           (header->device_model == OTA_DEVICE_MODEL ? " (match)" : " (MISMATCH)"));
     printf("Chip ID: 0x%08lX\r\n", header->chip_id);
     
     printf("========================\r\n");

@@ -587,7 +587,22 @@ uint32_t sli_si91x_wait_for_event(uint32_t event_mask, uint32_t timeout)
 
   uint32_t result = osEventFlagsWait(sli_wifi_events, event_mask, osFlagsWaitAny, timeout);
 
-  if (result == (uint32_t)osErrorTimeout || result == (uint32_t)osErrorResource) {
+  // ponytail: catch the 0xFFFFFFFx error family, but keep the legitimate
+  // "no event" outcomes (timeout; resource on a non-blocking poll) silent
+  // and instant as the original code did — sync command waits routinely
+  // time out. Only the abnormal members (dead/NULL flags object returns
+  // osFlagsErrorParameter instantly on EVERY call) get logged once and a
+  // 5ms yield, so callers looping on a dead object degrade to a slow
+  // poll instead of hot-spinning at this thread's priority.
+  if ((result & (uint32_t)osFlagsError) != 0u) {
+    if ((result != (uint32_t)osErrorTimeout) && (result != (uint32_t)osErrorResource)) {
+      static bool flags_error_logged = false;
+      if (!flags_error_logged) {
+        flags_error_logged = true;
+        SL_DEBUG_LOG_V2(ERROR, "driver: osEventFlagsWait failed 0x%lX\r\n", result);
+      }
+      osDelay(5);
+    }
     return 0;
   }
   return result;

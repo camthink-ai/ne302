@@ -444,6 +444,9 @@ static void parse_network_service(cJSON *json, network_service_config_t *cfg)
             json_get_int32(halow, "rc_mcs", &cfg->halow_rc_mcs);
             json_get_int32(halow, "rc_bw_mhz", &cfg->halow_rc_bw_mhz);
             json_get_int32(halow, "rc_gi", &cfg->halow_rc_gi);
+            temp = cfg->halow_ps_mode;
+            json_get_uint32(halow, "ps_mode", &temp);
+            cfg->halow_ps_mode = (temp != 0U) ? 1U : 0U;
         }
     }
 }
@@ -1013,6 +1016,7 @@ static cJSON *serialize_network_service(const network_service_config_t *cfg)
         cJSON_AddNumberToObject(halow, "rc_mcs", cfg->halow_rc_mcs);
         cJSON_AddNumberToObject(halow, "rc_bw_mhz", cfg->halow_rc_bw_mhz);
         cJSON_AddNumberToObject(halow, "rc_gi", cfg->halow_rc_gi);
+        cJSON_AddNumberToObject(halow, "ps_mode", cfg->halow_ps_mode);
 
         cJSON_AddItemToObject(json, "halow", halow);
     }

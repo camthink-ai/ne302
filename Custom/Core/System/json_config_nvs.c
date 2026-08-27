@@ -900,6 +900,10 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save HaLow rate GI to NVS");
 
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_PS_MODE, config->halow_ps_mode);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow PS mode to NVS");
+
     // Save known_network_count
     result = json_config_nvs_write_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, config->known_network_count);
     if (result != AICAM_OK)
@@ -2198,6 +2202,13 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->network_service.halow_rc_gi = temp_int32;
     } else {
         json_config_nvs_write_int32(NVS_KEY_HALOW_RC_GI, config->network_service.halow_rc_gi);
+    }
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_PS_MODE, &temp_uint32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_ps_mode = (temp_uint32 != 0U) ? 1U : 0U;
+    } else {
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_PS_MODE, config->network_service.halow_ps_mode);
     }
 
     // Load known_network_count

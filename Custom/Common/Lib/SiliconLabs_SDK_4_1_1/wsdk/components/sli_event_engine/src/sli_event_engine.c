@@ -96,8 +96,23 @@ static uint32_t sli_event_handler_wait_for_event(osEventFlagsId_t eventId, uint3
   // Wait for any of the specified event flags to be set, with a timeout
   uint32_t result = osEventFlagsWait(eventId, event_mask, osFlagsWaitAny, timeout);
 
-  // Return 0 if timeout or resource error occurred
-  if (result == (uint32_t)osErrorTimeout || result == (uint32_t)osErrorResource) {
+  // ponytail: catch the 0xFFFFFFFx error family, but keep the legitimate
+  // "no event" outcomes (timeout; resource on a non-blocking poll) silent
+  // and instant as the original code did. Only the abnormal members (dead/
+  // deleted flags object returns osFlagsErrorParameter instantly on EVERY
+  // call) get logged once and a 5ms yield, so callers looping on a
+  // dead object degrade to a slow poll instead of hot-spinning at this
+  // thread's priority; the raw error also stays out of sticky `|=`
+  // accumulators (its TERMINATE bit overlaps the error family).
+  if ((result & (uint32_t)osFlagsError) != 0u) {
+    if ((result != (uint32_t)osErrorTimeout) && (result != (uint32_t)osErrorResource)) {
+      static bool flags_error_logged = false;
+      if (!flags_error_logged) {
+        flags_error_logged = true;
+        SL_DEBUG_LOG_V2(ERROR, "event engine: osEventFlagsWait failed 0x%lX\r\n", result);
+      }
+      osDelay(5);
+    }
     return 0;
   }
   // Otherwise, return the received event flags
@@ -164,8 +179,13 @@ static void sli_event_handler_thread(void *args)
         // Dequeue a new handler node from the registration queue
         status = sli_queue_manager_dequeue(&event_handler_registration_queue, (void **)&new_node);
         if (SL_STATUS_OK != status) {
+          // ponytail: `continue` re-tests the same non-empty queue without
+          // advancing — a corrupt queue state (0x19 recovery churn) turned
+          // this drain loop into a zero-yield hot spin at this thread's
+          // priority (field 8h console death). Bail out instead.
+          SL_DEBUG_LOG_V2(ERROR, "event engine: registration dequeue failed 0x%lX, aborting drain\r\n", status);
           sli_event_handler_set_event(event_engine_Id, SLI_EVENT_ENGINE_REGISTER_EVENT_HANDLER_FAILED_EVENT);
-          continue;
+          break;
         }
 
         // Add the new handler node to the event handler list
@@ -194,8 +214,12 @@ static void sli_event_handler_thread(void *args)
           // Dequeue the next event from the handler's event queue
           status = sli_queue_manager_dequeue(list->event_queue, &data);
           if (SL_STATUS_OK != status) {
-            // ToDo: Treat the error as fatal and handle it appropriately
-            continue;
+            // ponytail: `continue` re-tested the same non-empty queue without
+            // advancing `list` — a failing dequeue on a non-empty queue (queue
+            // corruption from the 0x19 recovery churn) hot-spun this thread.
+            // Abort the scan; the thread re-blocks on the next wait.
+            SL_DEBUG_LOG_V2(ERROR, "event engine: event dequeue failed 0x%lX, aborting scan\r\n", status);
+            break;
           }
 
           // Handle the event
@@ -271,7 +295,12 @@ sl_status_t sli_event_engine_deinit(void)
   uint32_t events_received = 0; // Holds received event flags (ack or timeout)
 
   if (NULL == event_handler_thread_id) {
-    return SL_STATUS_INVALID_MODE; // Thread not running; cannot deinit
+    /* ponytail: no thread means a previous deinit already ran (or init never
+     * completed). Returning an error here aborts the caller's teardown chain
+     * before it can clear device_initialized — the same half-torn-zombie trap
+     * fixed in the HAL / command engine deinits. Clean the remnants (handler
+     * list, queues, flags) and report success. */
+    goto force_cleanup;
   }
 
   // Request the event engine thread to terminate
@@ -281,10 +310,26 @@ sl_status_t sli_event_engine_deinit(void)
   events_received =
     sli_event_handler_wait_for_event(event_engine_Id, SLI_EVENT_ENGINE_THREAD_TERMINATE_ACK_EVENT, 5000);
   if (0 == events_received) {
-    return SL_STATUS_TIMEOUT; // Did not receive ack in time
+    /* ponytail: no ACK — the worker is wedged. Do NOT bail: the
+     * osThreadTerminate below reaps it either way, and bailing leaves the
+     * flags/queues/handler list alive while the caller assumes the engine is
+     * gone, re-entering this timeout on every later deinit attempt. */
+    SL_DEBUG_LOG_V2(ERROR, "event engine terminate ACK timeout, forcing teardown");
   }
+
+  /* ponytail: the thread self-terminates (osThreadTerminate(osThreadGetId()) in
+   * the TERMINATE branch), but tx_thread_terminate() on the calling thread never
+   * returns, so the wrapper's tx_thread_delete + stack/TCB free never run — the
+   * corpse stays in the created list forever. Each recovery re-init spawns a new
+   * "event engine" thread, so N recoveries leak N stacks (observed: 12 TERMINATED
+   * event-engine corpses after one 10-attempt run). tx_thread_terminate() on an
+   * already-terminated thread returns TX_SUCCESS, so re-issuing osThreadTerminate
+   * from THIS context completes the cleanup (delete from created list + free). */
+  osThreadTerminate(event_handler_thread_id);
+
   event_handler_thread_id = NULL; // Mark thread as no longer valid
 
+force_cleanup:
   // Free all registered event handler nodes and deinitialize their queues
   while (NULL != event_handler_list) {
     sli_event_engine_handler_node_t *temp = event_handler_list; // Take current head
@@ -298,7 +343,9 @@ sl_status_t sli_event_engine_deinit(void)
 
   if (event_engine_Id != NULL) {
     if (osEventFlagsDelete(event_engine_Id) != osOK) {
-      return SL_STATUS_FAIL;
+      // ponytail: a dangling/double-deleted flags handle — NULL it and move on
+      // so this deinit stays idempotent instead of failing forever.
+      SL_DEBUG_LOG_V2(ERROR, "event engine flags delete failed, forcing handle clear");
     }
     event_engine_Id = NULL;
   }

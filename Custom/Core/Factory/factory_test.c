@@ -10,6 +10,7 @@
 #include "version.h"
 #include "drtc.h"
 #include "device_service.h"
+#include "json_config_internal.h"
 #include "mem_map.h"
 #include <string.h>
 #include <stdio.h>
@@ -434,13 +435,13 @@ int factory_config_write(const factory_config_t *config) {
         storage_nvs_write(NVS_FACTORY, NVS_KEY_SERIAL_NUMBER, 
                           config->serial_number, strlen(config->serial_number) + 1);
         // Also sync to USER partition
-        storage_nvs_write(NVS_USER, "dev_info_serial",
+        storage_nvs_write(NVS_USER, NVS_KEY_DEVICE_INFO_SERIAL,
                           config->serial_number, strlen(config->serial_number) + 1);
     }
     if (strlen(config->hw_version) > 0) {
         storage_nvs_write(NVS_FACTORY, NVS_KEY_HW_VERSION,
                           config->hw_version, strlen(config->hw_version) + 1);
-        storage_nvs_write(NVS_USER, "dev_info_hw_ver",
+        storage_nvs_write(NVS_USER, NVS_KEY_DEVICE_INFO_HW_VER,
                           config->hw_version, strlen(config->hw_version) + 1);
     }
     if (strlen(config->mfg_date) > 0) {
@@ -543,8 +544,8 @@ int factory_test_mark_passed(void) {
     int ret = storage_nvs_read(NVS_FACTORY, NVS_KEY_HW_VERSION, hw_ver, sizeof(hw_ver) - 1);
     if (ret <= 0 || strlen(hw_ver) == 0) {
         // Default hardware version
-        storage_nvs_write(NVS_FACTORY, NVS_KEY_HW_VERSION, "V1.1", 5);
-        storage_nvs_write(NVS_USER, "dev_info_hw_ver", "V1.1", 5);
+        storage_nvs_write(NVS_FACTORY, NVS_KEY_HW_VERSION, "V1.0", 5);
+        storage_nvs_write(NVS_USER, NVS_KEY_DEVICE_INFO_HW_VER, "V1.0", 5);
     }
     
     // Mark test as passed (use string "1" for fget compatibility)
@@ -566,6 +567,7 @@ static int factory_test_cmd(int argc, char *argv[]) {
         LOG_SIMPLE("  test [all|psram|flash|nvs|...]  - Run factory test\r\n");
         LOG_SIMPLE("  config                          - Show factory config\r\n");
         LOG_SIMPLE("  sn <serial_number>              - Set serial number\r\n");
+        LOG_SIMPLE("  hw [version]                    - Show/set hardware version\r\n");
         LOG_SIMPLE("  mac                             - Show current MAC\r\n");
         LOG_SIMPLE("  mark                            - Mark test as passed\r\n");
         LOG_SIMPLE("  status                          - Show factory status\r\n");
@@ -604,7 +606,7 @@ static int factory_test_cmd(int argc, char *argv[]) {
         LOG_SIMPLE("  Serial Number: %s\r\n", 
                    strlen(config.serial_number) > 0 ? config.serial_number : "(not set)");
         LOG_SIMPLE("  HW Version:    %s\r\n", 
-                   strlen(config.hw_version) > 0 ? config.hw_version : "V1.1");
+                   strlen(config.hw_version) > 0 ? config.hw_version : "V1.0");
         LOG_SIMPLE("  Mfg Date:      %s\r\n", 
                    strlen(config.mfg_date) > 0 ? config.mfg_date : "(not set)");
         LOG_SIMPLE("  Factory FW:    %s\r\n", 
@@ -631,13 +633,39 @@ static int factory_test_cmd(int argc, char *argv[]) {
             // Write to both FACTORY and USER partitions to keep them in sync
             storage_nvs_write(NVS_FACTORY, NVS_KEY_SERIAL_NUMBER, 
                               argv[2], strlen(argv[2]) + 1);
-            storage_nvs_write(NVS_USER, "dev_info_serial", 
+            storage_nvs_write(NVS_USER, NVS_KEY_DEVICE_INFO_SERIAL, 
                               argv[2], strlen(argv[2]) + 1);
             LOG_SIMPLE("Serial number set: %s\r\n", argv[2]);
         }
         return 0;
     }
     
+    if (strcmp(cmd, "hw") == 0) {
+        if (argc < 3) {
+            // Show current hardware version
+            char hw_ver[16] = {0};
+            storage_nvs_read(NVS_FACTORY, NVS_KEY_HW_VERSION, hw_ver, sizeof(hw_ver) - 1);
+            if (strlen(hw_ver) == 0) {
+                storage_nvs_read(NVS_USER, NVS_KEY_DEVICE_INFO_HW_VER, hw_ver, sizeof(hw_ver) - 1);
+            }
+            LOG_SIMPLE("HW Version: %s\r\n",
+                       strlen(hw_ver) > 0 ? hw_ver : "(not set)");
+        } else {
+            // Limit to factory_config_t.hw_version size (16 incl. null)
+            if (strlen(argv[2]) >= 16) {
+                LOG_SIMPLE("Invalid HW version (max 15 chars): %s\r\n", argv[2]);
+                return -1;
+            }
+            // Write to both FACTORY and USER partitions to keep them in sync
+            storage_nvs_write(NVS_FACTORY, NVS_KEY_HW_VERSION,
+                              argv[2], strlen(argv[2]) + 1);
+            storage_nvs_write(NVS_USER, NVS_KEY_DEVICE_INFO_HW_VER,
+                              argv[2], strlen(argv[2]) + 1);
+            LOG_SIMPLE("HW version set: %s\r\n", argv[2]);
+        }
+        return 0;
+    }
+
     if (strcmp(cmd, "mac") == 0) {
         // Show current system MAC address (from device config)
         factory_config_t config;

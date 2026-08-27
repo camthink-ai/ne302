@@ -560,8 +560,12 @@ typedef enum {
 #define SLI_WIFI_RSP_MAC_ADDRESS_WAIT_TIME \
   ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))
 /// Timeout value for disconnect response command
-#define SLI_WIFI_RSP_DISCONNECT_WAIT_TIME \
-  ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))
+// ponytail: clamped to 10s (was 1000*SF + 30000 = 31s). This is the
+// interface-DOWN command (sl_wifi_disconnect / disconnect_ap_client): a
+// healthy NWP answers in well under a second, so the 31s only ever fired
+// against a dead NWP — where it froze teardown for half a minute per
+// command (0x19 recovery field: ap down alone burned 32s).
+#define SLI_WIFI_RSP_DISCONNECT_WAIT_TIME (10000)
 /// Timeout value for rx stats response command
 #define SLI_WIFI_RSP_RX_STATS_WAIT_TIME \
   ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))
@@ -699,8 +703,10 @@ typedef enum {
 #define SLI_WIFI_RSP_HT_CAPABILITIES_WAIT_TIME \
   ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))
 /// Timeout value for AP Stop response command
-#define SLI_WIFI_RSP_AP_STOP_WAIT_TIME \
-  ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))
+// ponytail: clamped to 10s like SLI_WIFI_RSP_DISCONNECT_WAIT_TIME above —
+// sl_wifi_ap_stop is the AP interface-DOWN command; healthy NWP replies in
+// ms, dead NWP used to burn 31s here (field rec[N] ap_deinit = 32036 ms).
+#define SLI_WIFI_RSP_AP_STOP_WAIT_TIME (10000)
 /// Timeout value for encrypt crypto response command
 #define SLI_COMMON_RSP_ENCRYPT_CRYPTO_WAIT_TIME \
   ((SLI_WIFI_INTERNAL_COMMANDS_BASE_VALUE * SL_WIFI_INTERNAL_COMMANDS_TIMEOUT_SF) + (SLI_DEFAULT_TIMEOUT))

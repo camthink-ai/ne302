@@ -59,6 +59,31 @@ aicam_result_t ota_upgrade_local_handler(http_handler_context_t *ctx);
 aicam_result_t ota_export_firmware_handler(http_handler_context_t *ctx);
 
 /**
+ * @brief OTA bundle pre-check - POST /api/v1/system/ota/bundle/precheck
+ * @details Body: the 4096-byte bundle header. The device validates it against
+ *          its own partition table and returns the burn plan.
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t ota_bundle_precheck_handler(http_handler_context_t *ctx);
+
+/**
+ * @brief Arm a prechecked bundle session - POST /api/v1/system/ota/bundle/begin
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t ota_bundle_begin_handler(http_handler_context_t *ctx);
+
+/**
+ * @brief Finish/abort a bundle session - POST /api/v1/system/ota/bundle/finish
+ * @details Body: {"result":"ok"|"abort"}. "ok" sets the WiFi update-pending
+ *          flag; both clear the session.
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t ota_bundle_finish_handler(http_handler_context_t *ctx);
+
+/**
  * @brief Check OTA upload timeout and reset state if necessary
  * @return AICAM_TRUE if timeout occurred and state was reset, AICAM_FALSE otherwise
  */

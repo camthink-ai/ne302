@@ -2150,6 +2150,7 @@ static void halow_fill_radio_json(cJSON *obj, const network_service_config_t *sy
     int32_t mcs = sys_net->halow_rc_mcs;
     int32_t bw = sys_net->halow_rc_bw_mhz;
     int32_t gi = sys_net->halow_rc_gi;
+    int32_t ps_mode = sys_net->halow_ps_mode;
     const char *country_code = sys_net->halow_country_code;
     cJSON *limits;
 
@@ -2163,6 +2164,7 @@ static void halow_fill_radio_json(cJSON *obj, const network_service_config_t *sy
         mcs = (int32_t)cfg.halow_cfg.rc_mcs;
         bw = (int32_t)cfg.halow_cfg.rc_bw_mhz;
         gi = (int32_t)cfg.halow_cfg.rc_gi;
+        ps_mode = (int32_t)cfg.halow_cfg.ps_mode;
         if (cfg.halow_cfg.country_code[0] != '\0') {
             country_code = cfg.halow_cfg.country_code;
         }
@@ -2173,6 +2175,7 @@ static void halow_fill_radio_json(cJSON *obj, const network_service_config_t *sy
     cJSON_AddNumberToObject(obj, "rate_mcs", mcs);
     cJSON_AddNumberToObject(obj, "rate_bw_mhz", bw);
     cJSON_AddNumberToObject(obj, "rate_gi", gi);
+    cJSON_AddNumberToObject(obj, "ps_mode", ps_mode);
 
     limits = cJSON_CreateObject();
     halow_fill_radio_limits_json(limits, country_code);
@@ -2181,7 +2184,7 @@ static void halow_fill_radio_json(cJSON *obj, const network_service_config_t *sy
 
 static aicam_result_t halow_validate_radio_fields(uint16_t tx_power_dbm, uint32_t scan_dwell_ms,
                                                   int32_t rate_mcs, int32_t rate_bw_mhz, int32_t rate_gi,
-                                                  const char *country_code)
+                                                  int32_t ps_mode, const char *country_code)
 {
     int tx_max = mm_halow_get_regdomain_max_tx_dbm(country_code);
 
@@ -2205,6 +2208,9 @@ static aicam_result_t halow_validate_radio_fields(uint16_t tx_power_dbm, uint32_
     if (rate_gi < -1 || rate_gi > 1) {
         return AICAM_ERROR_INVALID_PARAM;
     }
+    if (ps_mode != 0 && ps_mode != 1) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
     return AICAM_OK;
 }
 
@@ -2225,6 +2231,7 @@ static aicam_result_t halow_apply_radio_to_netif(network_service_config_t *sys_n
     cfg.halow_cfg.rc_mcs = (int8_t)sys_net->halow_rc_mcs;
     cfg.halow_cfg.rc_bw_mhz = (int8_t)sys_net->halow_rc_bw_mhz;
     cfg.halow_cfg.rc_gi = (int8_t)sys_net->halow_rc_gi;
+    cfg.halow_cfg.ps_mode = sys_net->halow_ps_mode;
 
     if (nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &cfg) != 0) {
         return AICAM_ERROR;
@@ -2240,6 +2247,7 @@ static aicam_result_t halow_apply_radio_to_netif(network_service_config_t *sys_n
                                      (int8_t)sys_net->halow_rc_bw_mhz,
                                      (int8_t)sys_net->halow_rc_gi);
     (void)mm_halow_set_scan_config(sys_net->halow_scan_dwell_ms, cfg.halow_cfg.ndp_probe_enabled);
+    (void)mm_halow_set_power_save(sys_net->halow_ps_mode);
 
     if (json_config_set_network_service_config(sys_net) != AICAM_OK) {
         return AICAM_ERROR;
@@ -2281,6 +2289,7 @@ aicam_result_t network_halow_radio_handler(http_handler_context_t *ctx)
         int32_t rate_mcs = sys_net.halow_rc_mcs;
         int32_t rate_bw_mhz = sys_net.halow_rc_bw_mhz;
         int32_t rate_gi = sys_net.halow_rc_gi;
+        int32_t ps_mode = sys_net.halow_ps_mode;
 
         request_json = web_api_parse_body(ctx);
         if (!request_json) {
@@ -2308,10 +2317,14 @@ aicam_result_t network_halow_radio_handler(http_handler_context_t *ctx)
         if (item != NULL && cJSON_IsNumber(item)) {
             rate_gi = (int32_t)item->valueint;
         }
+        item = cJSON_GetObjectItem(request_json, "ps_mode");
+        if (item != NULL && cJSON_IsNumber(item)) {
+            ps_mode = (int32_t)item->valueint;
+        }
         cJSON_Delete(request_json);
 
         if (halow_validate_radio_fields(tx_power_dbm, scan_dwell_ms, rate_mcs, rate_bw_mhz, rate_gi,
-                                        sys_net.halow_country_code) != AICAM_OK) {
+                                        ps_mode, sys_net.halow_country_code) != AICAM_OK) {
             cJSON_Delete(response_json);
             return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid HaLow radio parameters");
         }
@@ -2321,6 +2334,7 @@ aicam_result_t network_halow_radio_handler(http_handler_context_t *ctx)
         sys_net.halow_rc_mcs = rate_mcs;
         sys_net.halow_rc_bw_mhz = rate_bw_mhz;
         sys_net.halow_rc_gi = rate_gi;
+        sys_net.halow_ps_mode = (ps_mode != 0) ? 1U : 0U;
 
         if (halow_apply_radio_to_netif(&sys_net) != AICAM_OK) {
             cJSON_Delete(response_json);

@@ -87,6 +87,8 @@ typedef struct {
     uint32_t current_offset;
     uint32_t total_size;
     uint32_t crc32;
+    uint8_t direct;        /* 1 = direct-address write (bundle layout migration):
+                              no slot switch, no system-state save on finish */
 } upgrade_handle_t;
 
 void save_system_state(void);
@@ -94,6 +96,13 @@ SystemState *get_system_state(void);
 void init_system_state(upgrade_flash_read read, upgrade_flash_write write, upgrade_flash_erase erase);
 uint32_t get_active_partition(FirmwareType type);
 int upgrade_begin(upgrade_handle_t *handle, FirmwareType type, firmware_header_t *header);
+/* Absolute-address variant used by the OTA bundle layout-migration path:
+ * flash_addr is an absolute flash address (e.g. APP1_BASE), 4K-aligned. */
+int upgrade_begin_direct(upgrade_handle_t *handle, FirmwareType type, firmware_header_t *header, uint32_t flash_addr);
+/* Blank the OTA info partition (SystemState). Used just before a direct-mode
+ * FSBL write: blank state is the safe default both old and new firmware can
+ * self-rebuild from (init_system_state rebuilds from slot-A OTA headers). */
+void upgrade_erase_ota_info(void);
 int upgrade_write_chunk(upgrade_handle_t *handle, const void *chunk_data, size_t chunk_size);
 int upgrade_finish(upgrade_handle_t *handle);
 int upgrade_read_begin(upgrade_handle_t *handle, FirmwareType type, int slot_idx);

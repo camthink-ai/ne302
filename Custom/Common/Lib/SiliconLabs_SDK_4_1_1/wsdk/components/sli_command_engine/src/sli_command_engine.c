@@ -142,8 +142,23 @@ static uint32_t sli_command_engine_wait_for_event(osEventFlagsId_t command_engin
 
   uint32_t result = osEventFlagsWait(command_engine_eventId, event_mask, osFlagsWaitAny, timeout);
 
-  // Translate timeout or resource error to 0 (caller treats 0 as "no event").
-  if ((result == (uint32_t)osErrorTimeout) || (result == (uint32_t)osErrorResource)) {
+  // ponytail: catch the 0xFFFFFFFx error family, but keep the legitimate
+  // "no event" outcomes (timeout; resource on a non-blocking poll) silent
+  // and instant as the original code did. Only the abnormal members (dead/
+  // deleted flags object returns osFlagsErrorParameter instantly on EVERY
+  // call) get logged once and a 5ms yield, so callers looping on a
+  // dead object degrade to a slow poll instead of hot-spinning at this
+  // thread's priority; the raw error also stays out of sticky `|=`
+  // accumulators (its TERMINATE bit overlaps the error family).
+  if ((result & (uint32_t)osFlagsError) != 0u) {
+    if ((result != (uint32_t)osErrorTimeout) && (result != (uint32_t)osErrorResource)) {
+      static bool flags_error_logged = false;
+      if (!flags_error_logged) {
+        flags_error_logged = true;
+        SL_DEBUG_LOG_V2(ERROR, "command engine: osEventFlagsWait failed 0x%lX\r\n", result);
+      }
+      osDelay(5);
+    }
     return 0;
   }
   return result; // Return the flags that satisfied the wait.
@@ -715,7 +730,13 @@ static void sli_command_engine_thread(void *args)
 
         status = sli_queue_manager_dequeue(&instance->control_queue, (void **)&request);
         if (SL_STATUS_OK != status) {
-          continue; // Skip on dequeue error
+          // ponytail: `continue` re-tests the same non-empty queue without
+          // advancing — a corrupt queue state (0x19 recovery churn) turned
+          // this drain loop into a zero-yield hot spin at this thread's
+          // priority (field 8h console death). Bail out instead.
+          SL_DEBUG_LOG_V2(ERROR, "command engine: control dequeue failed 0x%lX, aborting drain\r\n", status);
+          sli_command_engine_send_error_event(instance, SLI_COMMAND_ENGINE_STATUS_FATAL_ERROR);
+          break;
         }
 
         if (request->request_type == SLI_COMMAND_ENGINE_REGISTER_PACKET_TYPE) {
@@ -772,9 +793,13 @@ static void sli_command_engine_thread(void *args)
       while (!SLI_QUEUE_MANAGER_IS_QUEUE_EMPTY(&instance->tx_status_packet_queue)) {
         status = sli_queue_manager_dequeue(&(instance->tx_status_packet_queue), (void **)&metadata);
         if (SL_STATUS_OK != status) {
-          SL_DEBUG_LOG_V2(ERROR, "TX ACK dequeue failed");
+          // ponytail: `continue` re-tested the same non-empty queue without
+          // advancing — a failing dequeue on a non-empty queue (queue
+          // corruption from the 0x19 recovery churn) hot-spun this thread.
+          // Abort the drain; the thread re-blocks on the next wait.
+          SL_DEBUG_LOG_V2(ERROR, "TX ACK dequeue failed 0x%lX, aborting drain\r\n", status);
           sli_command_engine_send_error_event(instance, SLI_COMMAND_ENGINE_STATUS_FATAL_ERROR);
-          continue;
+          break;
         }
         if (metadata->tx_status == SLI_COMMAND_ENGINE_PACKET_FLUSHED) {
           SL_DEBUG_LOG_V2(DEBUG, "TX ACK for FLUSHED packet - freeing metadata");
@@ -1209,7 +1234,12 @@ sl_status_t sli_command_engine_deinit(sli_command_engine_t *instance)
 
   // Ensure event ID object exists before using it
   if (NULL == instance->command_engine_eventId) {
-    return SL_STATUS_INVALID_PARAMETER;
+    /* ponytail: already torn down (a previous deinit deleted the flags, or a
+     * partial one left the instance half-cleaned). Returning an error here
+     * aborts the whole driver teardown before it can clear device_initialized,
+     * pinning the driver in the half-torn state where every sync command
+     * returns NOT_READY. Force-clean the remnants and report success. */
+    return sli_command_engine_deinit_if_initialized(instance);
   }
 
   instance->lifecycle = (uint8_t)SLI_COMMAND_ENGINE_LIFECYCLE_DEINIT;
@@ -1222,14 +1252,18 @@ sl_status_t sli_command_engine_deinit(sli_command_engine_t *instance)
                                                       SLI_COMMAND_ENGINE_THREAD_TERMINATE_ACK_EVENT,
                                                       5000);
   if (0 == events_received) {
-    // Timed out waiting for acknowledgment -> report timeout
-    return SL_STATUS_TIMEOUT;
+    /* ponytail: no ACK — the worker is wedged (e.g. mid-recovery churn). Do
+     * NOT bail: the osThreadTerminate below reaps it either way, and bailing
+     * here leaves the flags/queues alive while the caller assumes the engine
+     * is gone (same half-torn-zombie class as the HAL deinit fix). */
+    SL_DEBUG_LOG_V2(ERROR, "command engine terminate ACK timeout, forcing teardown");
   }
 
   // Retry thread termination with a simple constant delay
   osStatus_t terminate_status = osError;
 
-  for (int retry = 0; retry < 3; retry++) {
+  // ponytail: NULL handle means the worker already self-terminated — nothing to reap.
+  for (int retry = 0; (NULL != instance->command_engine_threadId) && (retry < 3); retry++) {
     terminate_status = osThreadTerminate(instance->command_engine_threadId);
     if (terminate_status == osOK) {
       break;

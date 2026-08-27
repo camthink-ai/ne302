@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import WifiReloadMask from '@/components/wifi-reload-mask';
 import { sleep, sliceFile } from '@/utils';
 import { useNavigate } from 'react-router-dom';
+import { usePartTableWarn } from '@/components/part-table-warn';
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,8 @@ export default function ImportWifi() {
     const [uploading, setUploading] = useState(false);
     const [upgrading, setUpgrading] = useState(false);
     const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+    // Layout-drift gate shared with the other single-firmware flows.
+    const { ask, dialog: layoutWarnDialog } = usePartTableWarn(() => navigate('/import-bundle'));
 
     const acceptFileType = {
         'application/octet-stream': ['.bin'],
@@ -59,7 +62,13 @@ export default function ImportWifi() {
                         || 'Invalid firmware file'
                 );
             }
-            await preCheckReq(contentPreview, 'wifi');
+            const preRes = await preCheckReq(contentPreview, 'wifi');
+            // Package stamped a different partition table than the running
+            // firmware — let the user decide before writing to flash.
+            const preData = (preRes as { data?: { part_table_changed?: boolean } } | undefined)?.data;
+            if (preData?.part_table_changed && !(await ask())) {
+                return;
+            }
             await uploadOTAFileReq(file, 'wifi');
             // NOTE: the wifi-mode update flag is NOT set here; the streaming
             // upload only writes the flash image (flash_header_t + .rps) to
@@ -271,6 +280,8 @@ export default function ImportWifi() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {layoutWarnDialog}
         </div>
     );
 }

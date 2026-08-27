@@ -202,6 +202,18 @@ void sl_si91x_host_sim_spi4_dma(uint8_t mode)
 }
 #endif
 
+void sl_si91x_host_restore_spi4(void)
+{
+    if (is_high_spi) {
+        sl_si91x_host_enable_high_speed_bus();
+        printf("Restore high speed spi4\r\n");
+    } else {
+        HAL_SPI_DeInit(&hspi4);
+        MX_SPI4_Init();
+        printf("Restore low speed spi4\r\n");
+    }
+}
+
 sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, uint16_t buffer_length)
 {
     HAL_StatusTypeDef ret = HAL_OK;
@@ -237,8 +249,7 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
         if (ret != HAL_OK) {
             printf("[si91x]transmit failed(ret = %d)!\r\n", ret);
             HAL_SPI_Abort(&hspi4);
-            if (is_high_spi) sl_si91x_host_enable_high_speed_bus();
-            else MX_SPI4_Init();
+            sl_si91x_host_restore_spi4();
             osMutexRelease(mtx_id);
             return SL_STATUS_ABORT;
         }
@@ -257,8 +268,7 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
             if (sem_status != osOK) {
                 printf("[si91x]Wait DMA failed(ret = %d)!\r\n", (int)sem_status);
                 HAL_SPI_Abort(&hspi4);
-                if (is_high_spi) sl_si91x_host_enable_high_speed_bus();
-                else MX_SPI4_Init();
+                sl_si91x_host_restore_spi4();
                 osMutexRelease(mtx_id);
                 return SL_STATUS_TIMEOUT;
             }
@@ -270,8 +280,7 @@ sl_status_t sl_si91x_host_spi_transfer(const void *tx_buffer, void *rx_buffer, u
         } else {
             printf("[si91x]DMA transmit failed(ret = %d)!\r\n", ret);
             HAL_SPI_Abort(&hspi4);
-            if (is_high_spi) sl_si91x_host_enable_high_speed_bus();
-            else MX_SPI4_Init();
+            sl_si91x_host_restore_spi4();
             osMutexRelease(mtx_id);
             return SL_STATUS_ABORT;
         }

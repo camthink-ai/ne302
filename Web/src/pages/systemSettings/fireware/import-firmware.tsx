@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import WifiReloadMask from '@/components/wifi-reload-mask';
 import { retryFetch, sleep, sliceFile } from '@/utils';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { usePartTableWarn } from '@/components/part-table-warn';
 import { useNavigate } from 'react-router-dom';
 import {
   Popover,
@@ -57,6 +58,14 @@ export default function ImportFirmware({
   });
   type UploadCategory = keyof Pick<typeof uploadLoadings, 'app' | 'web' | 'ai'>;
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Partition-table drift confirm (precheck flags it): shared dialog; the
+  // "go bundle" choice closes this dialog and jumps to the bundle page.
+  const { ask: askLayoutChangeConfirm, dialog: layoutWarnDialog } = usePartTableWarn(
+    () => {
+      setIsImportFirmwareDialogOpen(false);
+      navigate('/import-bundle');
+    },
+  );
 
   const acceptFileType = {
     // Only accept .bin firmware files
@@ -128,7 +137,14 @@ export default function ImportFirmware({
           || 'Invalid firmware file'
         );
       }
-      await preCheckReq(contentPreview, type as FirmwareType);
+      const preRes = await preCheckReq(contentPreview, type as FirmwareType);
+      // Package stamped a different partition table than the running
+      // firmware: burn addresses for this path come from the running
+      // firmware's table — let the user decide before proceeding.
+      const preData = (preRes as { data?: { part_table_changed?: boolean } } | undefined)?.data;
+      if (preData?.part_table_changed && !(await askLayoutChangeConfirm())) {
+        return false;
+      }
       await uploadOTAFileReq(file, type as FirmwareType);
       await updateOTAReq({
         filename: file.name,
@@ -188,16 +204,27 @@ export default function ImportFirmware({
       setIsImportFirmwareDialogOpen(false);
       setRestartLoading(true);
       await restartDevice({ delay_seconds: 2 }, { skipErrorToast: true });
-      await sleep(8000);
-      const result = await retryFetch(
-        (signal) => getDeviceInfoReq({ skipErrorToast: true, signal }),
-        5000,
-        10
-      );
+      await sleep(5000);
+      // retryFetch throws when its retries are exhausted (it never resolves
+      // falsy) — catch it so an unreachable device goes to the guidance page
+      // instead of the success path never running and the mask just dropping.
+      let result: unknown = null;
+      try {
+        result = await retryFetch(
+          (signal) => getDeviceInfoReq({ skipErrorToast: true, signal }),
+          5000,
+          2
+        );
+      } catch {
+        /* handled below */
+      }
 
       if (result) {
         setIsUpdateLoading(false);
         toast.success(i18n._('sys.system_management.update_success'));
+      } else {
+        toast.error(i18n._('sys.system_management.network_disconnected'));
+        navigate('/upgrade-waiting');
       }
     } finally {
       setRestartLoading(false);
@@ -372,6 +399,17 @@ export default function ImportFirmware({
                 >
                   {i18n._('sys.system_management.advanced_wifi_upgrade')}
                 </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center rounded-sm px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                  onClick={() => {
+                    setIsAdvancedMenuOpen(false);
+                    setIsImportFirmwareDialogOpen(false);
+                    navigate('/import-bundle');
+                  }}
+                >
+                  {i18n._('sys.system_management.advanced_bundle_upgrade')}
+                </button>
               </PopoverContent>
             </Popover>
             <div className="flex flex-row space-x-2 w-full md:w-auto">
@@ -393,6 +431,8 @@ export default function ImportFirmware({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {layoutWarnDialog}
     </div>
   );
 }

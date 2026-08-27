@@ -59,6 +59,9 @@ static uint8_t debug_tread_stack[1024 * 32] ALIGN_32 IN_PSRAM;
 // RTOS task attributes
 const osThreadAttr_t debug_task_attributes = {
     .name = "debugTask",
+    /* Promoted to Realtime4 only while hunting the storm CPU eaters (console
+     * had to survive the fault to observe it); reverted once the hot spins
+     * were fixed at their source. */
     .priority = (osPriority_t) osPriorityHigh7,
     // .stack_size = 16 * 1024
     .stack_mem = debug_tread_stack,

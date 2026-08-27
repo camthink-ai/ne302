@@ -422,23 +422,51 @@ static int netif_manager_cmd(int argc, char* argv[])
         if (strcmp(if_name, NETIF_NAME_ETH_WAN) == 0) {
             w5500_netif_reset_test();
         } else {
+            int fault_handled = 0;
         #ifdef SIMULATION_SPI4_DMA_ERROR
             if (argc > 3) {
                 extern void sl_si91x_host_sim_spi4_dma(uint8_t mode);
                 if (strcmp(argv[3], "dma_once") == 0) {
                     sl_si91x_host_sim_spi4_dma(1);
+                    fault_handled = 1;
                 } else if (strcmp(argv[3], "dma_ff") == 0) {
                     sl_si91x_host_sim_spi4_dma(2);
+                    fault_handled = 1;
                 } else if (strcmp(argv[3], "dma_off") == 0) {
                     sl_si91x_host_sim_spi4_dma(0);
-                } else {
-                    LOG_SIMPLE("usage: error_test [c1c2|dma_once|dma_ff|dma_off]\r\n");
-                    return -1;
+                    fault_handled = 1;
                 }
-                LOG_SIMPLE("spi4 dma fault mode: %s\r\n", argv[3]);
-                return 0;
+                if (fault_handled) LOG_SIMPLE("spi4 dma fault mode: %s\r\n", argv[3]);
             }
         #endif
+        #ifdef SIMULATION_SDK_SPIN_ERROR
+            // sdk_qkill — THE validated reproducer for the 0x19 field death
+            // (2026-08-26, ~90s: arm + one ping -> raw TX 0x19 x30 -> real
+            // recovery -> zombie -> console dead, no watchdog reset). Forces
+            // dequeue failure on non-empty queues; the SDK drain loops
+            // `continue` without advancing and hot-spin. sdk_qclear disarms.
+            // Fix validation: with the drain-loop patches this must degrade
+            // to a logged error instead of killing the console.
+            // (sdk_flagkill removed: refuted — this port's
+            // osFlagsErrorParameter = 0xFFFFFFFC overlaps the engine's
+            // TERMINATE bit, so the thread self-terminates, no spin.)
+            if (!fault_handled && argc > 3) {
+                extern void sli_queue_manager_sim_dequeue_fail(uint8_t mode);
+                if (strcmp(argv[3], "sdk_qkill") == 0) {
+                    sli_queue_manager_sim_dequeue_fail(1);
+                    fault_handled = 1;
+                } else if (strcmp(argv[3], "sdk_qclear") == 0) {
+                    sli_queue_manager_sim_dequeue_fail(0);
+                    fault_handled = 1;
+                }
+                if (fault_handled) LOG_SIMPLE("sdk spin: %s (expect console death, no reset)\r\n", argv[3]);
+            }
+        #endif
+            if (argc > 3) {
+                if (fault_handled) return 0;
+                LOG_SIMPLE("usage: error_test [dma_once|dma_ff|dma_off|sdk_qkill|sdk_qclear]\r\n");
+                return -1;
+            }
             sli_firmware_error_callback(0x1234);
         }
     } else if (strcmp(argv[2], "fbcast") == 0) {

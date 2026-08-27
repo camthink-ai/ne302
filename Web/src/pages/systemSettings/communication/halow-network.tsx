@@ -12,6 +12,7 @@ import {
     PopoverTrigger,
 } from '@/components/ui/popover';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Input } from '@/components/ui/input';
 import WifiReloadMask from '@/components/wifi-reload-mask';
@@ -47,6 +48,7 @@ type HalowRadioConfig = {
     rate_mcs: number;
     rate_bw_mhz: number;
     rate_gi: number;
+    ps_mode: number;
 };
 
 type HalowRadioLimits = {
@@ -124,6 +126,7 @@ export default function HalowNetworkPage() {
         rate_mcs: -1,
         rate_bw_mhz: -1,
         rate_gi: -1,
+        ps_mode: 0,
     });
     const [radioSaving, setRadioSaving] = useState(false);
     const [radioRefreshing, setRadioRefreshing] = useState(false);
@@ -229,6 +232,7 @@ export default function HalowNetworkPage() {
                 rate_mcs: Number(data.rate_mcs ?? -1),
                 rate_bw_mhz: Number(data.rate_bw_mhz ?? -1),
                 rate_gi: Number(data.rate_gi ?? -1),
+                ps_mode: Number(data.ps_mode ?? 0) ? 1 : 0,
             });
         } catch (error) {
             // eslint-disable-next-line no-console
@@ -476,6 +480,7 @@ export default function HalowNetworkPage() {
                 rate_mcs: radioConfig.rate_mcs,
                 rate_bw_mhz: radioConfig.rate_bw_mhz,
                 rate_gi: radioConfig.rate_gi,
+                ps_mode: radioConfig.ps_mode,
             });
             await reloadMask(
                 saveFn,
@@ -729,6 +734,23 @@ export default function HalowNetworkPage() {
                             <SelectItem value="1">{i18n._('sys.system_management.halow_rate_gi_long')}</SelectItem>
                         </SelectContent>
                     </Select>
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center gap-2 py-2">
+                    <div className="shrink-0">
+                        <Label className="text-sm" htmlFor="halow-ps-mode">{i18n._('sys.system_management.halow_ps_mode')}</Label>
+                        <p className="text-xs text-text-secondary">
+                            {i18n._('sys.system_management.halow_ps_mode_hint')}
+                        </p>
+                    </div>
+                    <Switch
+                      id="halow-ps-mode"
+                      checked={radioConfig.ps_mode === 1}
+                      onCheckedChange={(checked) => setRadioConfig({
+                          ...radioConfig,
+                          ps_mode: checked ? 1 : 0,
+                      })}
+                    />
                 </div>
                 <div className="flex justify-end py-2">
                     <Button size="sm" variant="primary" disabled={radioSaving || showReloadMask} onClick={handleSaveRadioConfig}>

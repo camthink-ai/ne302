@@ -343,6 +343,17 @@ sl_status_t sl_net_deinit(sl_net_interface_t interface)
 
     // Deinitialize network manager thread
     status = sli_network_manager_deinit();
+  } else {
+    /* ponytail: clear the per-interface flags on a FAILED teardown too.
+     * Leaving them set after an aborted deinit pins every later sl_net_init
+     * into the ALREADY_INITIALIZED short-circuit while the layers below are
+     * half-torn — the recovery loop then fast-fails forever instead of
+     * re-running a real init (field: 10 x 9ms cli_init attempts, all dead).
+     * The network manager itself stays up; only a clean teardown takes it
+     * down. */
+    for (size_t i = 0; i < SL_NET_INTERFACE_MAX; i++) {
+      sl_net_interface_initialized[i] = false;
+    }
   }
   return status;
 }

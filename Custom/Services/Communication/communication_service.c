@@ -2804,6 +2804,7 @@ static aicam_result_t apply_halow_config_from_json(void)
     if_cfg.halow_cfg.rc_mcs = (int8_t)net_cfg.halow_rc_mcs;
     if_cfg.halow_cfg.rc_bw_mhz = (int8_t)net_cfg.halow_rc_bw_mhz;
     if_cfg.halow_cfg.rc_gi = (int8_t)net_cfg.halow_rc_gi;
+    if_cfg.halow_cfg.ps_mode = net_cfg.halow_ps_mode;
 
     int cfg_ret = nm_set_netif_cfg(NETIF_NAME_WIFI_HALOW, &if_cfg);
     if (cfg_ret != 0) {

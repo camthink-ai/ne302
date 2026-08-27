@@ -1317,7 +1317,7 @@ enum mmwlan_status mmwlan_set_power_save_mode(enum mmwlan_ps_mode mode);
 
 /** Default 802.11 power save mode at UMAC init (override in build). */
 #ifndef MMWLAN_DEFAULT_PS_MODE
-#define MMWLAN_DEFAULT_PS_MODE MMWLAN_PS_DISABLED
+#define MMWLAN_DEFAULT_PS_MODE MMWLAN_PS_ENABLED
 #endif
 
 /**

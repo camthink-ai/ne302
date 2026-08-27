@@ -160,7 +160,18 @@ static bool sli_buffer_manager_are_all_pools_deallocated()
 
   SL_DEBUG_LOG_V2(DEBUG, "Common Pools (Queue Size: %u):\r\n", common_mempool_queue.size);
 
-  // There shall be atleast one common pool, no need to check for null in first iteration.
+  /* ponytail: the SDK do-while below dereferences `current` before testing it
+   * ("there shall be at least one common pool") — but on a clean first boot
+   * there is NOT one: the re-init guard in sli_buffer_manager_init() calls
+   * deinit over an all-zero state, head == NULL, and the walk hops through
+   * the vector table / flash under PRIMASK until it happens to exit (or
+   * faults on an unmapped hop). With pools present this is unreachable
+   * (size > 0), so gate the whole walk on the queue being populated. */
+  if ((common_mempool_queue.size == 0) || (common_mempool_queue.head == NULL)) {
+    CORE_ExitAtomic(state);
+    return true;
+  }
+
   sli_buffer_manager_mempool_handler_t *current = common_mempool_queue.head;
 
   uint8_t pool_idx = 0;
@@ -174,7 +185,10 @@ static bool sli_buffer_manager_are_all_pools_deallocated()
       CORE_ExitAtomic(state);
       return false;
     }
-  } while (current != common_mempool_queue.head && current != NULL);
+    // ponytail: size bound — a broken ring (tail/head unreachable) must not
+    // let this read-only walk chase next-pointers indefinitely under PRIMASK.
+    // A healthy ring visits exactly `size` handlers and wraps out first.
+  } while ((current != common_mempool_queue.head) && (current != NULL) && (pool_idx <= common_mempool_queue.size));
 
   CORE_ExitAtomic(state);
   return true;
@@ -213,6 +227,16 @@ static sl_status_t sli_buffer_manager_allocate_buffer_from_dedicated_pool(
   *buffer = NULL;
   CORE_ExitAtomic(state);
 
+  // ponytail: the original fixed osDelay(2) poll meant 500 sleeps/s ping-ponging
+  // the caller with the System Timer thread (tx0, highest priority — it services
+  // every sleep expiry) while the pool is exhausted. During a wedged pipe (0x19
+  // storm) each failed frame burned its whole 1s wait at that rate and starved
+  // lower-priority threads (console dead >1min at 99.8% CPU). Enable the
+  // exponential backoff the SDK sketched in the comment below, with a 5ms floor
+  // and the SDK's own 50ms cap: transient pool pressure still rechecks within
+  // 5-20ms, a full 1s wedge wait costs ~25 sleeps instead of 500.
+  uint32_t delay_ms = 5;
+
   do {
     CORE_irqState_t state = CORE_EnterAtomic();
     if (mempool_handler->allocated_buffer_count < mempool_handler->max_buffer_count) {
@@ -225,14 +249,8 @@ static sl_status_t sli_buffer_manager_allocate_buffer_from_dedicated_pool(
       }
     }
     CORE_ExitAtomic(state);
-    osDelay(SLI_SYSTEM_MS_TO_TICKS(2));
-    /*new_delay = (new_delay < 50) ? new_delay * 2 : 50; // Exponential backoff for delay with a maximum cap at 50 ms
-    uint8_t remanning_time = wait_duration_ms - (osKernelGetTickCount() - start_time);
-    if (new_delay > remanning_time) {
-      delay = remanning_time - 1;
-    } else {
-      delay = new_delay;
-    }*/
+    osDelay(SLI_SYSTEM_MS_TO_TICKS(delay_ms));
+    delay_ms = (delay_ms < 50) ? (delay_ms * 2) : 50;
   } while ((osKernelGetTickCount() - start_time) <= wait_duration_ms);
 
   return (*buffer == NULL) ? SL_STATUS_ALLOCATION_FAILED : SL_STATUS_OK;
@@ -250,6 +268,12 @@ static sl_status_t sli_buffer_manager_allocate_buffer_from_common_pool(sli_inter
                                                                        uint32_t start_time,
                                                                        const uint32_t wait_duration_ms)
 {
+  /* ponytail: this search used to run entirely inside ONE CORE_EnterAtomic — on
+   * our port Atomic == PRIMASK, so the whole pool lap ran with every interrupt
+   * (SysTick included) masked, and the elapsed-time exit condition read a frozen
+   * tick counter. The circular-list wrap condition kept it bounded, but there is
+   * no reason to hold a global irq mask across a multi-pool search: take the
+   * atomic per iteration, like the dedicated-pool allocator above. */
   CORE_irqState_t state = CORE_EnterAtomic();
 
   // If there are no common mempools in the queue, return.
@@ -260,11 +284,14 @@ static sl_status_t sli_buffer_manager_allocate_buffer_from_common_pool(sli_inter
 
   sli_buffer_manager_mempool_handler_t *mempool_handler = common_mempool_queue.last_used_handler;
   *buffer                                               = NULL;
+  CORE_ExitAtomic(state);
 
   do {
+    CORE_irqState_t iter_state = CORE_EnterAtomic();
 
     if (mempool_handler->allocated_buffer_count >= mempool_handler->max_buffer_count) {
       mempool_handler = (sli_buffer_manager_mempool_handler_t *)mempool_handler->next.node;
+      CORE_ExitAtomic(iter_state);
       continue;
     }
 
@@ -273,17 +300,17 @@ static sl_status_t sli_buffer_manager_allocate_buffer_from_common_pool(sli_inter
       (*buffer)->buffer_manager_mempool_handler = mempool_handler;
       mempool_handler->allocated_buffer_count++;
       common_mempool_queue.last_used_handler = mempool_handler;
-      CORE_ExitAtomic(state);
+      CORE_ExitAtomic(iter_state);
       return SL_STATUS_OK;
     }
 
     // If the buffer is not allocated, move to the next mempool handler.
     mempool_handler = (sli_buffer_manager_mempool_handler_t *)mempool_handler->next.node;
+    CORE_ExitAtomic(iter_state);
 
   } while (((osKernelGetTickCount() - start_time) < wait_duration_ms)
            && (mempool_handler != common_mempool_queue.last_used_handler));
 
-  CORE_ExitAtomic(state);
   return SL_STATUS_ALLOCATION_FAILED;
 }
 
@@ -419,13 +446,24 @@ static sl_status_t sli_buffer_manager_free_all_common_mempools(void)
   sli_buffer_manager_mempool_handler_t *mempool_to_be_freed = NULL;
 
   // Note: we are intentionally not updating the tail reference
-  do {
-    mempool_to_be_freed = head;
-    head                = (sli_buffer_manager_mempool_handler_t *)mempool_to_be_freed->next.node;
+  /* ponytail: two guards against a corrupted queue (0x19 churn can leave
+   * size > 0 with a broken ring). head == NULL would deref the vector table
+   * on the first lap (same family as the are_all_pools_deallocated
+   * zero-state walk); the size bound stops the drain after `size` frees even
+   * when `tail` is unreachable — the old condition could chase next-pointers
+   * through freed/garbage nodes and SLI_FREE garbage into the PSRAM heap. A
+   * healthy ring frees exactly `size` nodes and never reaches either guard.
+   * The memsets below still run so the next init starts from a clean queue. */
+  if (head != NULL) {
+    uint8_t remaining = common_mempool_queue.size;
+    do {
+      mempool_to_be_freed = head;
+      head                = (sli_buffer_manager_mempool_handler_t *)mempool_to_be_freed->next.node;
 
-    SLI_FREE(mempool_to_be_freed->mempool_memory);
-    SLI_FREE(mempool_to_be_freed);
-  } while (mempool_to_be_freed != common_mempool_queue.tail);
+      SLI_FREE(mempool_to_be_freed->mempool_memory);
+      SLI_FREE(mempool_to_be_freed);
+    } while ((mempool_to_be_freed != common_mempool_queue.tail) && (--remaining != 0u));
+  }
 
   memset(&common_mempool_queue, 0, sizeof(sli_buffer_manager_mempool_queue_t));
   memset(&common_mempool_configuration, 0, sizeof(sli_buffer_manager_pool_info_t));
@@ -468,6 +506,14 @@ sl_status_t sli_buffer_manager_init(sli_buffer_manager_configuration_t *configur
     return SL_STATUS_INVALID_PARAMETER;
   }
 
+  /* ponytail: re-init guard. A teardown that aborted midway (driver deinit
+   * bails before reaching buffer_manager_deinit) can leave pools alive while
+   * the driver's bookkeeping says "not initialized" — the recovery loop then
+   * calls init again and create_and_assign_mempool would layer a second set
+   * of pools on top of the stale handles (leak + mixed generations). Force
+   * the old generation away first; on a clean boot this is a no-op. */
+  (void)sli_buffer_manager_deinit();
+
   // Validate dedicated pool configurations here itself to avoid allocation and free due to misconfiguration.
   for (uint8_t index = 0; index < SLI_BUFFER_MANAGER_MAX_POOL; index++) {
     if (configuration->pool_info[index] != NULL && configuration->pool_info[index]->block_count != 0
@@ -506,7 +552,14 @@ sl_status_t sli_buffer_manager_deinit(void)
   bool are_deallocated = sli_buffer_manager_are_all_pools_deallocated();
 
   if (!are_deallocated) {
-    return SL_STATUS_BUSY;
+    // ponytail: outstanding buffers at teardown mean the chip/driver is
+    // already in a malfunction state (0x19 recovery churn). Returning BUSY
+    // here used to abort sl_si91x_driver_deinit() before the power cycle
+    // and the device_initialized reset, leaving a zombie driver that could
+    // never re-initialize (field 8h hang). The straggler buffers are
+    // unreachable at this point (bus interrupt off, engines deinited) —
+    // force-free the pool memory so teardown completes.
+    SL_DEBUG_LOG_V2(ERROR, "buffer manager: pools still allocated at deinit, force-freeing\r\n");
   }
 
   sli_buffer_manager_free_all_mempools();

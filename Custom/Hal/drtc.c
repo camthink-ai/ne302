@@ -42,7 +42,7 @@ extern RTC_HandleTypeDef hrtc;
 
 static rtc_t g_rtc = {0};
 static uint64_t g_rtc_wakeup_timestamp = 0ULL;
-static uint8_t rtc_tread_stack[1024 * 8] ALIGN_32 IN_PSRAM;
+static uint8_t rtc_tread_stack[1024 * 32] ALIGN_32 IN_PSRAM;
 const osThreadAttr_t rtcTask_attributes = {
     .name = "rtcTask",
     .priority = (osPriority_t) osPriorityNormal,

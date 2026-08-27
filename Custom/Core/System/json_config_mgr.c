@@ -53,7 +53,7 @@
         .device_name = "AICAM-000000", // Default name, will be updated from MAC
         .mac_address = "00:00:00:00:00:00",
         .serial_number = "SN202500001",
-        .hardware_version = "V1.1",
+        .hardware_version = "V1.0",
         .software_version = FW_VERSION_STRING,  // From version.h (auto-generated)
         .camera_module = "IMX219 8MP Camera",
          .extension_modules = "-",
@@ -178,6 +178,7 @@
         .halow_rc_mcs = -1,
         .halow_rc_bw_mhz = -1,
         .halow_rc_gi = -1,
+        .halow_ps_mode = 0,
 
          // PoE/Ethernet default configuration
          .poe = {

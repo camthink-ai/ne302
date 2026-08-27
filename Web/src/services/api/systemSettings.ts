@@ -133,6 +133,7 @@ const systemSettings = {
         rate_mcs?: number;
         rate_bw_mhz?: number;
         rate_gi?: number;
+        ps_mode?: number;
     }) => request.put('/api/v1/system/network/halow/radio', data),
     setHalowIpReq: (data: {
         ip_mode: 'dhcp' | 'static';

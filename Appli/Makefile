@@ -82,6 +82,7 @@ C_SOURCES += ../Custom/Core/System/ota_header.c
 C_SOURCES += ../Custom/Core/System/power_manager.c
 C_SOURCES += ../Custom/Core/System/scheduler_manager.c
 C_SOURCES += ../Custom/Core/System/upgrade_manager.c
+C_SOURCES += ../Custom/Core/System/ota_bundle.c
 C_SOURCES += ../Custom/Core/System/wake_scheduler.c
 
 # Custom - Core/Video
@@ -580,10 +581,22 @@ C_DEFS += -DUSE_MEMORY_POOL_ALLOCATION
 C_DEFS += -DUSE_OS04C10_SENSOR
 C_DEFS += -DSTM32_THREAD_SAFE_STRATEGY=2
 C_DEFS += -DENABLE_U0_MODULE=1
-# CLI fault injection on the Si91x SPI4 host transfer (test-only, validated
-# 2026-08-17, disabled for release): enable + rebuild to arm
-# "ifconfig wl error_test dma_once|dma_ff|dma_off".
+# CLI fault injection on the Si91x SPI4 host transfer (validated 2026-08-17):
+# arms "ifconfig wl error_test dma_once|dma_ff|dma_off" — dma_ff = dead bus
+# (all-0xFF reads): simulates a fully dead NWP so recovery re-init fails at
+# C1C2 before submitting an RX buffer.
 # C_DEFS += -DSIMULATION_SPI4_DMA_ERROR
+# CLI fault injection: SDK dequeue-fail spin (test-only): arms
+# "ifconfig wl error_test sdk_qkill|sdk_qclear" — qkill force-fails dequeue on
+# non-empty queues; the drain loops `continue` without advancing, and one
+# failing dequeue inside the 0x19 recovery churn converts the zombie into the
+# full field death (validated 2026-08-26: 0x19 x30 -> recovery -> zombie ->
+# console dead, no watchdog reset, ~90s). THE reproducer for validating the
+# spin fixes; sdk_qclear disarms.
+# C_DEFS += -DSIMULATION_SDK_SPIN_ERROR
+# RELEASE NOTE: re-comment the SIMULATION_* lines above before any release
+# build (test-only fault injections; pool/nwp_mute/hal_spin/flagkill variants
+# were verified useless in the 0x19 hunt and removed 2026-08-26).
 # C_DEFS += -DISP_MW_TUNING_TOOL_SUPPORT
 
 # AI Runtime

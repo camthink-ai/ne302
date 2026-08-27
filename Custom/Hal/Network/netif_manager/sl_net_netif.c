@@ -2437,7 +2437,17 @@ void sl_net_thread(void *arg)
                     netif_manager_change_default_if();
                     osEventFlagsClear(sl_net_events, SL_NET_EVENT_FIRMWARE_ERROR);
                 	LOG_DRV_INFO("WIFI firmware recovery successful!");
-                } else LOG_DRV_INFO("WIFI firmware recovery failed!");
+                } else {
+                    /* ponytail: clear FIRMWARE_ERROR on final failure too — the
+                     * wait above uses NoClear, so a stale bit re-enters the
+                     * 10-retry loop instantly and this thread churns recovery
+                     * forever (field: endless recovery storms feeding the SDK
+                     * drain-loop hot spins). Back off 100ms; only a NEW firmware
+                     * error re-triggers recovery. */
+                    osEventFlagsClear(sl_net_events, SL_NET_EVENT_FIRMWARE_ERROR);
+                    LOG_DRV_INFO("WIFI firmware recovery failed after %d tries, backoff 100ms", try_times);
+                    osDelay(100);
+                }
             } else if (event_flag & SL_NET_EVENT_STA_DISCONNECTED) {
                 osMutexAcquire(sl_net_mutex, osWaitForever);
                 client_state = sl_net_client_netif_state();

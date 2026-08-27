@@ -221,6 +221,22 @@ int morse_ps_set_dynamic_ps_timeout(struct driver_data *driverd, uint32_t timeou
 
     driverd->ps.dynamic_ps_timout_ms = timeout_ms;
 
+    /*
+     * The bus activity deadline is max-only (see morse_ps_update_timeout), so a
+     * shortened timeout must pull it in here as well. Without this, a deadline
+     * armed while a long timeout was active keeps the bus awake (wake pin
+     * asserted) until the old timeout would have expired, defeating a runtime
+     * PS enable issued in the meantime.
+     */
+    MMOSAL_MUTEX_GET_INF(driverd->ps.lock);
+    uint32_t new_deadline = mmosal_get_time_ms() + timeout_ms;
+    if (mmosal_time_lt(new_deadline, driverd->ps.bus_ps_timeout))
+    {
+        driverd->ps.bus_ps_timeout = new_deadline;
+        driver_task_notify_event(driverd, DRV_EVT_PS_DELAYED_EVAL_PEND);
+    }
+    MMOSAL_MUTEX_RELEASE(driverd->ps.lock);
+
     MMLOG_INF("Dynamic PS timout set %lu\n", timeout_ms);
 
     return ret;

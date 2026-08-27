@@ -253,6 +253,12 @@ static void sli_hal_si91x_handle_ble_tx_event(uint32_t *events_received)
 {
   sli_si91x_hal_packet_t *hal_packet = NULL;
   if (SL_STATUS_OK != sli_queue_manager_dequeue(&ble_tx_queue_handle, (void **)&hal_packet)) {
+    /* ponytail: same sticky-event hot spin as the wifi TX twin above — BLE TX
+     * event stays set until the queue drains; a failing dequeue on a non-empty
+     * queue must yield instead of spinning the main loop at wait_time=0. */
+    if (!SLI_QUEUE_MANAGER_IS_QUEUE_EMPTY(&ble_tx_queue_handle)) {
+      osDelay(5);
+    }
     return;
   }
 
@@ -282,6 +288,16 @@ static void sli_hal_si91x_handle_wifi_tx_event(uint32_t *events_received)
 
     if (SLI_QUEUE_MANAGER_IS_QUEUE_EMPTY(&wifi_tx_queue_handle)) {
       *events_received &= ~SLI_HAL_SI91X_WIFI_TX_EVENT;
+    } else {
+      /* ponytail: queue non-empty + dequeue failing is the wedged state (queue
+       * corruption / injection). The WIFI_TX_EVENT is sticky until the queue
+       * DRAINS, and sli_hal_si91x_get_wait_time() returns 0 for "event set but
+       * no branch matched" — so without a yield here the main loop becomes a
+       * zero-yield hot spin at tx7 with an SPI interrupt-status read per lap
+       * (field snapshot: hal_si91x 41.45% READY during the 0x19 storm, the
+       * same defect family the engine drain loops had). Rate-limit the retry:
+       * 5ms floor per the anti-spin policy. */
+      osDelay(5);
     }
     return;
   }
@@ -387,7 +403,10 @@ static void sli_hal_si91x_thread(void *args)
   uint16_t interrupt_status   = 0;
   uint32_t wait_time          = osWaitForever;
   bool Is_rx_buffer_submitted = false;
-  uint8_t delay               = 2;
+  // ponytail: 5ms floor per the anti-spin policy — this backoff paces the
+  // rx-buffer resubmit loop when the RX quota pool is pinned (get_wait_time
+  // returns 0 while the buffer is unsubmitted, so this wait is the only throttle).
+  uint8_t delay               = 5;
 
   while (1) {
     wait_time = sli_hal_si91x_get_wait_time(Is_rx_buffer_submitted, events_received, interrupt_status);
@@ -585,6 +604,23 @@ sl_status_t sli_hal_si91x_deinit(void)
   uint32_t event_result;
   osStatus_t freertos_status;
 
+  /* ponytail: idempotent teardown. If the flags object (or the thread handle)
+   * is already gone, a previous deinit completed the handshake — or init never
+   * got that far. Treating that as fatal aborts the caller's teardown at its
+   * very first step, which pins device_initialized=true forever while the
+   * engines below are already gone (field signature: "Event flags set failed
+   * with status 4294967292" once per recovery attempt + every sync command
+   * returning NOT_READY + 9ms re-init fast-fails). Force the remainder and
+   * report success so the caller reaches its own initialized=false reset. */
+  if ((NULL == sli_hal_si91x_events) || (NULL == hal_thread_ID)) {
+    if (NULL != hal_thread_ID) {
+      osThreadTerminate(hal_thread_ID);
+      hal_thread_ID = NULL;
+    }
+    sli_cleanup_flags_and_queues();
+    return SL_STATUS_OK;
+  }
+
   event_result = osEventFlagsSet(sli_hal_si91x_events, SLI_HAL_SI91X_THREAD_TERMINATE_EVENT);
   if ((int32_t)event_result < 0) {
     SL_DEBUG_LOG_V2(ERROR, "Event flags set failed with status %lu", event_result);
@@ -671,7 +707,22 @@ static uint32_t sli_hal_si91x_wait_for_event(uint32_t event_mask, uint32_t timeo
 {
   uint32_t result = osEventFlagsWait(sli_hal_si91x_events, event_mask, osFlagsWaitAny, timeout);
 
-  if (result == (uint32_t)osErrorTimeout || result == (uint32_t)osErrorResource) {
+  // ponytail: catch the 0xFFFFFFFx error family, but keep the legitimate
+  // "no event" outcomes (timeout; resource on a non-blocking poll) silent
+  // and instant as the original code did — boot-time waits routinely time
+  // out. Only the abnormal members (dead/NULL flags object returns
+  // osFlagsErrorParameter instantly on EVERY call) get logged once and a
+  // 5ms yield, so callers looping on a dead object degrade to a slow
+  // poll instead of hot-spinning at this thread's priority.
+  if ((result & (uint32_t)osFlagsError) != 0u) {
+    if ((result != (uint32_t)osErrorTimeout) && (result != (uint32_t)osErrorResource)) {
+      static bool flags_error_logged = false;
+      if (!flags_error_logged) {
+        flags_error_logged = true;
+        SL_DEBUG_LOG_V2(ERROR, "hal: osEventFlagsWait failed 0x%lX\r\n", result);
+      }
+      osDelay(5);
+    }
     return 0;
   }
   return result;
@@ -688,7 +739,10 @@ sl_status_t sli_hal_si91x_notify_events(uint32_t flags)
 
   uint32_t result = osEventFlagsSet(sli_hal_si91x_events, flags);
 
-  if (result == (uint32_t)osErrorTimeout || result == (uint32_t)osErrorResource) {
+  // ponytail: a failed set reports the 0xFFFFFFFx error family — treat any
+  // of them as "nothing was signalled" instead of returning the raw error
+  // as if it were a flags value.
+  if ((result & (uint32_t)osFlagsError) != 0u) {
     return 0;
   }
 

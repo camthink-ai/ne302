@@ -259,6 +259,8 @@ typedef struct {
     int32_t halow_rc_bw_mhz;
     /** Guard interval: 0 short, 1 long, or -1 for automatic. */
     int32_t halow_rc_gi;
+    /** HaLow chip power save: 0 disabled, 1 enabled. */
+    uint8_t halow_ps_mode;
 } network_service_config_t;
  
  // Power mode configuration structure

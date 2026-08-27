@@ -11,6 +11,13 @@
  * DHCPS_MAX_CLIENTS; when full, the oldest cached (disconnected) entry is
  * evicted. Active stations are never evicted.
  *
+ * REQUEST handling is state-aware: a request for an address this server can't
+ * confirm (held by another station, or outside the pool) is answered with a
+ * NAK — never a blind ACK of a *different* address, which leaves the client
+ * parked on its stale lease while the server believes otherwise. A request
+ * for a free address the client previously held is honored, so IPs stay
+ * stable across table rebuilds.
+ *
  * The lease table is touched from two threads (lwIP tcpip thread vs. the WiFi
  * event context), so every access is guarded by s_lease_mutex.
  */
@@ -186,6 +193,19 @@ static int lease_alloc_ip(ip4_addr_t *out)
     return -1;   /* pool exhausted */
 }
 
+/* Is this a host address this server may hand out (AP prefix, pool range,
+ * not the AP itself)? Must stay consistent with lease_alloc_ip's notion of
+ * the pool: first 3 octets of Client_Address + host octet in [start..end]. */
+static bool ip_in_pool(const ip4_addr_t *ip)
+{
+    uint8_t host = ip4_addr4(ip);
+    return ip4_addr1(ip) == ip4_addr1(&dhcp_address.Client_Address) &&
+           ip4_addr2(ip) == ip4_addr2(&dhcp_address.Client_Address) &&
+           ip4_addr3(ip) == ip4_addr3(&dhcp_address.Client_Address) &&
+           host >= start_ip4 && host <= end_ip4 &&
+           host != ip4_addr4(&dhcp_address.DHCP_Server_Address);
+}
+
 int dhcps_add_client_by_mac(uint8_t *mac)
 {
     dhcps_client_t *slot = NULL, *victim = NULL;
@@ -268,6 +288,23 @@ bool dhcp_search_ip_on_mac(uint8_t *mac, ip4_addr_t *ip)
     return found;
 }
 
+/* Snapshot the used entries of the lease table into caller storage (for the
+ * AP client-list debug command). Snapshotting keeps printf out of the
+ * critical section. Returns the number of entries written. */
+int dhcps_get_clients(dhcps_client_t *out, int max)
+{
+    int i, n = 0;
+
+    if (out == NULL || max <= 0) return 0;
+
+    lease_lock();
+    for (i = 0; i < DHCPS_MAX_CLIENTS && n < max; i++) {
+        if (dhcps_client[i].is_used) out[n++] = dhcps_client[i];
+    }
+    lease_unlock();
+    return n;
+}
+
 /* ---- option get/set API (kept for compatibility) ---------------------- */
 void *dhcps_option_info(uint8_t op_id, u32_t opt_len)
 {
@@ -327,6 +364,17 @@ static uint8_t *add_msg_type(uint8_t *optptr, uint8_t type)
     return optptr;
 }
 
+static uint8_t *add_server_id(uint8_t *optptr)
+{
+    *optptr++ = DHCP_OPTION_SERVER_ID;
+    *optptr++ = 4;
+    *optptr++ = ip4_addr1(&dhcp_address.DHCP_Server_Address);
+    *optptr++ = ip4_addr2(&dhcp_address.DHCP_Server_Address);
+    *optptr++ = ip4_addr3(&dhcp_address.DHCP_Server_Address);
+    *optptr++ = ip4_addr4(&dhcp_address.DHCP_Server_Address);
+    return optptr;
+}
+
 static uint8_t *add_offer_options(uint8_t *optptr)
 {
     u32_t lease = dhcps_lease_time * DHCPS_LEASE_UNIT;   /* seconds */
@@ -345,12 +393,7 @@ static uint8_t *add_offer_options(uint8_t *optptr)
     *optptr++ = (uint8_t)((lease >> 8)  & 0xFF);
     *optptr++ = (uint8_t)((lease >> 0)  & 0xFF);
 
-    *optptr++ = DHCP_OPTION_SERVER_ID;
-    *optptr++ = 4;
-    *optptr++ = ip4_addr1(&dhcp_address.DHCP_Server_Address);
-    *optptr++ = ip4_addr2(&dhcp_address.DHCP_Server_Address);
-    *optptr++ = ip4_addr3(&dhcp_address.DHCP_Server_Address);
-    *optptr++ = ip4_addr4(&dhcp_address.DHCP_Server_Address);
+    optptr = add_server_id(optptr);
 
     if (dhcps_router_enabled(dhcps_offer) &&
         !ip4_addr_isany_val(dhcp_address.Gateway_Address)) {
@@ -428,26 +471,20 @@ static void create_reply(struct dhcps_msg *m, const ip4_addr_t *yiaddr)
     memcpy(m->options, &magic_cookie, sizeof(magic_cookie));
 }
 
-/* Unified OFFER/ACK/NAK sender. Builds options, zero-pads to the RFC 300-byte
- * floor, copies via pbuf_take and broadcasts to :68. */
-static void send_reply(struct dhcps_msg *m, uint8_t type, const ip4_addr_t *yiaddr)
+/* Zero-pad to the RFC 300-byte floor, copy via pbuf_take and broadcast
+ * to :68. */
+static void send_packet(struct dhcps_msg *m, uint8_t *end)
 {
-    uint8_t *end;
     size_t   opt_len, send_len;
     struct pbuf *p;
     ip_addr_t dst = IPADDR4_INIT(0x0);
-
-    create_reply(m, yiaddr);
-    end = add_msg_type(&m->options[4], type);
-    end = add_offer_options(end);
-    end = add_end(end);
 
     opt_len  = (size_t)((uint8_t *)end - (uint8_t *)m);
     send_len = (opt_len < DHCPS_REPLY_MIN_LEN) ? DHCPS_REPLY_MIN_LEN : opt_len;
 
     p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)send_len, PBUF_RAM);
     if (p == NULL) {
-        DHCPS_LOG("send_reply: pbuf_alloc failed\r\n");
+        DHCPS_LOG("send_packet: pbuf_alloc failed\r\n");
         return;
     }
     /* m is sizeof(struct dhcps_msg) (>= send_len) and zero-padded beyond end,
@@ -459,14 +496,50 @@ static void send_reply(struct dhcps_msg *m, uint8_t type, const ip4_addr_t *yiad
     pbuf_free(p);
 }
 
+/* OFFER/ACK sender: full option set on top of the BOOTREPLY header. */
+static void send_reply(struct dhcps_msg *m, uint8_t type, const ip4_addr_t *yiaddr)
+{
+    uint8_t *end;
+
+    create_reply(m, yiaddr);
+    end = add_msg_type(&m->options[4], type);
+    end = add_offer_options(end);
+    end = add_end(end);
+    send_packet(m, end);
+}
+
+/* NAK carries only msg-type + server-id and a zero yiaddr (RFC 2131 §4.3.5).
+ * Its job is to knock the client out of INIT-REBOOT/RENEWING back to INIT so
+ * it re-DISCOVERs instead of sitting on an address we can't confirm. */
+static void send_nak(struct dhcps_msg *m)
+{
+    ip4_addr_t zero = {0};
+    uint8_t  *end;
+
+    create_reply(m, &zero);
+    end = add_msg_type(&m->options[4], DHCPNAK);
+    end = add_server_id(end);
+    end = add_end(end);
+    send_packet(m, end);
+}
+
 /* ---- request parsing --------------------------------------------------- */
+/* Client hints extracted while walking the option TLV. */
+typedef struct {
+    uint8_t    msg_type;       /* option 53                                    */
+    bool       has_server_id;  /* option 54 present (SELECTING-style REQUEST)  */
+    ip4_addr_t server_id;
+    bool       has_req_ip;     /* option 50 present (requested address)        */
+    ip4_addr_t req_ip;
+} dhcp_opts_t;
+
 /* Walk the options TLV. Handles PAD (single byte, no length) and bounds-checks
  * every length read so a truncated/malformed option can't run off the buffer.
- * Returns the server state derived from the DHCP message type (option 53). */
-static uint8_t parse_options(uint8_t *opt, int16_t len)
+ * Fills *out with the options this server cares about (53/50/54) and returns
+ * the server state derived from the DHCP message type (option 53). */
+static uint8_t parse_options(uint8_t *opt, int16_t len, dhcp_opts_t *out)
 {
     uint8_t *end = opt + len;
-    uint8_t  msg_type = 0;
 
     while (opt < end) {
         uint8_t code = *opt;
@@ -475,27 +548,35 @@ static uint8_t parse_options(uint8_t *opt, int16_t len)
         if (opt + 1 >= end) break;              /* no length byte present */
         {
             uint8_t olen = opt[1];
-            if (code == DHCP_OPTION_MSG_TYPE && olen >= 1 && opt + 2 < end) {
-                msg_type = opt[2];
+            if (opt + 2 + olen > end) break;    /* value runs past the buffer */
+            if (code == DHCP_OPTION_MSG_TYPE && olen >= 1) {
+                out->msg_type = opt[2];
+            } else if (code == DHCP_OPTION_REQ_IPADDR && olen >= 4) {
+                memcpy(&out->req_ip.addr, &opt[2], 4);
+                out->has_req_ip = true;
+            } else if (code == DHCP_OPTION_SERVER_ID && olen >= 4) {
+                memcpy(&out->server_id.addr, &opt[2], 4);
+                out->has_server_id = true;
             }
             opt += 2 + olen;                    /* skip code+len+value */
         }
     }
 
-    switch (msg_type) {
+    switch (out->msg_type) {
         case DHCPDISCOVER: return DHCPS_STATE_OFFER;
         case DHCPREQUEST:  return DHCPS_STATE_ACK;
-        case DHCPDECLINE:  return DHCPS_STATE_IDLE;
+        case DHCPDECLINE:  return DHCPS_STATE_DECLINE;
         case DHCPRELEASE:  return DHCPS_STATE_RELEASE;
         default:           return DHCPS_STATE_IDLE;
     }
 }
 
-static int16_t parse_msg(struct dhcps_msg *msg, uint16_t len)
+static uint8_t parse_msg(struct dhcps_msg *msg, uint16_t len, dhcp_opts_t *opts)
 {
+    memset(opts, 0, sizeof(*opts));
     if (len < DHCPS_MIN_REQUEST_LEN) return 0;             /* need header + cookie */
     if (memcmp(msg->options, &magic_cookie, sizeof(magic_cookie)) != 0) return 0;
-    return (int16_t)parse_options(&msg->options[4], (int16_t)len - DHCPS_MIN_REQUEST_LEN);
+    return parse_options(&msg->options[4], (int16_t)(len - DHCPS_MIN_REQUEST_LEN), opts);
 }
 
 /* ---- UDP receive callback (runs in the lwIP tcpip thread) -------------- */
@@ -503,10 +584,11 @@ static void handle_dhcp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                         const ip_addr_t *addr, uint16_t port)
 {
     struct dhcps_msg *msg;
-    ip4_addr_t yiaddr = {0};
-    u16_t copy_len, len;
+    dhcp_opts_t opts;
+    ip4_addr_t want = {0}, reply_ip = {0};
     dhcps_client_t *c;
-    bool known;
+    bool known, have_want, nak;
+    u16_t copy_len, len;
     uint8_t state;
 
     (void)arg; (void)pcb; (void)addr; (void)port;
@@ -530,12 +612,10 @@ static void handle_dhcp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    /* Resolve the client + its assigned IP under the lock, then release before
-     * any UDP I/O. Never hold s_lease_mutex across network calls. */
+    /* Whitelist check under the lock, then release before any UDP I/O.
+     * Never hold s_lease_mutex across network calls. */
     lease_lock();
-    c = dhcps_get_client_by_mac(msg->chaddr);
-    known = (c != NULL);
-    if (known) yiaddr.addr = c->Client_Address.addr;
+    known = (dhcps_get_client_by_mac(msg->chaddr) != NULL);
     lease_unlock();
 
     if (!known) {
@@ -544,19 +624,111 @@ static void handle_dhcp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    state = (uint8_t)parse_msg(msg, len);
+    state = (uint8_t)parse_msg(msg, len, &opts);
     switch (state) {
         case DHCPS_STATE_OFFER:
-            send_reply(msg, DHCPOFFER, &yiaddr);
+            /* DISCOVER: honor an option-50 hint when that address is free, so
+             * stations keep their previous address across table rebuilds (the
+             * join-order allocator alone reshuffles them). */
+            lease_lock();
+            c = dhcps_get_client_by_mac(msg->chaddr);
+            if (c != NULL && opts.has_req_ip && ip_in_pool(&opts.req_ip) &&
+                dhcps_get_client_by_ip(&opts.req_ip) == NULL) {
+                c->Client_Address = opts.req_ip;
+                DHCPS_INFO("lease " MAC_STR_FMT " keeps %u.%u.%u.%u (option 50)\r\n",
+                           MAC_STR_ARG(msg->chaddr),
+                           (unsigned)ip4_addr1(&opts.req_ip),
+                           (unsigned)ip4_addr2(&opts.req_ip),
+                           (unsigned)ip4_addr3(&opts.req_ip),
+                           (unsigned)ip4_addr4(&opts.req_ip));
+            }
+            if (c != NULL) reply_ip = c->Client_Address;
+            lease_unlock();
+            if (c != NULL) send_reply(msg, DHCPOFFER, &reply_ip);
             break;
+
         case DHCPS_STATE_ACK:
-            send_reply(msg, DHCPACK, &yiaddr);
-            DHCPS_INFO("ACK %u.%u.%u.%u -> " MAC_STR_FMT "\r\n",
-                       (unsigned)msg->yiaddr[0], (unsigned)msg->yiaddr[1],
-                       (unsigned)msg->yiaddr[2], (unsigned)msg->yiaddr[3],
-                       MAC_STR_ARG(msg->chaddr));
-            if (dhcps_cb) dhcps_cb(msg->yiaddr);
+            /* DHCPREQUEST. SELECTING-style requests name a server (option 54);
+             * if it isn't us, the request is none of our business. */
+            if (opts.has_server_id &&
+                !ip4_addr_cmp(&opts.server_id, &dhcp_address.DHCP_Server_Address)) {
+                break;
+            }
+
+            /* The address the client claims: option 50 in SELECTING and
+             * INIT-REBOOT, ciaddr in RENEWING/REBINDING. */
+            have_want = false;
+            if (opts.has_req_ip) {
+                want = opts.req_ip;
+                have_want = true;
+            } else if (msg->ciaddr[0] | msg->ciaddr[1] | msg->ciaddr[2] | msg->ciaddr[3]) {
+                memcpy(&want.addr, msg->ciaddr, 4);
+                have_want = true;
+            }
+
+            lease_lock();
+            c   = dhcps_get_client_by_mac(msg->chaddr);
+            nak = false;
+            if (c != NULL) {
+                if (have_want && !ip4_addr_cmp(&want, &c->Client_Address)) {
+                    if (ip_in_pool(&want) &&
+                        dhcps_get_client_by_ip(&want) == NULL) {
+                        /* Nobody holds the requested address (typically the
+                         * client's pre-rebuild lease): grant it. */
+                        c->Client_Address = want;
+                    } else {
+                        /* Held by another station or not ours to give — the
+                         * client's notion is wrong. NAK it back to INIT for a
+                         * clean DISCOVER; blind-ACKing a different address is
+                         * what left stations parked on stale leases. */
+                        nak = true;
+                    }
+                }
+                reply_ip = c->Client_Address;
+            }
+            lease_unlock();
+
+            if (c == NULL) break;
+            if (nak) {
+                send_nak(msg);
+                DHCPS_INFO("NAK %u.%u.%u.%u -> " MAC_STR_FMT " (bound to %u.%u.%u.%u)\r\n",
+                           (unsigned)ip4_addr1(&want), (unsigned)ip4_addr2(&want),
+                           (unsigned)ip4_addr3(&want), (unsigned)ip4_addr4(&want),
+                           MAC_STR_ARG(msg->chaddr),
+                           (unsigned)ip4_addr1(&reply_ip), (unsigned)ip4_addr2(&reply_ip),
+                           (unsigned)ip4_addr3(&reply_ip), (unsigned)ip4_addr4(&reply_ip));
+            } else {
+                send_reply(msg, DHCPACK, &reply_ip);
+                DHCPS_INFO("ACK %u.%u.%u.%u -> " MAC_STR_FMT "\r\n",
+                           (unsigned)msg->yiaddr[0], (unsigned)msg->yiaddr[1],
+                           (unsigned)msg->yiaddr[2], (unsigned)msg->yiaddr[3],
+                           MAC_STR_ARG(msg->chaddr));
+                if (dhcps_cb) dhcps_cb(msg->yiaddr);
+            }
             break;
+
+        case DHCPS_STATE_DECLINE:
+            /* Client probed the ACKed address and found it in use (RFC 2131
+             * §4.4.1): rebind this MAC to a fresh address so the next
+             * DISCOVER doesn't loop on the conflicted one. */
+            lease_lock();
+            c = dhcps_get_client_by_mac(msg->chaddr);
+            if (c != NULL && opts.has_req_ip &&
+                ip4_addr_cmp(&opts.req_ip, &c->Client_Address)) {
+                ip4_addr_t fresh;
+                if (lease_alloc_ip(&fresh) == 0) {
+                    c->Client_Address = fresh;
+                    DHCPS_INFO("decline %u.%u.%u.%u, rebind " MAC_STR_FMT "\r\n",
+                               (unsigned)ip4_addr1(&opts.req_ip),
+                               (unsigned)ip4_addr2(&opts.req_ip),
+                               (unsigned)ip4_addr3(&opts.req_ip),
+                               (unsigned)ip4_addr4(&opts.req_ip),
+                               MAC_STR_ARG(msg->chaddr));
+                }
+            }
+            lease_unlock();
+            break;
+
         case DHCPS_STATE_RELEASE:
             dhcps_del_client_by_mac(msg->chaddr);
             break;

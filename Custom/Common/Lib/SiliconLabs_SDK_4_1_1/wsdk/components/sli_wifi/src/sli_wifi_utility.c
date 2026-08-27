@@ -1349,6 +1349,11 @@ sl_status_t sli_wifi_driver_wait_for_response_packet(uint16_t command_packet_typ
       if (events == (uint32_t)osErrorTimeout || events == (uint32_t)osErrorResource) {
         // Timeout or resource error
         return SL_STATUS_TIMEOUT;
+      } else if ((events & (uint32_t)osFlagsError) != 0u) {
+        // ponytail: a non-timeout flags error (dead object returns
+        // osFlagsErrorParameter instantly) must not reach the mask check
+        // below — 0xFFFFFFFC satisfies any single-bit mask.
+        return SL_STATUS_FAIL;
       } else if ((packet_type_info.sync_response_event & events) == packet_type_info.sync_response_event) {
         // Remove the node with the matching packet_id from the queue
         status = sli_queue_manager_remove_node_from_queue(packet_type_info.sync_response_queue,
@@ -1392,6 +1397,16 @@ sl_status_t sli_wifi_driver_wait_for_response_packet(uint16_t command_packet_typ
         // Timeout or resource error
         return SL_STATUS_TIMEOUT;
       }
+      if ((events & (uint32_t)osFlagsError) != 0u) {
+        // ponytail: dead/NULL flags object returns osFlagsErrorParameter
+        // instantly on EVERY call. Previously it fell through as a fake
+        // "event", the queue remove came up EMPTY/NOT_FOUND and the 2ms
+        // backoff loop burned the whole caller timeout before returning
+        // TIMEOUT — masking the real failure (field "Get MAC failed (0x3)"
+        // retry storm). Fail fast so the caller sees the object is gone.
+        SL_DEBUG_LOG_V2(ERROR, "sync response wait: osEventFlagsWait failed 0x%lX\r\n", events);
+        return SL_STATUS_FAIL;
+      }
 
       SL_DEBUG_LOG_V2(DEBUG,
                       "Got Events: 0x%lX for queue 0x%X\n",
@@ -1422,7 +1437,9 @@ sl_status_t sli_wifi_driver_wait_for_response_packet(uint16_t command_packet_typ
       CORE_ExitAtomic(state);
       if (status == SL_STATUS_NOT_FOUND) {
         // Add a small delay to avoid busy waiting
-        osDelay(SLI_SYSTEM_MS_TO_TICKS(2));
+        // ponytail: 2ms was 500 wake/s at this priority during response
+        // starvation (Get-MAC 0x3 retry storm) — floor at 5ms.
+        osDelay(SLI_SYSTEM_MS_TO_TICKS(5));
       }
 
       // Update elapsed time

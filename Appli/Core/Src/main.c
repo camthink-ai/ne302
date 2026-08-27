@@ -410,7 +410,7 @@ void StartMainTask(void *argument)
     //        (unsigned long)total_duration_ms, total_duration_ms / 1000.0f);
     // printf("[BOOT] ============================================\r\n\r\n");
     
-    // wdg_task_change_priority(osPriorityNormal);
+    wdg_task_change_priority(osPriorityNormal);
     // printf("[MAIN] Entering main loop\r\n");
 
     if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
