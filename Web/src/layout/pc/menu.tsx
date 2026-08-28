@@ -17,6 +17,7 @@ const navigationItems = [
 export default function Menu() {
   const location = useLocation();
   const { i18n } = useLingui();
+  const isMobile = useIsMobile();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showLeftArrow, setShowLeftArrow] = useState(false);
   const [showRightArrow, setShowRightArrow] = useState(false);
@@ -74,7 +75,7 @@ export default function Menu() {
     <nav className="bg-[#F7F8FA] flex justify-center items-center border-b border-[#E5E6EB] relative z-10">
       <div className="flex justify-center items-center  sm:px-6 lg:px-8 w-full relative">
         {/* Left scroll arrow - hidden on mobile */}
-        {showLeftArrow && !useIsMobile() && (
+        {showLeftArrow && !isMobile && (
           <button
             onClick={() => {
               scrollTo('left');
@@ -89,7 +90,7 @@ export default function Menu() {
         )}
 
         {/* Right scroll arrow - hidden on mobile */}
-        {showRightArrow && !useIsMobile() && (
+        {showRightArrow && !isMobile && (
           <button
             onClick={() => {
               scrollTo('right');
@@ -103,7 +104,15 @@ export default function Menu() {
           </button>
         )}
 
-        <div 
+        {/* Mobile edge fades — hint that the tab strip scrolls (no arrows on mobile) */}
+        {isMobile && showRightArrow && (
+          <div className="absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-[#F7F8FA] to-transparent pointer-events-none z-10" />
+        )}
+        {isMobile && showLeftArrow && (
+          <div className="absolute left-0 top-0 bottom-0 w-10 bg-gradient-to-r from-[#F7F8FA] to-transparent pointer-events-none z-10" />
+        )}
+
+        <div
           ref={scrollContainerRef}
           className="flex space-x-8 mx-4 overflow-x-auto scrollbar-hide smooth-scroll px-2"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}

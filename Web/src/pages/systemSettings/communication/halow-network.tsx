@@ -523,8 +523,8 @@ export default function HalowNetworkPage() {
                 </Button>
             </div>
             <div className="flex flex-col bg-gray-100 px-4 py-2 rounded-lg gap-1">
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_ip_mode')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[80px]">{i18n._('sys.system_management.halow_ip_mode')}</Label>
                     <Select
                       value={ipConfig.ip_mode}
                       onValueChange={(value: 'dhcp' | 'static') => {
@@ -540,7 +540,7 @@ export default function HalowNetworkPage() {
                             }
                         }}
                     >
-                        <SelectTrigger className="w-[140px] bg-white">
+                        <SelectTrigger className="w-[140px] shrink-0 bg-white ml-auto">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -550,11 +550,11 @@ export default function HalowNetworkPage() {
                     </Select>
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.ip_address')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[80px]">{i18n._('sys.system_management.ip_address')}</Label>
                     <Input
                       type="text"
-                      className="w-[160px] text-right bg-white"
+                      className="w-[160px] shrink-0 text-right bg-white ml-auto"
                       readOnly={ipConfig.ip_mode === 'dhcp'}
                       value={displayIp.ip_address}
                       onChange={(e) => setIpConfig({ ...ipConfig, ip_address: (e.target as HTMLInputElement).value })}
@@ -562,11 +562,11 @@ export default function HalowNetworkPage() {
                     />
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.netmask')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[80px]">{i18n._('sys.system_management.netmask')}</Label>
                     <Input
                       type="text"
-                      className="w-[160px] text-right bg-white"
+                      className="w-[160px] shrink-0 text-right bg-white ml-auto"
                       readOnly={ipConfig.ip_mode === 'dhcp'}
                       value={displayIp.netmask}
                       onChange={(e) => setIpConfig({ ...ipConfig, netmask: (e.target as HTMLInputElement).value })}
@@ -574,11 +574,11 @@ export default function HalowNetworkPage() {
                     />
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.gateway')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[80px]">{i18n._('sys.system_management.gateway')}</Label>
                     <Input
                       type="text"
-                      className="w-[160px] text-right bg-white"
+                      className="w-[160px] shrink-0 text-right bg-white ml-auto"
                       readOnly={ipConfig.ip_mode === 'dhcp'}
                       value={displayIp.gateway}
                       onChange={(e) => setIpConfig({ ...ipConfig, gateway: (e.target as HTMLInputElement).value })}
@@ -630,8 +630,8 @@ export default function HalowNetworkPage() {
                 </Button>
             </div>
             <div className="flex flex-col bg-gray-100 px-4 py-2 rounded-lg gap-1">
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <div className="shrink-0">
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <div className="flex-1 min-w-[140px]">
                         <Label className="text-sm">{i18n._('sys.system_management.halow_tx_power')}</Label>
                         <p className="text-xs text-text-secondary">
                             {i18n._('sys.system_management.halow_tx_power_hint')}
@@ -641,7 +641,7 @@ export default function HalowNetworkPage() {
                     </div>
                     <Input
                       type="number"
-                      className="w-[120px] text-right bg-white"
+                      className="w-[120px] shrink-0 text-right bg-white ml-auto"
                       min={radioLimits.tx_power_dbm.min}
                       max={radioLimits.tx_power_dbm.max}
                       value={radioConfig.tx_power_dbm}
@@ -652,8 +652,8 @@ export default function HalowNetworkPage() {
                     />
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <div className="shrink-0">
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <div className="flex-1 min-w-[140px]">
                         <Label className="text-sm">{i18n._('sys.system_management.halow_scan_dwell')}</Label>
                         <p className="text-xs text-text-secondary">
                             {i18n._('sys.system_management.halow_scan_dwell_hint')}
@@ -663,7 +663,7 @@ export default function HalowNetworkPage() {
                     </div>
                     <Input
                       type="number"
-                      className="w-[120px] text-right bg-white"
+                      className="w-[120px] shrink-0 text-right bg-white ml-auto"
                       min={radioLimits.scan_dwell_ms.min}
                       max={radioLimits.scan_dwell_ms.max}
                       value={radioConfig.scan_dwell_ms}
@@ -674,8 +674,8 @@ export default function HalowNetworkPage() {
                     />
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_mcs')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[100px]">{i18n._('sys.system_management.halow_rate_mcs')}</Label>
                     <Select
                       value={radioConfig.rate_mcs < 0 ? RADIO_AUTO : String(radioConfig.rate_mcs)}
                       onValueChange={(value) => setRadioConfig({
@@ -683,7 +683,7 @@ export default function HalowNetworkPage() {
                           rate_mcs: value === RADIO_AUTO ? -1 : Number(value),
                       })}
                     >
-                        <SelectTrigger className="w-[120px] bg-white">
+                        <SelectTrigger className="w-[120px] shrink-0 bg-white ml-auto">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -695,8 +695,8 @@ export default function HalowNetworkPage() {
                     </Select>
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_bw')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[100px]">{i18n._('sys.system_management.halow_rate_bw')}</Label>
                     <Select
                       value={radioConfig.rate_bw_mhz < 0 ? RADIO_AUTO : String(radioConfig.rate_bw_mhz)}
                       onValueChange={(value) => setRadioConfig({
@@ -704,7 +704,7 @@ export default function HalowNetworkPage() {
                           rate_bw_mhz: value === RADIO_AUTO ? -1 : Number(value),
                       })}
                     >
-                        <SelectTrigger className="w-[120px] bg-white">
+                        <SelectTrigger className="w-[120px] shrink-0 bg-white ml-auto">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -716,8 +716,8 @@ export default function HalowNetworkPage() {
                     </Select>
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <Label className="text-sm shrink-0">{i18n._('sys.system_management.halow_rate_gi')}</Label>
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <Label className="text-sm flex-1 min-w-[100px]">{i18n._('sys.system_management.halow_rate_gi')}</Label>
                     <Select
                       value={radioConfig.rate_gi < 0 ? RADIO_AUTO : String(radioConfig.rate_gi)}
                       onValueChange={(value) => setRadioConfig({
@@ -725,7 +725,7 @@ export default function HalowNetworkPage() {
                           rate_gi: value === RADIO_AUTO ? -1 : Number(value),
                       })}
                     >
-                        <SelectTrigger className="w-[120px] bg-white">
+                        <SelectTrigger className="w-[120px] shrink-0 bg-white ml-auto">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -736,8 +736,8 @@ export default function HalowNetworkPage() {
                     </Select>
                 </div>
                 <Separator />
-                <div className="flex justify-between items-center gap-2 py-2">
-                    <div className="shrink-0">
+                <div className="flex flex-wrap items-center gap-x-2 py-2">
+                    <div className="flex-1 min-w-[140px]">
                         <Label className="text-sm" htmlFor="halow-ps-mode">{i18n._('sys.system_management.halow_ps_mode')}</Label>
                         <p className="text-xs text-text-secondary">
                             {i18n._('sys.system_management.halow_ps_mode_hint')}
@@ -745,6 +745,7 @@ export default function HalowNetworkPage() {
                     </div>
                     <Switch
                       id="halow-ps-mode"
+                      className="shrink-0 ml-auto"
                       checked={radioConfig.ps_mode === 1}
                       onCheckedChange={(checked) => setRadioConfig({
                           ...radioConfig,
@@ -819,14 +820,14 @@ export default function HalowNetworkPage() {
 
     return (
         <div className="mt-2">
-            <div className="flex gap-2 justify-between items-center mb-4">
-                <Label className="text-sm font-bold text-text-primary">{i18n._('sys.system_management.halow_region')}</Label>
+            <div className="flex flex-wrap gap-2 justify-between items-center mb-4">
+                <Label className="text-sm font-bold text-text-primary flex-1 min-w-[80px]">{i18n._('sys.system_management.halow_region')}</Label>
                 <Select
                   value={region}
                   onValueChange={handleRegionChange}
                   disabled={!!currentHalowData?.connected}
                 >
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-[180px] shrink-0 ml-auto">
                         <SelectValue placeholder={i18n._('sys.system_management.halow_region')}>
                             {region ? getHalowRegionLabel(region, locale) : null}
                         </SelectValue>

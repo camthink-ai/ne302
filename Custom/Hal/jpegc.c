@@ -834,19 +834,27 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             }
             
             /* Allocate encode output buffer. Always allocate a new buffer:
-             * if the previous encode's buffer was not UNSHAREd, the caller
-             * still holds the pointer from OUTPUT_ENC_BUFFER. Dropping our
-             * reference without freeing avoids both a dangling pointer (if we
-             * freed) and buffer aliasing (if we reused). Caller frees via
-             * RETURN_ENC_BUFFER or FREE_ENC_BUFFER. */
+             * if the previous encode's buffer was handed out by
+             * OUTPUT_ENC_BUFFER (and not UNSHAREd), the caller still holds
+             * that pointer. Dropping our reference without freeing avoids
+             * both a dangling pointer (if we freed) and buffer aliasing (if
+             * we reused). Caller frees via RETURN_ENC_BUFFER or
+             * FREE_ENC_BUFFER. */
             uint32_t required_size = jpegc_calc_enc_buffer_size(&jpegc->enc_params);
 
             /* Drop jpegc's reference to the previous encode output buffer.
-             * Do NOT hal_mem_free — the caller from OUTPUT_ENC_BUFFER owns it. */
+             * If OUTPUT_ENC_BUFFER never handed it to a caller, jpegc is
+             * still the sole owner — free it instead of orphaning it
+             * (a capture that fails between SET_ENC_PARAM and OUTPUT used
+             * to leak one output buffer per attempt). */
             if (jpegc->enc_output_buffer != NULL) {
+                if (!jpegc->enc_output_buffer_handed_out) {
+                    hal_mem_free(jpegc->enc_output_buffer);
+                }
                 jpegc->enc_output_buffer = NULL;
                 jpegc->enc_output_buffer_size = 0;
                 jpegc->enc_output_buffer_capacity = 0;
+                jpegc->enc_output_buffer_handed_out = false;
             }
 
             jpegc->enc_output_buffer = (unsigned char *)hal_mem_alloc_aligned(required_size, 32, MEM_LARGE);
@@ -923,11 +931,12 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
         case JPEGC_CMD_OUTPUT_ENC_BUFFER:
             if(jpegc->mode == JPEG_MODE_ENC_COMPLETE){
                 *((unsigned char **)ubuf) = jpegc->enc_output_buffer;
+                jpegc->enc_output_buffer_handed_out = true;
                 ret = jpegc->enc_output_buffer_size;
                 jpegc->mode = JPEG_MODE_IDLE;
                 break;
             }
-            
+
             if(jpegc->mode != JPEG_MODE_ENC){
                 ret = AICAM_ERROR;
                 break;
@@ -939,6 +948,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
                 if(jpegc->mode == JPEG_MODE_ENC_COMPLETE){
                     jpegc_ensure_eoi(jpegc);
                     *((unsigned char **)ubuf) = jpegc->enc_output_buffer;
+                    jpegc->enc_output_buffer_handed_out = true;
                     ret = jpegc->enc_output_buffer_size;
                 }else{
                     ret = AICAM_ERROR_TIMEOUT;
@@ -1005,6 +1015,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             if(jpegc->enc_output_buffer != NULL && jpegc->enc_output_buffer == ubuf){
                 hal_mem_free(jpegc->enc_output_buffer);
                 jpegc->enc_output_buffer = NULL;
+                jpegc->enc_output_buffer_handed_out = false;
                 ret = AICAM_OK;
             }else{
                 ret = AICAM_ERROR_INVALID_PARAM;
@@ -1032,6 +1043,7 @@ static int jpegc_ioctl(void *priv, unsigned int cmd, unsigned char* ubuf, unsign
             }
             if (jpegc->enc_output_buffer != NULL && jpegc->enc_output_buffer == ubuf) {
                 jpegc->enc_output_buffer = NULL;
+                jpegc->enc_output_buffer_handed_out = false;
                 ret = AICAM_OK;
             } else {
                 ret = AICAM_ERROR_INVALID_PARAM;
@@ -1072,6 +1084,7 @@ static int jpegc_init(void *priv)
     jpegc->enc_output_buffer = NULL;
     jpegc->enc_output_buffer_size = 0;
     jpegc->enc_output_buffer_capacity = 0;
+    jpegc->enc_output_buffer_handed_out = false;
 
     jpegc->dec_params.ColorSpace = JPEG_YCBCR_COLORSPACE;
     jpegc->dec_params.ChromaSubsampling = JPEG_444_SUBSAMPLING;
@@ -1117,10 +1130,14 @@ static int jpegc_deinit(void *priv)
         jpegc->mtx_id = NULL;
     }
 
-    if (jpegc->enc_output_buffer) {
+    /* Only free what jpegc still owns: a buffer handed out via
+     * OUTPUT_ENC_BUFFER belongs to the caller (it frees via
+     * RETURN/FREE_ENC_BUFFER) — freeing it here would double-free. */
+    if (jpegc->enc_output_buffer != NULL && !jpegc->enc_output_buffer_handed_out) {
         hal_mem_free(jpegc->enc_output_buffer);
-        jpegc->enc_output_buffer = NULL;
     }
+    jpegc->enc_output_buffer = NULL;
+    jpegc->enc_output_buffer_handed_out = false;
 
     if (jpegc->dec_output_buffer) {
         hal_mem_free(jpegc->dec_output_buffer);

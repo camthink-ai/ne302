@@ -289,52 +289,61 @@ to: appliedTo,
         </div>
       )}
 
-      {/* Time filter bar */}
+      {/* Time filter bar — each label+input pair is an unbreakable group so a
+       * wrapped line never separates "到:" from its input on narrow screens. */}
       <div className="flex flex-wrap gap-2 items-center text-xs">
-        <label className="text-gray-500">{i18n._('sys.capture_settings.filter_from')}:</label>
-        <input
-          type="datetime-local"
-          className="inline-block w-48 h-7 text-xs rounded border border-gray-300 bg-gray-100 px-2 py-0.5"
-          value={filterFrom}
-          onChange={(e: any) => setFilterFrom(e.target.value)}
-        />
-        <label className="text-gray-500 ml-2">{i18n._('sys.capture_settings.filter_to')}:</label>
-        <input
-          type="datetime-local"
-          className="inline-block w-48 h-7 text-xs rounded border border-gray-300 bg-gray-100 px-2 py-0.5"
-          value={filterTo}
-          onChange={(e: any) => setFilterTo(e.target.value)}
-        />
-        <Button variant="outline" size="sm" onClick={applyFilter}>
-          {i18n._('sys.capture_settings.filter_apply')}
-        </Button>
-        {(filterFrom || filterTo) && (
-          <Button variant="ghost" size="sm" onClick={clearFilter}>
-            {i18n._('sys.capture_settings.filter_clear')}
+        <div className="flex items-center gap-1 w-full sm:w-auto">
+          <label className="text-gray-500 shrink-0">{i18n._('sys.capture_settings.filter_from')}:</label>
+          <input
+            type="datetime-local"
+            className="inline-block flex-1 sm:flex-none sm:w-48 h-7 text-xs rounded border border-gray-300 bg-gray-100 px-2 py-0.5 min-w-0"
+            value={filterFrom}
+            onChange={(e: any) => setFilterFrom(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-1 w-full sm:w-auto">
+          <label className="text-gray-500 shrink-0">{i18n._('sys.capture_settings.filter_to')}:</label>
+          <input
+            type="datetime-local"
+            className="inline-block flex-1 sm:flex-none sm:w-48 h-7 text-xs rounded border border-gray-300 bg-gray-100 px-2 py-0.5 min-w-0"
+            value={filterTo}
+            onChange={(e: any) => setFilterTo(e.target.value)}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={applyFilter}>
+            {i18n._('sys.capture_settings.filter_apply')}
           </Button>
-        )}
+          {(filterFrom || filterTo) && (
+            <Button variant="ghost" size="sm" onClick={clearFilter}>
+              {i18n._('sys.capture_settings.filter_clear')}
+            </Button>
+          )}
+        </div>
         {appliedFrom !== undefined && (
-          <span className="text-blue-600 ml-1 text-xs">
+          <span className="text-blue-600 text-xs">
             {i18n._('sys.capture_settings.filter_active')}
           </span>
         )}
-        <span className="ml-auto text-gray-400">
-          {i18n._('sys.capture_settings.sort_by_time')}:
-        </span>
-        <Button
-          variant={sortNewest ? 'primary' : 'outline'}
-          size="sm"
-          onClick={() => { setSortNewest(true); setOffset(0); }}
-        >
-          {i18n._('sys.capture_settings.sort_newest')}
-        </Button>
-        <Button
-          variant={!sortNewest ? 'primary' : 'outline'}
-          size="sm"
-          onClick={() => { setSortNewest(false); setOffset(0); }}
-        >
-          {i18n._('sys.capture_settings.sort_oldest')}
-        </Button>
+        <div className="flex items-center gap-2 sm:ml-auto">
+          <span className="text-gray-400">
+            {i18n._('sys.capture_settings.sort_by_time')}:
+          </span>
+          <Button
+            variant={sortNewest ? 'primary' : 'outline'}
+            size="sm"
+            onClick={() => { setSortNewest(true); setOffset(0); }}
+          >
+            {i18n._('sys.capture_settings.sort_newest')}
+          </Button>
+          <Button
+            variant={!sortNewest ? 'primary' : 'outline'}
+            size="sm"
+            onClick={() => { setSortNewest(false); setOffset(0); }}
+          >
+            {i18n._('sys.capture_settings.sort_oldest')}
+          </Button>
+        </div>
       </div>
 
       {/* Batch action toolbar */}
@@ -362,34 +371,37 @@ to: appliedTo,
         </div>
       )}
 
-      {/* Tab switcher */}
-      <div className="flex gap-2 flex-wrap items-center">
-        {TABS.map((t) => (
-          <Button
-            key={t.key}
-            variant={tab === t.key ? 'primary' : 'outline'}
-            size="sm"
-            onClick={() => switchTab(t.key)}
-          >
-            {i18n._(t.labelKey)}
-          </Button>
-        ))}
-        <div className="flex-1" />
-        {/* Select-all checkbox (header level) */}
-        <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            onChange={toggleSelectAll}
-            className="w-4 h-4"
-          />
-          {i18n._('sys.capture_settings.select_all')}
-        </label>
-        {tab === 'failed' && (
-          <Button variant="outline" size="sm" onClick={retryAll}>
-            {i18n._('sys.capture_settings.retry_all')}
-          </Button>
-        )}
+      {/* Tab switcher — tabs and the select-all action are separate wrap groups */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center">
+          {TABS.map((t) => (
+            <Button
+              key={t.key}
+              variant={tab === t.key ? 'primary' : 'outline'}
+              size="sm"
+              onClick={() => switchTab(t.key)}
+            >
+              {i18n._(t.labelKey)}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          {/* Select-all checkbox (header level) */}
+          <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleSelectAll}
+              className="w-4 h-4"
+            />
+            {i18n._('sys.capture_settings.select_all')}
+          </label>
+          {tab === 'failed' && (
+            <Button variant="outline" size="sm" onClick={retryAll}>
+              {i18n._('sys.capture_settings.retry_all')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Separator />

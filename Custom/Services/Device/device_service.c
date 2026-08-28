@@ -1675,7 +1675,10 @@ aicam_result_t device_service_camera_capture(uint8_t **buffer, int *out_len,
         device_service_light_control(AICAM_TRUE);
     }
 
-    // 2. get camera and jpeg config
+    // 2. get camera config (JPEG params are set in step 3.5, after the
+    //    camera buffers are acquired: SET_ENC_PARAM allocates the encode
+    //    output buffer, so a capture that fails before that point must not
+    //    have touched jpegc state)
     ret = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_PARAM, (uint8_t *)&pipe_param, sizeof(pipe_params_t));
     if (ret != 0)
     {
@@ -1683,6 +1686,44 @@ aicam_result_t device_service_camera_capture(uint8_t **buffer, int *out_len,
         goto cleanup;
     }
 
+    // 3. get frame buffer with frame ID
+    uint32_t captured_frame_id = 0;
+    camera_buffer_with_frame_id_t buffer_with_id = {0};
+    aicam_result_t buffer_result = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_BUFFER_WITH_FRAME_ID,
+                                                 (uint8_t *)&buffer_with_id, 0);
+    if (buffer_result == AICAM_OK && buffer_with_id.buffer != NULL && buffer_with_id.size > 0) {
+        fb = buffer_with_id.buffer;
+        fb_len = buffer_with_id.size;
+        captured_frame_id = buffer_with_id.frame_id;
+    } else {
+        // Fallback to old method if WITH_FRAME_ID is not supported
+        fb_len = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_BUFFER, (uint8_t *)&fb, 0);
+        if (fb_len <= 0 || fb == NULL)
+        {
+            LOG_SVC_WARN("Failed to get pipe1 buffer");
+            result = AICAM_ERROR_INVALID_PARAM;
+            goto cleanup;
+        }
+    }
+
+    // Return frame ID if requested
+    if (frame_id != NULL) {
+        *frame_id = captured_frame_id;
+    }
+
+    if (need_ai_inference)
+    {
+        pipe2_fb_len = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE2_BUFFER, (uint8_t *)&input_frame_buffer, 0);
+        if (pipe2_fb_len <= 0 || input_frame_buffer == NULL)
+        {
+            LOG_SVC_WARN("Failed to get pipe2 buffer");
+            result = AICAM_ERROR_INVALID_PARAM;
+            goto cleanup;
+        }
+    }
+
+    // 3.5 configure JPEG encoder (allocates the output buffer — keep this
+    //     after every step that can still fail, so no orphaned allocation)
     ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_GET_ENC_PARAM, (uint8_t *)&jpeg_param, sizeof(jpegc_params_t));
     if (ret != 0)
     {
@@ -1699,42 +1740,6 @@ aicam_result_t device_service_camera_capture(uint8_t **buffer, int *out_len,
     {
         result = AICAM_ERROR_IO;
         goto cleanup;
-    }
-
-    // 3. get frame buffer with frame ID
-    uint32_t captured_frame_id = 0;
-    camera_buffer_with_frame_id_t buffer_with_id = {0};
-    aicam_result_t buffer_result = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_BUFFER_WITH_FRAME_ID, 
-                                                 (uint8_t *)&buffer_with_id, 0);
-    if (buffer_result == AICAM_OK && buffer_with_id.buffer != NULL && buffer_with_id.size > 0) {
-        fb = buffer_with_id.buffer;
-        fb_len = buffer_with_id.size;
-        captured_frame_id = buffer_with_id.frame_id;
-    } else {
-        // Fallback to old method if WITH_FRAME_ID is not supported
-        fb_len = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_BUFFER, (uint8_t *)&fb, 0);
-        if (fb_len <= 0 || fb == NULL)
-        {
-            LOG_SVC_WARN("Failed to get pipe1 buffer");
-            result = AICAM_ERROR_INVALID_PARAM;
-            goto cleanup;
-        }
-    }
-    
-    // Return frame ID if requested
-    if (frame_id != NULL) {
-        *frame_id = captured_frame_id;
-    }
-
-    if (need_ai_inference)
-    {
-        pipe2_fb_len = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE2_BUFFER, (uint8_t *)&input_frame_buffer, 0);
-        if (pipe2_fb_len <= 0 || input_frame_buffer == NULL)
-        {
-            LOG_SVC_WARN("Failed to get pipe2 buffer");
-            result = AICAM_ERROR_INVALID_PARAM;
-            goto cleanup;
-        }
     }
 
     // 4. JPEG encode
@@ -2029,29 +2034,11 @@ aicam_result_t device_service_camera_capture_fast(uint8_t **buffer, int *out_len
         }
     }
 
-    // 8. Get camera and JPEG config (same as device_service_camera_capture)
-    ret = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_PARAM, 
+    // 8. Get camera config (JPEG params are set in step 9.5, after the
+    //    camera buffers are acquired — SET_ENC_PARAM allocates the encode
+    //    output buffer and must not run on a path that can still fail)
+    ret = device_ioctl(g_device_service.camera_device, CAM_CMD_GET_PIPE1_PARAM,
                        (uint8_t *)&pipe_param, sizeof(pipe_params_t));
-    if (ret != 0)
-    {
-        result = AICAM_ERROR_IO;
-        goto cleanup;
-    }
-
-    ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_GET_ENC_PARAM, 
-                       (uint8_t *)&jpeg_param, sizeof(jpegc_params_t));
-    if (ret != 0)
-    {
-        result = AICAM_ERROR_IO;
-        goto cleanup;
-    }
-
-    jpeg_param.ImageWidth = pipe_param.width;
-    jpeg_param.ImageHeight = pipe_param.height;
-    jpeg_param.ChromaSubsampling = JPEG_420_SUBSAMPLING;
-    jpeg_param.ImageQuality = g_device_service.camera_config.image_config.fast_capture_jpeg_quality;
-    ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_SET_ENC_PARAM, 
-                       (uint8_t *)&jpeg_param, sizeof(jpegc_params_t));
     if (ret != 0)
     {
         result = AICAM_ERROR_IO;
@@ -2101,6 +2088,28 @@ aicam_result_t device_service_camera_capture_fast(uint8_t **buffer, int *out_len
             result = AICAM_ERROR_INVALID_PARAM;
             goto cleanup;
         }
+    }
+
+    // 9.5 Configure JPEG encoder (same as device_service_camera_capture:
+    //     keep the allocating SET_ENC_PARAM after every step that can fail)
+    ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_GET_ENC_PARAM,
+                       (uint8_t *)&jpeg_param, sizeof(jpegc_params_t));
+    if (ret != 0)
+    {
+        result = AICAM_ERROR_IO;
+        goto cleanup;
+    }
+
+    jpeg_param.ImageWidth = pipe_param.width;
+    jpeg_param.ImageHeight = pipe_param.height;
+    jpeg_param.ChromaSubsampling = JPEG_420_SUBSAMPLING;
+    jpeg_param.ImageQuality = g_device_service.camera_config.image_config.fast_capture_jpeg_quality;
+    ret = device_ioctl(g_device_service.jpeg_device, JPEGC_CMD_SET_ENC_PARAM,
+                       (uint8_t *)&jpeg_param, sizeof(jpegc_params_t));
+    if (ret != 0)
+    {
+        result = AICAM_ERROR_IO;
+        goto cleanup;
     }
 
     // 10. JPEG encode (same as device_service_camera_capture)

@@ -786,7 +786,7 @@ static aicam_result_t video_ai_node_init_callback(video_node_t *node) {
     pipe_param.fps = data->config.fps;
     pipe_param.format = data->config.input_format;
     pipe_param.bpp = data->config.bpp;
-    pipe_param.buffer_nb = 2;
+    pipe_param.buffer_nb = 3;
     printf("Set pipe2 param: %dx%d@%dfps, format=%d, bpp=%d\r\n",
                  pipe_param.width, pipe_param.height, pipe_param.fps, pipe_param.format, pipe_param.bpp);
     device_ioctl(camera_dev, CAM_CMD_SET_PIPE2_PARAM, (uint8_t*)&pipe_param, sizeof(pipe_params_t));
