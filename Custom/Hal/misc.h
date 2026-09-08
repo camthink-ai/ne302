@@ -11,7 +11,10 @@
 #define FLASH_DUTY 50
 
 #define BATTERY_MIN_VOLTAGE (3600)  /* Minimum battery voltage in mV */
-#define BATTERY_MAX_VOLTAGE (6000)  /* Maximum battery voltage in mV */
+/* NE302 has no mains-power detection: the battery-sense line measures the
+ * Type-C input rail (5V) rather than NE301's 6V battery pack. Full scale is
+ * 5V so a USB-powered device reads 100% instead of mid-charge. */
+#define BATTERY_MAX_VOLTAGE (5000)  /* Maximum supply voltage in mV (5V USB = 100%) */
 
 #define LIGHT_MIN_SENS      (0)    /* Minimum light sensor value */
 #define LIGHT_MAX_SENS      (2500) /* Maximum light sensor value */

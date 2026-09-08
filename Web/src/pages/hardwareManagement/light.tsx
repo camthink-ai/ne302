@@ -15,6 +15,13 @@ import hardwareServiceApi, { type SetLightConfigReq } from '@/services/api/hardw
 
 type LightMode = SetLightConfigReq['mode'];
 
+/* NE302: the photoresistor is not exposed through the enclosure, so the
+ * sensor cannot read real ambient brightness and the auto mode (ambient
+ * threshold) config is hidden from users. Flip this to re-enable the UI when
+ * a future enclosure exposes the sensor — the firmware and HTTP API support
+ * the mode either way. */
+const LIGHT_SENSOR_UI_ENABLED = false;
+
 export default function Light() {
    const { i18n } = useLingui();
    const [startTime, setStartTime] = useState('10:00');
@@ -176,7 +183,9 @@ export default function Light() {
                            <SelectContent>
                               <SelectItem value="off">{i18n._('sys.hardware_management.fill_light_type_close')}</SelectItem>
                               <SelectItem value="on">{i18n._('sys.hardware_management.fill_light_type_open')}</SelectItem>
-                              <SelectItem value="auto">{i18n._('sys.hardware_management.fill_light_type_auto')}</SelectItem>
+                              {LIGHT_SENSOR_UI_ENABLED && (
+                                 <SelectItem value="auto">{i18n._('sys.hardware_management.fill_light_type_auto')}</SelectItem>
+                              )}
                               <SelectItem value="custom">{i18n._('sys.hardware_management.fill_light_type_custom')}</SelectItem>
                            </SelectContent>
                         </Select>
@@ -194,7 +203,7 @@ export default function Light() {
                            </div>
                         </>
                      )}
-                     {lightConfig.mode === 'auto' && (
+                     {LIGHT_SENSOR_UI_ENABLED && lightConfig.mode === 'auto' && (
                         <>
                            <Separator />
                            <div className="flex justify-between items-center">
