@@ -75,6 +75,11 @@
  ******************************************************/
 extern bool bg_enabled;
 
+/* ponytail: app-side wedge detector hook (Custom/Hal/Network/netif_manager).
+ * Receives the real bus-write result of every DATA packet; a density of
+ * failures there triggers the firmware-error recovery. */
+extern void sl_net_notify_bus_tx_failure(sl_status_t status);
+
 #ifdef SL_NET_COMPONENT_INCLUDED
 extern osMessageQueueId_t sli_network_manager_request_queue;
 #endif
@@ -151,6 +156,23 @@ static bool sli_si91x_client_vap_id_to_net_interface(uint8_t vap_id, sl_net_inte
  *             Extern Variable Declarations
  ******************************************************/
 
+/* ponytail: LWIP/transceiver RAW data packets used to ship a NULL
+ * packet_status_handler, so the app only ever saw the pool alloc result (0x19
+ * once CE_DATA_POOL backed up) — and since the HAL thread frees each TX block
+ * right after its bus-write attempt (even on failure), a half-wedged pool keeps
+ * leaking blocks back and interleaving alloc-OKs. Forward the real bus-write
+ * status (wakeup failure / BUS_WRITE_ERROR) to the app's density detector: a
+ * failure here means the chip never received the frame at all, the earliest
+ * hard-death signal available. Note: hal_packet->packet_type is hardcoded to 0
+ * on enqueue, so the packet_type argument carries no information — entry-level
+ * routing is what scopes this handler to DATA packets only. */
+static void sli_wifi_data_tx_status_handler(uint16_t packet_type, sl_status_t status, void *context)
+{
+  UNUSED_PARAMETER(packet_type);
+  UNUSED_PARAMETER(context);
+  sl_net_notify_bus_tx_failure(status);
+}
+
 /******************************************************
  *               Local Variable Definitions
  ******************************************************/
@@ -163,7 +185,7 @@ sli_routing_entry_t wifi_command_engine_routing_entries[SLI_WIFI_COMMAND_ENGINE_
   // LWIP and Transceiver RAW Data packets are sent using this packet type
   [SLI_WIFI_DATA_PACKET] = {
     .destination_packet_handler = sli_hal_si91x_data_send_packet,
-    .packet_status_handler     = NULL,
+    .packet_status_handler     = sli_wifi_data_tx_status_handler,
     .packet_type = SLI_WIFI_DATA_PACKET,
   },
   // Only Internal socket data packets are sent using this packet type

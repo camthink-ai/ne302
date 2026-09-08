@@ -62,6 +62,18 @@ typedef struct {
     device_t *light_sensor_device;
     light_config_t light_config;
     aicam_bool_t light_initialized;
+
+    /* Fill-light-while-streaming runtime: when enabled, the light follows the
+     * light config continuously while the device is running (regardless of
+     * video stream viewers — captures must find the light already lit), and
+     * the capture paths stop flashing it. A dedicated task keeps the schedule
+     * window and brightness in sync; state tracking avoids redundant PWM
+     * ioctls. */
+    osEventFlagsId_t fill_light_events;
+    osThreadId_t fill_light_task;
+    volatile aicam_bool_t fill_light_task_run;
+    aicam_bool_t fill_light_active;
+    uint32_t fill_light_last_duty;
     
     // ISP management
     isp_config_t isp_config;
@@ -347,9 +359,10 @@ static void init_default_light_config(light_config_t *config)
     config->brightness_level = light_config.brightness_level;
     config->auto_trigger_enabled = light_config.auto_trigger_enabled;
     config->light_threshold = light_config.light_threshold;
+    config->fill_light_while_streaming = light_config.fill_light_while_streaming;
 
-    LOG_SVC_DEBUG("Light configuration updated: connected=%u, mode=%u, start_hour=%u, start_minute=%u, end_hour=%u, end_minute=%u, brightness_level=%u, auto_trigger_enabled=%u, light_threshold=%u",
-                config->connected, config->mode, config->start_hour, config->start_minute, config->end_hour, config->end_minute, config->brightness_level, config->auto_trigger_enabled, config->light_threshold);
+    LOG_SVC_DEBUG("Light configuration updated: connected=%u, mode=%u, start_hour=%u, start_minute=%u, end_hour=%u, end_minute=%u, brightness_level=%u, auto_trigger_enabled=%u, light_threshold=%u, fill_light_while_streaming=%u",
+                config->connected, config->mode, config->start_hour, config->start_minute, config->end_hour, config->end_minute, config->brightness_level, config->auto_trigger_enabled, config->light_threshold, config->fill_light_while_streaming);
 }
 
 /**
@@ -667,33 +680,37 @@ static aicam_result_t read_ambient_light_level(uint32_t *light_level)
 }
 
 /**
- * @brief Check if current time is within custom light schedule
+ * @brief Check if the current RTC time is inside the custom light schedule
+ * @details RTC-based and shared by the capture flash paths and the
+ *          fill-light sync: same-day window is [start, end), cross-day window
+ *          wraps midnight, start == end means the light never turns on.
+ *          RTC-based (not localtime) so time-sync clock steps cannot make
+ *          the window flip unexpectedly.
  */
-static aicam_bool_t is_in_custom_light_schedule(const light_config_t *config)
+static aicam_bool_t light_custom_schedule_active_now(const light_config_t *config)
 {
-    if (!config || config->mode != LIGHT_MODE_CUSTOM) {
-        return AICAM_FALSE;
+    RTC_TIME_S now_time = rtc_get_time();
+    int start_minutes = (int)(config->start_hour * 60 + config->start_minute);
+    int end_minutes = (int)(config->end_hour * 60 + config->end_minute);
+    int now_minutes = (int)(now_time.hour * 60 + now_time.minute);
+
+    if (start_minutes < end_minutes)
+    {
+        return (now_minutes >= start_minutes && now_minutes < end_minutes) ? AICAM_TRUE : AICAM_FALSE;
     }
-    
-    time_t now;
-    struct tm *timeinfo;
-    time(&now);
-    timeinfo = localtime(&now);
-    
-    uint32_t current_minutes = timeinfo->tm_hour * 60 + timeinfo->tm_min;
-    uint32_t start_minutes = config->start_hour * 60 + config->start_minute;
-    uint32_t end_minutes = config->end_hour * 60 + config->end_minute;
-    
-    // Handle cross-day case
-    if (start_minutes > end_minutes) {
-        return (current_minutes >= start_minutes || current_minutes <= end_minutes);
-    } else {
-        return (current_minutes >= start_minutes && current_minutes <= end_minutes);
+    else if (start_minutes > end_minutes)
+    {
+        return (now_minutes >= start_minutes || now_minutes < end_minutes) ? AICAM_TRUE : AICAM_FALSE;
     }
+    return AICAM_FALSE;
 }
 
 /**
  * @brief Decide whether fill light should be enabled for current configuration
+ * @details Single decision point shared by the capture-time flash paths and
+ *          the fill-light-while-streaming sync task. AUTO reads the ambient
+ *          light sensor (NE302 photoresistor) and lights below the threshold;
+ *          CUSTOM follows the RTC schedule window.
  */
 static aicam_bool_t should_enable_fill_light(const light_config_t *config)
 {
@@ -717,10 +734,95 @@ static aicam_bool_t should_enable_fill_light(const light_config_t *config)
         }
 
         case LIGHT_MODE_CUSTOM:
-            return is_in_custom_light_schedule(config);
+            return light_custom_schedule_active_now(config);
 
         default:
             return AICAM_FALSE;
+    }
+}
+
+/* ==================== Fill Light While Streaming ==================== */
+
+/* Fill-light evaluation period. Cheap no-op unless the feature is enabled and
+ * a stream is running; keeps the custom schedule window and stream start/stop
+ * edges in sync without hooking the Video Hub from this service. */
+#define FILL_LIGHT_SYNC_PERIOD_MS 2000U
+
+/* Wakes the fill-light task immediately (config change); the wait timeout is
+ * the periodic tick. */
+#define FILL_LIGHT_EVT_SYNC (1UL << 0)
+
+/* fill_light_sync() calls LOG (printf-family formatting), rtc_get_time() and
+ * PWM ioctls — far too deep for the ThreadX timer thread, whose stack is only
+ * TX_TIMER_THREAD_STACK_SIZE (1024) bytes. Running it from an osTimer callback
+ * overflowed that stack and hard-faulted (MSTKERR below _tx_timer_thread_
+ * stack_area). Same lesson as communication_service's startup-decision task:
+ * heavy work lives on a dedicated task, callers only set an event flag. */
+static uint8_t fill_light_task_stack[1024 * 4] ALIGN_32 IN_PSRAM;
+
+/**
+ * @brief Synchronize the light hardware with fill-light-while-streaming mode
+ * @details Target state:
+ *          - feature on -> the light follows the light config for as long as
+ *            the device runs, regardless of video stream viewers: ON -> on,
+ *            AUTO -> on below the ambient-light threshold (NE302 light
+ *            sensor, polled every FILL_LIGHT_SYNC_PERIOD_MS), CUSTOM -> on
+ *            inside the schedule window, OFF -> off. This way work-time
+ *            captures always find the light in the configured state even
+ *            when nobody is watching the stream;
+ *          - feature off -> off (captures fall back to capture-time flash).
+ *          Runs only on the fill-light task: periodically (wait timeout:
+ *          schedule window edges / ambient level drift) and immediately
+ *          after a config change (event flag). Only issues PWM ioctls when
+ *          the state or duty changes.
+ */
+static void fill_light_sync(void)
+{
+    if (!g_device_service.light_initialized || !g_device_service.light_device) {
+        return;
+    }
+
+    aicam_bool_t want_on = AICAM_FALSE;
+    if (g_device_service.light_config.fill_light_while_streaming) {
+        /* Same decision as the capture-time flash path: ON / AUTO (ambient
+         * threshold) / CUSTOM (RTC schedule window). */
+        want_on = should_enable_fill_light(&g_device_service.light_config);
+    }
+
+    if (want_on) {
+        uint32_t duty = g_device_service.light_config.brightness_level;
+        if (!g_device_service.fill_light_active || g_device_service.fill_light_last_duty != duty) {
+            uint8_t duty_u8 = (uint8_t)duty;
+            device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty_u8, 0);
+            device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
+            g_device_service.fill_light_active = AICAM_TRUE;
+            g_device_service.fill_light_last_duty = duty;
+            LOG_SVC_INFO("Fill light ON while streaming (brightness: %u%%)", (unsigned)duty);
+        }
+    } else if (g_device_service.fill_light_active) {
+        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
+        g_device_service.fill_light_active = AICAM_FALSE;
+        LOG_SVC_INFO("Fill light OFF (feature disabled, schedule ended or mode off)");
+    }
+}
+
+/**
+ * @brief Fill-light worker task — sole owner of fill_light_sync()
+ * @details Wakes on config changes (event flag, immediate) and on the periodic
+ *          timeout (schedule window edges, stream start/stop). Runs at
+ *          osPriorityBelowNormal: slow housekeeping, must not compete with the
+ *          streaming paths.
+ */
+static void fill_light_task(void *argument)
+{
+    (void)argument;
+    while (g_device_service.fill_light_task_run) {
+        (void)osEventFlagsWait(g_device_service.fill_light_events, FILL_LIGHT_EVT_SYNC,
+                               osFlagsWaitAny, FILL_LIGHT_SYNC_PERIOD_MS);
+        if (!g_device_service.fill_light_task_run) {
+            break;
+        }
+        fill_light_sync();
     }
 }
 
@@ -890,13 +992,37 @@ aicam_result_t device_service_start(void)
         LOG_SVC_WARN("Light device not found: %s", FLASH_DEVICE_NAME);
     }
 
-    // Find ambient light sensor device (ADC)
+    // Find ambient light sensor device (ADC, NE302 photoresistor)
     g_device_service.light_sensor_device = device_find_pattern(LIGHT_DEVICE_NAME, DEV_TYPE_MISC);
     if (g_device_service.light_sensor_device) {
         LOG_SVC_INFO("Light sensor device found: %s", LIGHT_DEVICE_NAME);
     } else {
         LOG_SVC_WARN("Light sensor device not found: %s", LIGHT_DEVICE_NAME);
     }
+
+    // Fill-light-while-streaming sync task (no-op unless the feature is on)
+    g_device_service.fill_light_active = AICAM_FALSE;
+    g_device_service.fill_light_last_duty = 0;
+    if (g_device_service.fill_light_events == NULL) {
+        g_device_service.fill_light_events = osEventFlagsNew(NULL);
+    }
+    if (g_device_service.fill_light_events != NULL && g_device_service.fill_light_task == NULL) {
+        const osThreadAttr_t fill_light_task_attr = {
+            .name = "FillLightTask",
+            .stack_mem = fill_light_task_stack,
+            .stack_size = sizeof(fill_light_task_stack),
+            .priority = osPriorityBelowNormal,
+        };
+        g_device_service.fill_light_task_run = AICAM_TRUE;
+        g_device_service.fill_light_task = osThreadNew(fill_light_task, NULL, &fill_light_task_attr);
+    }
+    if (g_device_service.fill_light_task != NULL) {
+        // Immediate first evaluation; further ticks come from the wait timeout
+        (void)osEventFlagsSet(g_device_service.fill_light_events, FILL_LIGHT_EVT_SYNC);
+    } else {
+        LOG_SVC_WARN("Fill light sync task creation failed");
+    }
+
 
     // Find and initialize LED device
     g_device_service.led_device = device_find_pattern(IND_EXT_DEVICE_NAME, DEV_TYPE_MISC);
@@ -962,11 +1088,23 @@ aicam_result_t device_service_stop(void)
     }
     
     LOG_SVC_INFO("Stopping Device Service...");
-    
+
+    // Stop the fill-light sync task and turn the fill light off
+    if (g_device_service.fill_light_task != NULL) {
+        g_device_service.fill_light_task_run = AICAM_FALSE;
+        if (g_device_service.fill_light_events != NULL) {
+            (void)osEventFlagsSet(g_device_service.fill_light_events, FILL_LIGHT_EVT_SYNC);
+        }
+        osThreadJoin(g_device_service.fill_light_task);
+        osThreadTerminate(g_device_service.fill_light_task);
+        g_device_service.fill_light_task = NULL;
+    }
+
     // Turn off light if enabled
     if (g_device_service.light_initialized && g_device_service.light_device) {
-        device_ioctl(g_device_service.light_device, 0, NULL, 0);
+        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
     }
+    g_device_service.fill_light_active = AICAM_FALSE;
     
     // Stop camera if running
     if (g_device_service.camera_initialized && g_device_service.camera_device) {
@@ -993,7 +1131,13 @@ aicam_result_t device_service_deinit(void)
     }
     
     LOG_SVC_INFO("Deinitializing Device Service...");
-    
+
+    // Release the fill-light event flags before the context reset drops the id
+    if (g_device_service.fill_light_events != NULL) {
+        osEventFlagsDelete(g_device_service.fill_light_events);
+        g_device_service.fill_light_events = NULL;
+    }
+
     // Reset context
     memset(&g_device_service, 0, sizeof(device_service_context_t));
     
@@ -1369,9 +1513,18 @@ aicam_result_t device_service_light_set_config(const light_config_t *config)
         device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
     }
     
-    LOG_SVC_INFO("Light configuration updated: mode=%d, brightness=%u%%, threshold=%u",
-                config->mode, config->brightness_level, config->light_threshold);
-    
+    /* Re-evaluate fill-light-while-streaming immediately so toggling the
+     * feature or changing mode/brightness/schedule takes effect right away
+     * (no wait for the next periodic sync). fill_light_sync() runs only on
+     * the fill-light task — wake it instead of calling it here. */
+    if (g_device_service.fill_light_events != NULL) {
+        (void)osEventFlagsSet(g_device_service.fill_light_events, FILL_LIGHT_EVT_SYNC);
+    }
+
+    LOG_SVC_INFO("Light configuration updated: mode=%d, brightness=%u%%, threshold=%u, fill_light_while_streaming=%u",
+                config->mode, config->brightness_level, config->light_threshold,
+                config->fill_light_while_streaming);
+
     return AICAM_OK;
 }
 
@@ -1380,29 +1533,19 @@ aicam_bool_t device_service_light_is_connected(void)
     return g_device_service.light_config.connected;
 }
 
-aicam_result_t device_service_light_control(aicam_bool_t enable)
+/* Raw light PWM helpers for the capture-time flash paths (work + wake). The
+ * fill-light-while-streaming sync uses the same ioctls directly inside
+ * fill_light_sync() where it tracks state/duty changes. */
+static void light_pwm_on(void)
 {
-    if (!g_device_service.initialized) {
-        return AICAM_ERROR_NOT_INITIALIZED;
-    }
-    
-    if (!g_device_service.light_initialized || !g_device_service.light_device) {
-        return AICAM_ERROR_NOT_FOUND;
-    }
-    
-    // Manual control - temporarily override automatic control
-    if (enable) {
-        // Set current configured brightness level
-        uint8_t duty = g_device_service.light_config.brightness_level;
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
-        LOG_SVC_INFO("Light manually controlled: ON (brightness: %u%%)", g_device_service.light_config.brightness_level);
-    } else {
-        device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
-        LOG_SVC_INFO("Light manually controlled: OFF");
-    }
-    
-    return AICAM_OK;
+    uint8_t duty = g_device_service.light_config.brightness_level;
+    device_ioctl(g_device_service.light_device, MISC_CMD_PWM_SET_DUTY, (uint8_t *)&duty, 0);
+    device_ioctl(g_device_service.light_device, MISC_CMD_PWM_ON, 0, 0);
+}
+
+static void light_pwm_off(void)
+{
+    device_ioctl(g_device_service.light_device, MISC_CMD_PWM_OFF, 0, 0);
 }
 
 aicam_result_t device_service_light_set_brightness(uint32_t brightness_level)
@@ -1667,12 +1810,18 @@ aicam_result_t device_service_camera_capture(uint8_t **buffer, int *out_len,
     jpegc_params_t jpeg_param;
 
 
-    // 1. light control
-    light_on = should_enable_fill_light(&g_device_service.light_config);
-
-    if (light_on)
+    // 1. light control (capture-time flash). Skipped entirely in
+    //    fill-light-while-streaming mode: there the light is driven by the
+    //    continuous sync instead, and work-time captures must not toggle it.
+    //    AUTO reads the ambient light sensor, CUSTOM the RTC schedule window.
+    if (!g_device_service.light_config.fill_light_while_streaming)
     {
-        device_service_light_control(AICAM_TRUE);
+        light_on = should_enable_fill_light(&g_device_service.light_config);
+
+        if (light_on)
+        {
+            light_pwm_on();
+        }
     }
 
     // 2. get camera config (JPEG params are set in step 3.5, after the
@@ -1792,7 +1941,7 @@ cleanup:
 
     if (light_on)
     {
-        device_service_light_control(AICAM_FALSE);
+        light_pwm_off();
     }
 
     return result;
@@ -2024,13 +2173,15 @@ aicam_result_t device_service_camera_capture_fast(uint8_t **buffer, int *out_len
         g_device_service.camera_config.enabled = AICAM_TRUE;
     }
 
-    // 7. Light control (same logic as device_service_camera_capture)
+    // 7. Light control (same logic as device_service_camera_capture). The wake
+    //    path is intentionally NOT affected by fill-light-while-streaming: it
+    //    always uses the capture-time flash behavior (no stream runs here).
     if (g_device_service.light_initialized && g_device_service.light_device) {
         light_on = should_enable_fill_light(&g_device_service.light_config);
 
         if (light_on)
         {
-            device_service_light_control(AICAM_TRUE);
+            light_pwm_on();
         }
     }
 
@@ -2164,7 +2315,7 @@ cleanup:
 
     if (light_on && g_device_service.light_initialized && g_device_service.light_device)
     {
-        device_service_light_control(AICAM_FALSE);
+        light_pwm_off();
     }
 
     return result;

@@ -73,13 +73,6 @@ aicam_result_t device_sys_clk_config_handler(http_handler_context_t *ctx);
 aicam_result_t device_light_config_handler(http_handler_context_t *ctx);
 
 /**
- * @brief Light control handler
- * @param ctx HTTP request context
- * @return Operation result
- */
-aicam_result_t device_light_control_handler(http_handler_context_t *ctx);
-
-/**
  * @brief Camera configuration handler
  * @param ctx HTTP request context
  * @return Operation result

@@ -11,6 +11,7 @@
 #include "drtc.h"
 #include "device_service.h"
 #include "json_config_internal.h"
+#include "board_hw.h"
 #include "mem_map.h"
 #include <string.h>
 #include <stdio.h>
@@ -421,7 +422,12 @@ int factory_config_read(factory_config_t *config) {
     if (storage_nvs_read(NVS_FACTORY, NVS_KEY_TEST_PASSED, passed_str, sizeof(passed_str) - 1) > 0) {
         config->test_passed = (passed_str[0] == '1') ? 1 : 0;
     }
-    
+
+    // No factory-written hardware version: fall back to the PE9 board strap
+    if (strlen(config->hw_version) == 0) {
+        strncpy(config->hw_version, board_hw_version_str(), sizeof(config->hw_version) - 1);
+    }
+
     return 0;
 }
 
@@ -648,8 +654,9 @@ static int factory_test_cmd(int argc, char *argv[]) {
             if (strlen(hw_ver) == 0) {
                 storage_nvs_read(NVS_USER, NVS_KEY_DEVICE_INFO_HW_VER, hw_ver, sizeof(hw_ver) - 1);
             }
+            /* No factory-written version: report the PE9 board strap band */
             LOG_SIMPLE("HW Version: %s\r\n",
-                       strlen(hw_ver) > 0 ? hw_ver : "(not set)");
+                       strlen(hw_ver) > 0 ? hw_ver : board_hw_version_str());
         } else {
             // Limit to factory_config_t.hw_version size (16 incl. null)
             if (strlen(argv[2]) >= 16) {

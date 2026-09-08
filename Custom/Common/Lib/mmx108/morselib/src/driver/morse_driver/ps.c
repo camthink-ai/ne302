@@ -37,6 +37,14 @@ static mmtrace_channel ps_evt_channel_handle;
 
 #define MORSE_PS_WAKE_INDICATED_MULTIPLIER 3
 
+/**
+ * Time the wake pin is held low by morse_ps_kick_wake() before re-asserting.
+ * The pin is a level veto (high = stay awake); in the wedged state it is
+ * already high, so a fresh low->high edge requires dropping it first. 5 ms is
+ * far above any input-sync settling and negligible next to the wake delay.
+ */
+#define MORSE_PS_KICK_WAKE_LOW_MS (5)
+
 
 #define DEFAULT_BUS_TIMEOUT_MS (5)
 
@@ -63,7 +71,21 @@ static void morse_ps_wait_after_wake_pin_raise(struct driver_data *driverd)
 
     if (!ok && hw_signals_wake)
     {
-        MMLOG_WRN("HW did not signal wake\n");
+        /*
+         * The busy edge may have been missed by the IRQ path. Poll the line for
+         * one extra window before giving up: proceeding against a chip that has
+         * not woken yields zeroed status reads that look like an exhausted
+         * YAPS pool (every TX then fails with -ENOMEM) and wedges the command
+         * path until the chip is hard reset.
+         */
+        uint32_t poll_until_ms = mmosal_get_time_ms() + max_boot_delay_ms;
+        while (!mmhal_wlan_busy_is_asserted() && !mmosal_time_has_passed(poll_until_ms))
+        {
+            mmosal_task_sleep(1);
+        }
+        ok = mmhal_wlan_busy_is_asserted();
+        /* ERR not WRN: the lib is built with MMLOG_LEVEL_ERR, WRN is stripped. */
+        MMLOG_ERR("WAKE asserted but HW did not signal wake (busy=%d)\n", ok);
     }
 }
 
@@ -206,6 +228,41 @@ void morse_ps_network_activity(struct driver_data *driverd)
 {
     MMOSAL_MUTEX_GET_INF(driverd->ps.lock);
     morse_ps_update_timeout(driverd, driverd->ps.dynamic_ps_timout_ms);
+    MMOSAL_MUTEX_RELEASE(driverd->ps.lock);
+}
+
+void morse_ps_kick_wake(struct driver_data *driverd)
+{
+    MMOSAL_MUTEX_GET_INF(driverd->ps.lock);
+
+    if (driverd->ps.suspended || mmhal_wlan_busy_is_asserted())
+    {
+        /* Either the normal path still owns the handshake, or the chip is
+         * awake and the failure lies elsewhere: nothing to kick here. */
+        MMOSAL_MUTEX_RELEASE(driverd->ps.lock);
+        return;
+    }
+
+    MMLOG_ERR("Bus marked awake but chip unresponsive; re-asserting WAKE\n");
+
+    /*
+     * A wakeup that timed out waiting for BUSY still left suspended = false,
+     * so every later morse_ps_wakeup() returns early while the wake pin is
+     * still high: re-asserting alone produces no new low->high edge and the
+     * chip never re-triggers. Drop the pin to force a fresh edge, then redo
+     * the handshake inline (mirroring morse_ps_wakeup()).
+     */
+    atomic_store(&driverd->ps.pending_wake, true);
+    mmhal_wlan_wake_deassert();
+    mmosal_task_sleep(MORSE_PS_KICK_WAKE_LOW_MS);
+    mmhal_wlan_wake_assert();
+    morse_ps_wait_after_wake_pin_raise(driverd);
+    morse_trns_set_irq_enabled(driverd, true);
+    driverd->ps.suspended = false;
+    atomic_store(&driverd->ps.pending_wake, false);
+
+    morse_ps_update_timeout(driverd, DEFAULT_BUS_TIMEOUT_MS);
+
     MMOSAL_MUTEX_RELEASE(driverd->ps.lock);
 }
 

@@ -7,6 +7,7 @@
  */
 
  #include "json_config_internal.h" // Includes all necessary headers
+#include "board_hw.h"
  #include "netif_manager.h"
  #include "buffer_mgr.h"
  #include "version.h"              // Centralized version info
@@ -150,7 +151,8 @@
              .end_minute = 0,
              .brightness_level = 50,
              .auto_trigger_enabled = AICAM_TRUE,
-             .light_threshold = 30
+             .light_threshold = 30,
+             .fill_light_while_streaming = AICAM_FALSE
          }
      },
      
@@ -179,6 +181,7 @@
         .halow_rc_bw_mhz = -1,
         .halow_rc_gi = -1,
         .halow_ps_mode = 0,
+        .halow_join_channel = 0,
 
          // PoE/Ethernet default configuration
          .poe = {
@@ -639,6 +642,12 @@
      if (strlen(preserved_info.hardware_version) > 0)
      {
          strncpy(config->device_info.hardware_version, preserved_info.hardware_version,
+                 sizeof(config->device_info.hardware_version) - 1);
+     }
+     else
+     {
+         /* No factory-written hardware version: use the PE9 board strap band */
+         strncpy(config->device_info.hardware_version, board_hw_version_str(),
                  sizeof(config->device_info.hardware_version) - 1);
      }
 
@@ -1141,8 +1150,8 @@
          return result;
      }
 
-     LOG_CORE_INFO("Device service light configuration updated: connected=%u, mode=%u, start_hour=%u, start_minute=%u, end_hour=%u, end_minute=%u, brightness_level=%u, auto_trigger_enabled=%u, light_threshold=%u",
-                   light_config->connected, light_config->mode, light_config->start_hour, light_config->start_minute, light_config->end_hour, light_config->end_minute, light_config->brightness_level, light_config->auto_trigger_enabled, light_config->light_threshold);
+     LOG_CORE_INFO("Device service light configuration updated: connected=%u, mode=%u, start_hour=%u, start_minute=%u, end_hour=%u, end_minute=%u, brightness_level=%u, auto_trigger_enabled=%u, light_threshold=%u, fill_light_while_streaming=%u",
+                   light_config->connected, light_config->mode, light_config->start_hour, light_config->start_minute, light_config->end_hour, light_config->end_minute, light_config->brightness_level, light_config->auto_trigger_enabled, light_config->light_threshold, light_config->fill_light_while_streaming);
      return AICAM_OK;
  }
 
@@ -1575,11 +1584,22 @@ aicam_result_t json_config_save_poe_last_dhcp_ip(const uint8_t *ip_addr)
     }
 
     memcpy(g_json_config_ctx.current_config.network_service.poe.last_dhcp_ip, ip_addr, 4);
-    
+
     // Only save the last IP to NVS for quick recovery
     uint32_t ip_val = ((uint32_t)ip_addr[0] << 24) | ((uint32_t)ip_addr[1] << 16) |
                       ((uint32_t)ip_addr[2] << 8) | ip_addr[3];
     return json_config_nvs_write_uint32(NVS_KEY_POE_LAST_DHCP_IP, ip_val);
+}
+
+aicam_result_t json_config_save_halow_join_channel(uint8_t channel)
+{
+    if (!g_json_config_ctx.initialized)
+    {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+
+    g_json_config_ctx.current_config.network_service.halow_join_channel = channel;
+    return json_config_nvs_write_uint32(NVS_KEY_HALOW_JOIN_CHANNEL, (uint32_t)channel);
 }
 
 const char* poe_status_code_to_string(poe_status_code_t status)
@@ -1637,6 +1657,7 @@ void json_config_capture_upload_defaults(capture_upload_config_t *config)
     config->schedule_node_count  = 0;
     config->keep_sent_hours      = CAPUP_KEEP_SENT_MAX_HOURS;  /* keep forever; delete only on full/count cap */
     config->max_pending_records  = 200;
+    config->flash_max_records    = CAPUP_FLASH_RECORDS_DEFAULT; /* total cap across all states */
     config->upload_comm_type     = 0;  /* COMM_TYPE_NONE = default logic */
 }
 
@@ -1671,6 +1692,14 @@ aicam_result_t json_config_set_capture_upload_config(const capture_upload_config
         norm.keep_sent_hours = CAPUP_KEEP_SENT_MAX_HOURS;
     if (norm.max_pending_records == 0)  norm.max_pending_records = 200;
     if (norm.max_pending_records > 1000) norm.max_pending_records = 1000;
+    /* flash_max_records: 0 or out-of-range = default; floor at min */
+    if (norm.flash_max_records == 0 ||
+        norm.flash_max_records > CAPUP_FLASH_RECORDS_MAX) {
+        norm.flash_max_records = CAPUP_FLASH_RECORDS_DEFAULT;
+    }
+    if (norm.flash_max_records < CAPUP_FLASH_RECORDS_MIN) {
+        norm.flash_max_records = CAPUP_FLASH_RECORDS_MIN;
+    }
 
     /* Cross-field constraints */
     if (norm.storage == CAPTURE_STORE_NONE && norm.mode != CAPTURE_MODE_INSTANT) {

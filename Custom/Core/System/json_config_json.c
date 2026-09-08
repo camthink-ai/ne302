@@ -285,6 +285,7 @@ static void parse_device_service(cJSON *json, device_service_config_t *cfg)
         json_get_uint32(light_cfg, "brightness_level", &cfg->light_config.brightness_level);
         json_get_bool(light_cfg, "auto_trigger_enabled", &cfg->light_config.auto_trigger_enabled);
         json_get_uint32(light_cfg, "light_threshold", &cfg->light_config.light_threshold);
+        json_get_bool(light_cfg, "fill_light_while_streaming", &cfg->light_config.fill_light_while_streaming);
     }
 
     cJSON *isp_cfg = cJSON_GetObjectItem(json, "isp_config");
@@ -882,6 +883,7 @@ static cJSON *serialize_device_service(const device_service_config_t *cfg)
     cJSON_AddNumberToObject(light_cfg, "brightness_level", cfg->light_config.brightness_level);
     cJSON_AddBoolToObject(light_cfg, "auto_trigger_enabled", cfg->light_config.auto_trigger_enabled);
     cJSON_AddNumberToObject(light_cfg, "light_threshold", cfg->light_config.light_threshold);
+    cJSON_AddBoolToObject(light_cfg, "fill_light_while_streaming", cfg->light_config.fill_light_while_streaming);
     cJSON_AddItemToObject(json, "light_config", light_cfg);
 
     cJSON_AddItemToObject(json, "isp_config", serialize_isp_config(&cfg->isp_config));

@@ -80,6 +80,8 @@ static sl_wifi_device_configuration_t device_configuration = {
                    .ext_custom_feature_bit_map = (SL_SI91X_EXT_FEAT_XTAL_CLK | MEMORY_CONFIG
 #if IS_ENABLE_NWP_DEBUG_PRINTS
                     | SL_SI91X_EXT_FEAT_UART_SEL_FOR_DEBUG_PRINTS
+#else
+                    | SL_SI91X_EXT_FEAT_DISABLE_DEBUG_PRINTS
 #endif
 #if defined(SLI_SI917) || defined(SLI_SI915)
                                                   | SL_SI91X_EXT_FEAT_FRONT_END_INTERNAL_SWITCH  
@@ -249,7 +251,13 @@ static sl_wifi_device_configuration_t remote_wake_up_wifi_cfg = {
                                               | SL_SI91X_TCP_IP_FEAT_SSL | SL_SI91X_TCP_IP_FEAT_DNS_CLIENT),
                    .custom_feature_bit_map = (SL_SI91X_CUSTOM_FEAT_EXTENTION_VALID),
                    .ext_custom_feature_bit_map = (SL_SI91X_EXT_FEAT_LOW_POWER_MODE | SL_SI91X_EXT_FEAT_XTAL_CLK
-                                                  | SL_SI91X_EXT_FEAT_DISABLE_DEBUG_PRINTS | MEMORY_CONFIG
+                                                  | MEMORY_CONFIG
+#if IS_ENABLE_NWP_DEBUG_PRINTS
+                                                  | SL_SI91X_EXT_FEAT_UART_SEL_FOR_DEBUG_PRINTS
+#else
+                                                  | SL_SI91X_EXT_FEAT_DISABLE_DEBUG_PRINTS
+
+#endif
 #if defined(SLI_SI917) || defined(SLI_SI915)
                                                   | SL_SI91X_EXT_FEAT_FRONT_END_SWITCH_PINS_ULP_GPIO_4_5_0
 #endif
@@ -640,27 +648,101 @@ static void sl_net_low_level_input(struct netif *netif, uint8_t *b, uint16_t len
 /// @param netif Network interface
 /// @param p Data buffer
 /// @return Error code
-// A wedged host<->NWP pipe fails every raw TX with SL_STATUS_ALLOCATION_FAILED
+// A wedged host<->NWP pipe fails raw TX with SL_STATUS_ALLOCATION_FAILED
 // (0x19): the CE_DATA_POOL never frees, each send waits 1s for a buffer. Unlike
 // a dead NWP this never reaches the C1/C2 handshake timeout, so
 // sli_firmware_error_callback (the only recovery trigger) never fires and the
-// wedge persists until reboot (field log: 14h outage). Escalate to the existing
-// firmware-error recovery after N consecutive 0x19 failures.
-// Single-writer safe: lwIP calls linkoutput only from tcpip_thread.
-#define SL_NET_TX_WEDGE_THRESHOLD 30
-static uint32_t sl_net_tx_wedge_count = 0;
-static void sl_net_tx_failure_escalate(sl_status_t status)
+// wedge persists until reboot (field log: 14h outage).
+// ponytail: the first detector here counted CONSECUTIVE 0x19s and reset on any
+// OK — but a half-wedged pool leaks blocks back one at a time (the HAL thread
+// frees each TX block right after its bus-write attempt, even when the write
+// fails), so interleaved OKs kept the streak under the threshold forever
+// (field log 2026_09_01: 128 x 0x19 over ~5 min, zero recovery). The two
+// detectors below deliberately use different criteria:
+//   - 0x19: DENSITY over a 60s window (OKs ignored — alloc-OK is fake under a
+//     wedge). Covers a backed-up pool whatever the cause: write failures, slow
+//     writes that still succeed, firmware flow control.
+//   - bus-write failures: CONSECUTIVE count with no window, reset by a REAL bus
+//     write success. Covers "chip stopped accepting frames" at any traffic
+//     rate — a density window would starve on idle traffic (ARP/keepalive only,
+//     a few packets per minute). Earliest hard-death signal; fires before the
+//     pool has fully backed up.
+// Single-writer safe: lwIP calls linkoutput only from tcpip_thread; the bus
+// feed arrives only on the SDK hal thread.
+#define SL_NET_TX_WEDGE_WINDOW_MS 60000u ///< 0x19 failure-density window
+#define SL_NET_TX_WEDGE_THRESHOLD 10     ///< 0x19 (pool alloc) failures per window
+static uint32_t sl_net_tx_wedge_count        = 0;
+static uint32_t sl_net_tx_wedge_window_start = 0;
+
+/// Density window in ticks (osKernelGetTickCount domain).
+static uint32_t sl_net_wedge_window_ticks(void)
 {
-    if (status != SL_STATUS_ALLOCATION_FAILED) {
-        sl_net_tx_wedge_count = 0; // any success / other error resets the streak
+    return (uint32_t)((SL_NET_TX_WEDGE_WINDOW_MS * osKernelGetTickFreq()) / 1000u);
+}
+
+/// Restart the density window when it has expired.
+static bool sl_net_wedge_window_expired(uint32_t now, uint32_t window_start)
+{
+    return (uint32_t)(now - window_start) > sl_net_wedge_window_ticks();
+}
+
+/// Fire the firmware-recovery event once a detector has tripped.
+/// window_ms == 0 means a consecutive-failure detector (no time window).
+static void sl_net_tx_wedge_trigger(const char *source, uint32_t fail_count, uint32_t window_ms)
+{
+    if (sl_net_events == NULL) return;
+    if (remote_wakeup_mode != WAKEUP_MODE_NORMAL) {
+        // same guard as sli_firmware_error_callback; log it — a silently
+        // swallowed trigger is an investigation dead end.
+        LOG_DRV_ERROR("%s: %u TX failures%s, recovery suppressed (wakeup mode %d)\r\n",
+                      source, fail_count, window_ms ? " in window" : " in a row",
+                      remote_wakeup_mode);
         return;
     }
-    if (++sl_net_tx_wedge_count < SL_NET_TX_WEDGE_THRESHOLD) return;
-    sl_net_tx_wedge_count = 0;
-    if (remote_wakeup_mode != WAKEUP_MODE_NORMAL) return; // same guard as sli_firmware_error_callback
-    LOG_DRV_ERROR("raw TX pool exhausted %u times in a row, triggering firmware recovery\r\n",
-                  SL_NET_TX_WEDGE_THRESHOLD);
+    LOG_DRV_ERROR("%s: %u TX failures%s, triggering firmware recovery\r\n",
+                  source, fail_count, window_ms ? " in window" : " in a row");
     osEventFlagsSet(sl_net_events, SL_NET_EVENT_FIRMWARE_ERROR);
+}
+
+static void sl_net_tx_failure_escalate(sl_status_t status)
+{
+    uint32_t now = osKernelGetTickCount();
+    if (status != SL_STATUS_ALLOCATION_FAILED) {
+        return; // density signal: successes no longer reset the count
+    }
+    if (sl_net_wedge_window_expired(now, sl_net_tx_wedge_window_start)) {
+        sl_net_tx_wedge_count        = 0;
+        sl_net_tx_wedge_window_start = now;
+    }
+    if (++sl_net_tx_wedge_count < SL_NET_TX_WEDGE_THRESHOLD) return;
+    sl_net_tx_wedge_trigger("raw TX pool", sl_net_tx_wedge_count, SL_NET_TX_WEDGE_WINDOW_MS);
+    sl_net_tx_wedge_count        = 0;
+    sl_net_tx_wedge_window_start = now;
+}
+
+/// @brief Real bus-write result for LWIP/transceiver RAW data packets, fed from
+///        the SDK DATA-packet TX status handler on the HAL thread
+///        (sli_si91x_wifi_command_engine_config.c). A failure here means the
+///        chip never received the frame (wakeup failed / BUS_WRITE_ERROR).
+// ponytail: CONSECUTIVE count, no density window. A window starves on idle
+// traffic — an idle box doing only ARP/keepalive emits a few packets per minute
+// and can never reach N-failures/60s even with a dead chip (the field 0x19 log
+// only reached density because an MQTT reconnect storm fed it samples). Unlike
+// the 0x19 detector, the OK here is REAL (the bus write genuinely succeeded),
+// so a success may legitimately prove the pipe alive and reset the streak.
+// 5 consecutive write failures = the chip stopped accepting frames, at any
+// traffic rate.
+#define SL_NET_BUSFAIL_THRESHOLD 5
+static uint32_t sl_net_busfail_streak = 0;
+void sl_net_notify_bus_tx_failure(sl_status_t status)
+{
+    if (status == SL_STATUS_OK) {
+        sl_net_busfail_streak = 0; // real bus write succeeded — pipe alive
+        return;
+    }
+    if (++sl_net_busfail_streak < SL_NET_BUSFAIL_THRESHOLD) return;
+    sl_net_tx_wedge_trigger("bus write", sl_net_busfail_streak, 0);
+    sl_net_busfail_streak = 0;
 }
 static err_t sl_net_low_level_output(struct netif *netif, struct pbuf *p)
 {
@@ -2030,6 +2112,7 @@ static sl_status_t ap_connected_event_handler(sl_wifi_event_t event, void *data,
         dhcps_add_client_by_mac(mac_address->octet);
     }
 #endif
+    nm_report_ap_client_event(NETIF_AP_CLIENT_CONNECTED, mac_address->octet);
 
     return SL_STATUS_OK;
 }
@@ -2055,6 +2138,7 @@ static sl_status_t ap_disconnected_event_handler(sl_wifi_event_t event, void *da
         dhcps_del_client_by_mac(mac_address->octet);
     }
 #endif
+    nm_report_ap_client_event(NETIF_AP_CLIENT_DISCONNECTED, mac_address->octet);
 
     return SL_STATUS_OK;
 }
@@ -2586,6 +2670,124 @@ int sl_net_wifi_get_region_code_by_index(uint32_t idx, char *buf, size_t len)
     buf[len - 1] = '\0';
     return SL_STATUS_OK;
 }
+
+/****************************************************************************************/
+/********************************** NWP Debug / RAM Dump ********************************/
+/****************************************************************************************/
+/* NCP-mode deep debug helpers. The dump content
+ * streams out of the Si91x NWP UART pin (NOT back over the SPI bus) — sl_si91x_get_ram_log()
+ * only triggers it. Capture with Docklight on the NWP UART at 460800 8N1, HEX format; a
+ * valid capture shows the repeating pattern 00 04 04 04 00 04 04 04. Requires the debug
+ * UART routed at init, i.e. IS_ENABLE_NWP_DEBUG_PRINTS == 1 (SL_SI91X_EXT_FEAT_UART_SEL_FOR_DEBUG_PRINTS).
+ * NCP memory config is BIT(20)|BIT(21) (sl_wifi_device.h) => 672 KB NWP RAM. */
+#define SL_NET_NWP_RAM_SIZE        (672u * 1024u)
+#define SL_NET_NWP_RAM_BASE        0x22000000u /* NWP RAM base in the SiWx917 global memory map */
+#define SL_NET_NWP_THREAD_NUM      4u
+#define SL_NET_NWP_THREAD_PC_BASE  0x22000420u /* PC address         = base + 0x80 * thread_no */
+#define SL_NET_NWP_THREAD_REG_BASE 0x22000440u /* register address   = base + 0x80 * thread_no + 4 * reg_no */
+#define SL_NET_NWP_THREAD_STRIDE   0x80u
+#define SL_NET_NWP_THREAD_REG_NUM  16u         /* R0~R15, R15 = SP */
+
+/* On-device finding (fw 2.16.5): the 0x92 RAM-dump command validates the address as an
+ * OFFSET from NWP RAM base, not a global-map absolute address — get_ram_log(0x22000420, 4)
+ * is NACKed with 0x1003E (invalid command length) while get_ram_log(0x420, 4) succeeds.
+ * Accept both forms: absolute [0x22000000, +672K) is converted, anything else passes raw. */
+static uint32_t sl_net_nwp_ram_offset(uint32_t address)
+{
+    if (address >= SL_NET_NWP_RAM_BASE && address < SL_NET_NWP_RAM_BASE + SL_NET_NWP_RAM_SIZE) {
+        return address - SL_NET_NWP_RAM_BASE;
+    }
+    return address;
+}
+
+#if IS_ENABLE_NWP_DEBUG_PRINTS
+/// @brief Trigger an NWP RAM dump. The content streams out of the NWP UART port
+///        (capture externally); nothing is returned to the host over the bus.
+/// @param address Start address — offset from NWP RAM base (0 = RAM start); absolute
+///        global-map addresses in [0x22000000, +672K) are accepted and converted
+/// @param length  Bytes to dump (0 = full NWP RAM, 672 KB)
+/// @return sl_status_t (SL_STATUS_NOT_INITIALIZED when the NWP is down or hung)
+int sl_net_nwp_ram_dump(uint32_t address, uint32_t length)
+{
+    sl_status_t status;
+
+    if (sl_net_thread_ID == NULL) return SL_STATUS_INVALID_STATE;
+    if (length == 0) length = SL_NET_NWP_RAM_SIZE;
+
+    osMutexAcquire(sl_net_mutex, osWaitForever);
+    status = sl_si91x_get_ram_log(sl_net_nwp_ram_offset(address), length);
+    osMutexRelease(sl_net_mutex);
+    if (status != SL_STATUS_OK) {
+        LOG_DRV_ERROR("NWP RAM dump (addr 0x%08lX, %lu bytes) failed: 0x%lX\r\n",
+                      (unsigned long)address, (unsigned long)length, status);
+        return status;
+    }
+    LOG_DRV_INFO("NWP RAM dump triggered: addr 0x%08lX, %lu bytes\r\n"
+                 "Capture on the NWP UART port (460800 8N1, HEX) with Docklight; a valid dump\r\n"
+                 "shows the repeating pattern 00 04 04 04 00 04 04 04\r\n",
+                 (unsigned long)address, (unsigned long)length);
+    return status;
+}
+
+/// @brief Read the PC of NWP firmware threads 0~3 (optionally R0~R15 too). Each
+///        4-byte little-endian value streams out of the NWP UART port in call
+///        order — the console log only maps which address every chunk belongs to.
+/// @param with_regs 0 = PC only, 1 = PC + all 16 registers (R15 = SP)
+/// @return sl_status_t of the first failed read, SL_STATUS_OK otherwise
+int sl_net_nwp_print_thread_pc(uint8_t with_regs)
+{
+    sl_status_t status = SL_STATUS_OK;
+    uint32_t thread = 0, reg = 0, last_addr = 0;
+
+    if (sl_net_thread_ID == NULL) return SL_STATUS_INVALID_STATE;
+
+    osMutexAcquire(sl_net_mutex, osWaitForever);
+    for (thread = 0; thread < SL_NET_NWP_THREAD_NUM; thread++) {
+        uint32_t pc_addr = SL_NET_NWP_THREAD_PC_BASE + SL_NET_NWP_THREAD_STRIDE * thread;
+        last_addr = pc_addr;
+        status = sl_si91x_get_ram_log(sl_net_nwp_ram_offset(pc_addr), 4);
+        if (status != SL_STATUS_OK) break;
+        LOG_DRV_INFO("NWP thread %lu PC <- [0x%08lX] (4-byte LE on NWP UART)\r\n",
+                     (unsigned long)thread, (unsigned long)pc_addr);
+        if (!with_regs) continue;
+        for (reg = 0; reg < SL_NET_NWP_THREAD_REG_NUM; reg++) {
+            uint32_t reg_addr = SL_NET_NWP_THREAD_REG_BASE + SL_NET_NWP_THREAD_STRIDE * thread + 4u * reg;
+            last_addr = reg_addr;
+            status = sl_si91x_get_ram_log(sl_net_nwp_ram_offset(reg_addr), 4);
+            if (status != SL_STATUS_OK) break;
+            LOG_DRV_INFO("NWP thread %lu R%lu%s <- [0x%08lX] (4-byte LE on NWP UART)\r\n",
+                         (unsigned long)thread, (unsigned long)reg,
+                         (reg == SL_NET_NWP_THREAD_REG_NUM - 1u) ? "(SP)" : "    ",
+                         (unsigned long)reg_addr);
+        }
+        if (status != SL_STATUS_OK) break;
+        osDelay(10); // let the NWP UART stream drain between threads
+    }
+    osMutexRelease(sl_net_mutex);
+    if (status != SL_STATUS_OK) {
+        /* Active NACK (e.g. 0x1003E invalid command length) = firmware alive but rejected
+         * the request; only a timeout would point at a hung NWP. */
+        LOG_DRV_ERROR("NWP RAM-log read failed: thread %lu, [0x%08lX], status 0x%lX\r\n",
+                      (unsigned long)thread, (unsigned long)last_addr, (unsigned long)status);
+    }
+    return status;
+}
+#else
+int sl_net_nwp_ram_dump(uint32_t address, uint32_t length)
+{
+    UNUSED_PARAMETER(address);
+    UNUSED_PARAMETER(length);
+    LOG_DRV_WARN("NWP debug prints disabled: rebuild with IS_ENABLE_NWP_DEBUG_PRINTS 1\r\n");
+    return SL_STATUS_NOT_SUPPORTED;
+}
+
+int sl_net_nwp_print_thread_pc(uint8_t with_regs)
+{
+    UNUSED_PARAMETER(with_regs);
+    LOG_DRV_WARN("NWP debug prints disabled: rebuild with IS_ENABLE_NWP_DEBUG_PRINTS 1\r\n");
+    return SL_STATUS_NOT_SUPPORTED;
+}
+#endif
 
 /// @brief Initialize WiFi network interface
 /// @param None

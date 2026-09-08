@@ -24,7 +24,11 @@
 #define FS_BLK_OFFSET           (FS_FLASH_OFFSET / FS_FLASH_BLK)
 
 #define FS_LFS_CACHE_SIZE       1024
-#define FS_LFS_LOOKAHEAD_SIZE   256
+/* littlefs lookahead bitmap size, in BYTES (1 byte tracks 8 blocks — lfs.h).
+ * Sized to cover the whole volume so lfs_alloc_scan runs at most once per
+ * boot: with a partial window every refill re-traverses the entire tree,
+ * which on a fragmented volume cost 1-7 extra 12 MB scans per capture wake. */
+#define FS_LFS_LOOKAHEAD_SIZE   (LITTLEFS_SIZE / FLASH_BLOCK_SIZE / 8)
  
 #define NVS_FLASH_BLK               FLASH_BLOCK_SIZE
 #define NVS_FLASH_WRITE_BLOCK_SIZE 	4	/** Choose TYPEPROGAM from HAL. */

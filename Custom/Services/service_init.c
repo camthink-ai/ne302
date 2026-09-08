@@ -233,7 +233,7 @@ static const service_module_t g_service_registry[] = {
         .deinit_func = rtmp_service_deinit,
         .get_state_func = rtmp_service_get_state,
         .config = NULL,
-        .auto_start = AICAM_TRUE,             // Auto init, manual stream start
+        .auto_start = AICAM_TRUE,             // Auto init; stream auto-starts from rtmp_enable
         .init_priority = 8,
         .required_in_low_power = AICAM_FALSE,  // RTMP streaming not needed in low power mode
         .depends_on = {"communication_service"},
@@ -676,7 +676,7 @@ aicam_result_t service_start(void)
                 (int)essential_only,
                 skip_network_services ? "YES" : "NO");
     if (skip_network_services) {
-        printf("[BOOT] Skipping network services (capture mode doesn't need upload this wake)\r\n");
+        LOG_SVC_INFO("[BOOT] Skipping network services (capture mode doesn't need upload this wake)\r\n");
     }
 
     /* Wake-capture netif restriction: on the low-power wake-capture path (not

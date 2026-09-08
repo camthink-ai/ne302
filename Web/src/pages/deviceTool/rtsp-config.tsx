@@ -212,25 +212,30 @@ export default function RtspConfig() {
           <Separator />
 
           {/* Enable switch */}
-          <div className="flex justify-between items-center py-2">
-            <Label className="text-sm text-text-primary">
-              {i18n._('sys.device_tool.rtsp.enable')}
-            </Label>
-            <Switch
-              checked={config.enabled}
-              onCheckedChange={async v => {
-                const newConfig = { ...config, enabled: v };
-                setConfig(newConfig);
-                try {
-                  await setRtspConfigReq(newConfig);
-                  await Promise.all([fetchConfig(), fetchStatus()]);
-                  toast.success(i18n._('sys.device_tool.rtsp.config_saved'));
-                } catch (error) {
-                  setConfig({ ...config, enabled: !v });
-                  console.error('toggleRtspEnable', error);
-                }
-              }}
-            />
+          <div className="flex flex-col gap-1 py-2">
+            <div className="flex justify-between items-center">
+              <Label className="text-sm text-text-primary">
+                {i18n._('sys.device_tool.rtsp.enable')}
+              </Label>
+              <Switch
+                checked={config.enabled}
+                onCheckedChange={async v => {
+                  const newConfig = { ...config, enabled: v };
+                  setConfig(newConfig);
+                  try {
+                    await setRtspConfigReq(newConfig);
+                    await Promise.all([fetchConfig(), fetchStatus()]);
+                    toast.success(i18n._('sys.device_tool.rtsp.config_saved'));
+                  } catch (error) {
+                    setConfig({ ...config, enabled: !v });
+                    console.error('toggleRtspEnable', error);
+                  }
+                }}
+              />
+            </div>
+            <p className="text-xs text-text-secondary">
+              {i18n._('sys.device_tool.stream_autostart_note')}
+            </p>
           </div>
           <Separator />
 

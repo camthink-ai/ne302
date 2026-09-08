@@ -14,13 +14,13 @@ static storage_t g_storage = {0};
 static uint8_t old_data[4096] ALIGN_32 = {0};
 /* Static buffers for littlefs caches/lookahead — provided via lfs_config so
  * littlefs doesn't allocate on the stack (which risks overflow with larger
- * cache sizes). cache_size=1024 → 1KB read+prog caches; lookahead_size=256
- * → 256-block free-block bitmap (32 bytes). The old config used cache/lookahead
- * =16 with NULL buffers, causing a full-FS traverse (lfs_fs_traverse) every 16
- * block allocations → seconds of hang with thousands of files. */
+ * cache sizes). cache_size=1024 → 1KB read+prog caches. FS_LFS_LOOKAHEAD_SIZE
+ * is in BYTES of the bitmap (1 byte = 8 blocks, see lfs.h): the old "/8" here
+ * sized the array for a 256-block window while lfs memset/bitmap-indexed the
+ * full 256 bytes, stomping 224 bytes past the array on every alloc scan. */
 static uint8_t s_lfs_read_buffer[FS_LFS_CACHE_SIZE] ALIGN_32;
 static uint8_t s_lfs_prog_buffer[FS_LFS_CACHE_SIZE] ALIGN_32;
-static uint8_t s_lfs_lookahead_buffer[FS_LFS_LOOKAHEAD_SIZE / 8];
+static uint8_t s_lfs_lookahead_buffer[FS_LFS_LOOKAHEAD_SIZE];
 static uint8_t storage_tread_stack[1024 * 8] ALIGN_32;
 const osThreadAttr_t storageTask_attributes = {
     .name = "storageTask",

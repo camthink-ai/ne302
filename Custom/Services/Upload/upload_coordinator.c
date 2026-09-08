@@ -78,7 +78,12 @@
 #define FLUSH_MAX_BUDGET_MS    30000u  /* hard cap on one flush pass           */
 #define FLUSH_ACK_TIMEOUT_MS   3000u   /* per-ack wait in the sliding window   */
 #define FLUSH_WINDOW_MAX       16u     /* cap on in-flight parallel publishes  */
-#define CLEANUP_MAX_MS         10000u   /* bound cleanup_for_space (full-FS removes are slow) */
+/* Bound cleanup_for_space / cleanup_for_count. Full-FS littlefs removes are
+ * slow (each may trigger compaction for seconds), so this deadline decides
+ * how many records one pass can delete. 15 s max: the deadline only binds on
+ * a wedged/critically-full FS (healthy cleanups hit `enough` and return much
+ * earlier), and the wake path must not stretch beyond this. */
+#define CLEANUP_MAX_MS         15000u
 
 #define CAPTURES_ROOT           "/captures"
 #define CAPTURES_DIR_DATA       CAPTURES_ROOT "/data"
@@ -105,11 +110,31 @@ typedef struct {
 #pragma pack(pop)
 #define IDX_ENTRY_SIZE      (sizeof(cap_idx_entry_t))
 #define IDX_STATE_DELETED   0xFFu
+
+/* Day-.idx compaction triggers. State transitions APPEND and deletes append a
+ * tombstone, so a day file only ever grows. Once raw entries >= 4x the live
+ * count (and at least 64 raw), rewrite the file with only the live entries -
+ * or remove it entirely when nothing is live. Later loads of that day then
+ * read n_live*36B instead of the whole history (the 1-capture-per-minute era
+ * left ~4k entries/day: 240 ms per count sweep with 32 live records). */
+#define IDX_COMPACT_MIN_RAW     64u
+#define IDX_COMPACT_FACTOR      4u
 /* Sanity: catch any toolchain packing surprise at compile time. */
 _Static_assert(IDX_ENTRY_SIZE == 36, "cap_idx_entry_t must be 36 bytes");
 
 /* Cleanup watermark (bytes) - keep this much head-room when wrapping. */
 #define CLEANUP_HEADROOM_BYTES  (2 * 1024u * 1024u)
+
+/* Orphan sweep (flush-worker janitor, see orphan_sweep_maybe): reclaim data
+ * files no live manifest entry points at. Bounded by design for the low-power
+ * wake path - ONE data/<date>/<hour> directory per pass, hard per-dir
+ * deadline, and rate-limited; a healthy pass costs one small readdir plus one
+ * day-manifest load (tens of ms). Faster cadence while storage_full so an
+ * incident's debris is reclaimed quickly. */
+#define ORPHAN_SWEEP_MAX_MS           2000u                    /* hard per-dir bound */
+#define ORPHAN_SWEEP_MIN_AGE_SEC      300u   /* skip ids a persist may still be writing */
+#define ORPHAN_SWEEP_INTERVAL_MS      (10u * 60u * 1000u)       /* healthy cadence */
+#define ORPHAN_SWEEP_INTERVAL_FULL_MS (60u * 1000u)             /* while storage_full */
 
 /* Persisted "storage full" flag (NVS_USER). Set when a capture write failed
  * for lack of space; cleared once a write succeeds. Persists across wakes so
@@ -148,6 +173,11 @@ typedef struct {
     aicam_bool_t       running;
     service_state_t    state;
     osMutexId_t        mutex;            /* protects do_flush_pass re-entrancy */
+    osMutexId_t        idx_mutex;        /* serializes .idx appends against load-time
+                                          * compaction rewrites (and other appends).
+                                          * Lock order: g_up.mutex BEFORE idx_mutex -
+                                          * a flush holds g_up.mutex across move_record
+                                          * appends - never the reverse. */
     osMessageQueueId_t queue;
     osThreadId_t       task_handle;
     volatile aicam_bool_t flush_active;  /* true while do_flush_pass is running - lets the
@@ -352,8 +382,7 @@ static aicam_result_t ensure_dir_exists(FS_Type_t fs, const char *path)
 }
 
 /* Ensure the meta/ and data/ <date>/<hour> subdirs exist for a record (derived
- * from id). Replaces the old per-state ensure_date_dir - state no longer
- * affects the path. */
+ * from id). */
 static aicam_result_t ensure_record_dirs(FS_Type_t fs, const char *id)
 {
     char date[16], hour[8];
@@ -421,13 +450,23 @@ static aicam_result_t manifest_append(FS_Type_t fs, const char *id,
     e.timestamp = ts;
     e.size = size;
 
+    /* Serialize against load-time compaction (and other appends): without
+     * this, a compact rewrite's tmp+rename could drop an append that landed
+     * between the loader's read and its rewrite. 1s is far beyond an append's
+     * latency - on timeout treat as a failed append like a fopen failure. */
+    if (g_up.idx_mutex && osMutexAcquire(g_up.idx_mutex, 1000) != osOK) {
+        LOG_SVC_ERROR("manifest_append: idx mutex timeout path=%s", mpath);
+        return AICAM_ERROR;
+    }
     void *fd = disk_file_fopen(fs, mpath, "a");
     if (!fd) {
         LOG_SVC_ERROR("manifest_append: fopen failed path=%s", mpath);
+        if (g_up.idx_mutex) osMutexRelease(g_up.idx_mutex);
         return AICAM_ERROR;
     }
     int wn = disk_file_fwrite(fs, fd, &e, IDX_ENTRY_SIZE);
     disk_file_fclose(fs, fd);
+    if (g_up.idx_mutex) osMutexRelease(g_up.idx_mutex);
     return (wn == (int)IDX_ENTRY_SIZE) ? AICAM_OK : AICAM_ERROR;
 }
 
@@ -720,6 +759,22 @@ static aicam_result_t write_meta_json(FS_Type_t fs, const char *path, cJSON *jso
     return r;
 }
 
+/* Best-effort removal of the files persist_record may have created so far.
+ * A half-persisted record never gets a manifest create entry, and count/list/
+ * cleanup are all manifest-driven - so without this, its files leak space
+ * forever as invisible orphans (2026-08-31 overnight wedge: ~40 partial
+ * cap_*_p.jpg files, each up to 160 KB). Missing files are fine - remove of
+ * a non-existent path just fails and is void-cast. */
+static void remove_partial_record_files(FS_Type_t fs, const char *pri_path,
+                                        const char *inf_path, const char *ai_path,
+                                        const char *meta_path)
+{
+    (void)disk_file_remove(fs, pri_path);
+    (void)disk_file_remove(fs, inf_path);
+    (void)disk_file_remove(fs, ai_path);
+    (void)disk_file_remove(fs, meta_path);
+}
+
 /* ==================== Persist a record ==================== */
 
 static aicam_result_t persist_record(FS_Type_t fs, const char *id,
@@ -732,6 +787,10 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
                                       record_state_t state)
 {
     if (fs == FS_MAX) return AICAM_ERROR_INVALID_PARAM;
+#if UPLOAD_DEBUG
+    uint64_t t_p0 = rtc_get_uptime_ms();
+    uint64_t t_pe = t_p0;
+#endif
     if (ensure_dirs(fs) != AICAM_OK) return AICAM_ERROR;
 
     /* Ensure the per-date/per-hour subdirectories exist for this record's
@@ -742,6 +801,14 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
     if (ensure_record_dirs(fs, id) != AICAM_OK) {
         return AICAM_ERROR;
     }
+#if UPLOAD_DEBUG
+    {
+        uint64_t now = rtc_get_uptime_ms();
+        UPLOAD_LOG("persist[%s] dirs=%lu ms (ensure_dirs+record_dirs)\r\n",
+                   id, (unsigned long)(now - t_pe));
+        t_pe = now;
+    }
+#endif
 
     char pri_path[128], inf_path[128], ai_path[128], meta_path[128];
     path_for_data(pri_path, sizeof(pri_path), id, 'p');
@@ -750,20 +817,42 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
     path_for_meta(meta_path, sizeof(meta_path), id);
 
     aicam_result_t r = write_file(fs, pri_path, jpeg, jpeg_size);
+#if UPLOAD_DEBUG
+    {
+        uint64_t now = rtc_get_uptime_ms();
+        UPLOAD_LOG("persist[%s] write pri %luB=%lu ms\r\n",
+                   id, (unsigned long)jpeg_size, (unsigned long)(now - t_pe));
+        t_pe = now;
+    }
+#endif
     if (r != AICAM_OK) {
         LOG_SVC_ERROR("upload: write primary image failed: %s", pri_path);
+        /* Drop the partial file now: it has no manifest entry yet (appended
+         * only on full success below), so no later cleanup can see it to
+         * reclaim its space. */
+        (void)disk_file_remove(fs, pri_path);
         return r;
     }
 
     if (inf && inf_size > 0) {
         if (write_file(fs, inf_path, inf, inf_size) != AICAM_OK) {
             LOG_SVC_WARN("upload: write inference image failed: %s", inf_path);
+            (void)disk_file_remove(fs, inf_path);
             inf = NULL;
         }
+#if UPLOAD_DEBUG
+        {
+            uint64_t now = rtc_get_uptime_ms();
+            UPLOAD_LOG("persist[%s] write inf %luB=%lu ms (skip if absent)\r\n",
+                       id, (unsigned long)inf_size, (unsigned long)(now - t_pe));
+            t_pe = now;
+        }
+#endif
     }
     if (ai_json && ai_json[0]) {
         if (write_file(fs, ai_path, (const uint8_t *)ai_json, (uint32_t)strlen(ai_json)) != AICAM_OK) {
             LOG_SVC_WARN("upload: write ai_result failed: %s", ai_path);
+            (void)disk_file_remove(fs, ai_path);
             ai_json = NULL;
         }
     }
@@ -778,23 +867,53 @@ static aicam_result_t persist_record(FS_Type_t fs, const char *id,
                                        ai_json ? ai_name : "",
                                        g_up.cfg.upload_protocol, state);
     if (!j) return AICAM_ERROR_NO_MEMORY;
+#if UPLOAD_DEBUG
+    {
+        uint64_t now = rtc_get_uptime_ms();
+        UPLOAD_LOG("persist[%s] write ai json=%lu ms\r\n", id, (unsigned long)(now - t_pe));
+        t_pe = now;
+    }
+#endif
     aicam_result_t rr = write_meta_json(fs, meta_path, j);
     cJSON_Delete(j);
-    if (rr != AICAM_OK) return rr;
+    if (rr != AICAM_OK) {
+        /* The meta .json is the record's root - without it the already-written
+         * data files are orphans nothing will ever reclaim. */
+        remove_partial_record_files(fs, pri_path, inf_path, ai_path, meta_path);
+        return rr;
+    }
 
     /* Append the create entry to the day's manifest so count/list can find
      * this record without opendir-ing thousands of files. */
     uint32_t ts = (uint32_t)(meta->timestamp ? meta->timestamp : now_unix());
-    (void)manifest_append(fs, id, (uint8_t)state, ts, jpeg_size);
+    if (manifest_append(fs, id, (uint8_t)state, ts, jpeg_size) != AICAM_OK) {
+        /* Files exist but the index entry does not: the record is invisible
+         * to count/list/flush forever AND the flash record count stays below
+         * its cap, disarming count-based wrap cleanup while the
+         * bytes stay consumed - this is exactly how the 2026-08-31 overnight
+         * wedge started. Remove the files and fail so the caller's reactive
+         * cleanup_for_space + retry path runs. */
+        LOG_SVC_ERROR("upload: manifest append failed id=%s - dropping partial record", id);
+        remove_partial_record_files(fs, pri_path, inf_path, ai_path, meta_path);
+        return AICAM_ERROR;
+    }
     g_count_cache_dirty = true;
+#if UPLOAD_DEBUG
+    {
+        uint64_t now = rtc_get_uptime_ms();
+        UPLOAD_LOG("persist[%s] manifest=%lu ms total=%lu ms\r\n",
+                   id,
+                   (unsigned long)(now - t_pe),
+                   (unsigned long)(now - t_p0));
+    }
+#endif
     return AICAM_OK;
 }
 
 static aicam_result_t move_record(FS_Type_t fs, const char *id,
                                    record_state_t from, record_state_t to)
 {
-    /* State change is now in-place: the metadata .json never moves between
-     * directories. We rewrite its `state` field and append a manifest entry
+    /* Rewrite the .json's `state` field in place and append a manifest entry
      * with the new state. `from` is unused (kept for call-site stability). */
     (void)from;
     char meta_path[128];
@@ -1003,6 +1122,49 @@ static int idx_entry_cmp_ts(const void *a, const void *b)
  * array (caller frees via buffer_free) of live entries; *out_n = count.
  * NULL on failure/empty. Reading one small sequential file per day is what
  * makes count/list O(days) instead of O(records) opendir. */
+/* Best-effort compaction of one day .idx (called from manifest_load_day, which
+ * already holds the compacted live array in RAM). The load read the file
+ * OUTSIDE the idx mutex, so an append may have landed since - re-stat under
+ * the mutex and bail if the size moved (the next load retries). tmp+rename is
+ * atomic, same idiom as the meta rewrites. Any failure just leaves the
+ * original file in place. */
+static void maybe_compact_day_idx(FS_Type_t fs, const char *mpath,
+                                  const cap_idx_entry_t *live, int n_live,
+                                  long size_when_read, int n_raw_read)
+{
+    if (n_raw_read < (int)IDX_COMPACT_MIN_RAW) return;
+    if (n_live > 0 && (uint32_t)n_raw_read < (uint32_t)n_live * IDX_COMPACT_FACTOR) return;
+    if (!g_up.idx_mutex) return;
+    if (osMutexAcquire(g_up.idx_mutex, 1000) != osOK) return;
+
+    struct stat st = {0};
+    if (disk_file_stat(fs, mpath, &st) == 0 && (long)st.st_size == size_when_read) {
+        if (n_live == 0) {
+            (void)disk_file_remove(fs, mpath);
+            LOG_SVC_INFO("upload: idx compact %s removed (%d dead entries)",
+                         mpath, n_raw_read);
+        } else {
+            char tmp[104];
+            snprintf(tmp, sizeof(tmp), "%s.tmp", mpath);
+            void *fd = disk_file_fopen(fs, tmp, "w");
+            aicam_bool_t ok = AICAM_FALSE;
+            if (fd) {
+                size_t bytes = (size_t)n_live * IDX_ENTRY_SIZE;
+                int wn = disk_file_fwrite(fs, fd, live, bytes);
+                disk_file_fclose(fs, fd);
+                ok = (wn == (int)bytes) ? AICAM_TRUE : AICAM_FALSE;
+            }
+            if (ok && disk_file_rename(fs, tmp, mpath) == 0) {
+                LOG_SVC_INFO("upload: idx compact %s %d -> %d entries",
+                             mpath, n_raw_read, n_live);
+            } else {
+                (void)disk_file_remove(fs, tmp);   /* keep the original */
+            }
+        }
+    }
+    osMutexRelease(g_up.idx_mutex);
+}
+
 static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *out_n)
 {
     if (out_n) *out_n = 0;
@@ -1092,6 +1254,14 @@ static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *o
         n_live++;
     }
     qsort(uniq, (size_t)n_live, IDX_ENTRY_SIZE, idx_entry_cmp_ts);
+
+    /* Compact the on-disk ledger when dead weight dominates. Only when the
+     * read covered the whole file (no IDX_MAX_ENTRIES truncation, no short
+     * fread) - otherwise the rewrite would drop entries we never saw. */
+    if (n_read == (int)(st.st_size / IDX_ENTRY_SIZE)) {
+        maybe_compact_day_idx(fs, mpath, uniq, n_live,
+                              (long)st.st_size, n_read);
+    }
     if (out_n) *out_n = n_live;
     return uniq;
 }
@@ -1210,8 +1380,15 @@ static uint32_t count_state(FS_Type_t fs, record_state_t state)
 {
     if (fs == FS_MAX) return 0;
     uint64_t tc = rtc_get_uptime_ms();
-    uint32_t n = (uint32_t)iterate_records(fs, state, 0, 0, 0, UINT64_MAX,
-                                           AICAM_FALSE, NULL, NULL);
+    /* Shared-cache path (same pattern as count_all_records / get_flush_budget_ms):
+     * one sweep when cold, then every caller reads the 4-state RAM cache. This
+     * used to be a dedicated full sweep on EVERY call, so one wake paid 3-5
+     * manifest traversals for the same numbers. */
+    if (g_count_cache_dirty) {
+        manifest_counts_all(fs, g_count_cache);
+        g_count_cache_dirty = false;
+    }
+    uint32_t n = g_count_cache[state];
     uint64_t dt = rtc_get_uptime_ms() - tc;
     if (dt > 5) {
         UPLOAD_LOG("count_state(%d)=%u time=%lu ms\r\n",
@@ -1221,7 +1398,7 @@ static uint32_t count_state(FS_Type_t fs, record_state_t state)
 }
 
 /* Total records across all states from the RAM cache if fresh, otherwise a
- * single manifest sweep. Used by the FLASH_MAX_RECORDS cap check before each
+ * single manifest sweep. Used by the flash record-cap check before each
  * capture write - this is O(days) manifest reads, not O(records) opendir. */
 static uint32_t count_all_records(FS_Type_t fs)
 {
@@ -1239,6 +1416,17 @@ static uint32_t count_all_records(FS_Type_t fs)
          + g_count_cache[RECORD_STATE_SENT]
          + g_count_cache[RECORD_STATE_FAILED]
          + g_count_cache[RECORD_STATE_LOCAL];
+}
+
+/* Effective flash record cap: user-configurable (web), total across all
+ * states, clamped here so a stale/garbage NVS value can neither disarm the
+ * cap nor blow past the compile-time ceiling. */
+static uint32_t flash_record_cap(void)
+{
+    uint32_t cap = g_up.cfg.flash_max_records;
+    if (cap < CAPUP_FLASH_RECORDS_MIN) cap = CAPUP_FLASH_RECORDS_MIN;
+    if (cap > CAPUP_FLASH_RECORDS_MAX) cap = CAPUP_FLASH_RECORDS_MAX;
+    return cap;
 }
 
 /* Fill counts for all 4 states in a single manifest sweep (get_status). */
@@ -1496,7 +1684,7 @@ static aicam_result_t cleanup_for_space(FS_Type_t fs, uint64_t need_bytes)
     return AICAM_OK;
 }
 
-/* Count-based cleanup for the FLASH_MAX_RECORDS cap. Same state priority as
+/* Count-based cleanup for the flash record cap. Same state priority as
  * cleanup_for_space (sent→local→failed→pending), oldest first. Deletes
  * `excess` records (at minimum) to bring the total below the cap. Each delete
  * is bounded by the per-record cleanup_deadline; the total pass is bounded by
@@ -1598,6 +1786,160 @@ static aicam_result_t purge_old_sent(FS_Type_t fs)
     return AICAM_OK;
 }
 
+/* ==================== Orphan sweep (manifest-less files) ==================== */
+
+/* Cursor for the incremental orphan sweep: walks data/<date>/<hour> dirs
+ * newest-date-first, hour 23→0, wrapping back to the newest date. RAM-only
+ * (a wake is a cold boot, so it restarts from the newest date each wake -
+ * fine: incident debris is always recent). */
+typedef struct {
+    char         date[12];
+    int          hour;
+    aicam_bool_t valid;
+} orphan_cursor_t;
+static orphan_cursor_t g_orphan_cursor;
+static uint64_t        g_orphan_sweep_last_ms;
+
+/* Parse "cap_<ts>_<seq>" out of a data file name and validate the suffix is
+ * one of _p.jpg / _i.jpg / _a.json. Returns the id length and fills id[]
+ * (NUL-terminated), or 0 if the name is not a record data file. */
+static size_t orphan_parse_file_name(const char *name, char *id, size_t id_cap)
+{
+    const char *us = strrchr(name, '_');
+    if (!us || us == name) return 0;
+    char sfx = us[1];
+    if (sfx == 'a') { if (strcmp(us + 2, ".json") != 0) return 0; }
+    else if (sfx == 'p' || sfx == 'i') {
+        if (strcmp(us + 2, ".jpg") != 0) return 0;
+    } else return 0;
+
+    size_t idlen = (size_t)(us - name);
+    /* "cap_" + ≥1 digit + '_' + ≥1 digit */
+    if (idlen < 7 || idlen + 1 > id_cap) return 0;
+    if (strncmp(name, "cap_", 4) != 0) return 0;
+    int underscores = 0;
+    for (size_t i = 4; i < idlen; i++) {
+        if (name[i] == '_') { underscores++; continue; }
+        if (name[i] < '0' || name[i] > '9') return 0;
+    }
+    if (underscores != 1) return 0;
+    memcpy(id, name, idlen);
+    id[idlen] = 0;
+    return idlen;
+}
+
+/* Sweep ONE data/<date>/<hour> dir, removing files whose id has no live entry
+ * in that date's manifest. Returns content bytes reclaimed. Refuses to touch
+ * a date whose manifest can't be loaded (missing/corrupt) - without a valid
+ * manifest, orphanhood can't be proven and a live record could be destroyed.
+ * Races: records land on disk before their manifest entry (persist_record
+ * appends last), so ids younger than ORPHAN_SWEEP_MIN_AGE_SEC are skipped -
+ * that also covers an in-flight persist in another thread. */
+static uint64_t orphan_sweep_pass(FS_Type_t fs)
+{
+    uint64_t freed = 0;
+    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
+    if (!dates) return 0;
+    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
+                                      NULL, NULL, AICAM_TRUE);
+    if (ndates <= 0) { buffer_free(dates); return 0; }
+
+    if (!g_orphan_cursor.valid) {
+        snprintf(g_orphan_cursor.date, sizeof(g_orphan_cursor.date), "%s", dates[0]);
+        g_orphan_cursor.hour = 23;
+        g_orphan_cursor.valid = AICAM_TRUE;
+    }
+    int at = -1;
+    for (int i = 0; i < ndates; i++) {
+        if (strcmp(dates[i], g_orphan_cursor.date) == 0) { at = i; break; }
+    }
+    if (at < 0) {   /* date's .idx vanished (corrupt-drop) - re-anchor newest */
+        snprintf(g_orphan_cursor.date, sizeof(g_orphan_cursor.date), "%s", dates[0]);
+        g_orphan_cursor.hour = 23;
+        at = 0;
+    }
+
+    int nent = 0;
+    cap_idx_entry_t *ent = manifest_load_day(fs, g_orphan_cursor.date, &nent);
+    if (ent) {
+        char dir[96];
+        snprintf(dir, sizeof(dir), "%s/%s/%02d", CAPTURES_DIR_DATA,
+                 g_orphan_cursor.date, g_orphan_cursor.hour);
+        void *dd = disk_file_opendir(fs, dir);
+        if (dd) {
+            uint64_t deadline = rtc_get_uptime_ms() + ORPHAN_SWEEP_MAX_MS;
+            uint64_t now = now_unix();
+            int removed = 0;
+            dir_entry_t e;
+            while (disk_file_readdir(fs, dd, (char *)&e) > 0) {
+                if (rtc_get_uptime_ms() >= deadline) break;
+                const char *name = e.name;
+                if (name[0] == '.') continue;
+                /* Record data names are ≤ 27 chars ("cap_<10>_<5>_a.json");
+                 * the explicit bound also lets gcc prove the snprintf below
+                 * cannot truncate (dir_entry names can be up to 255). */
+                size_t nlen = strlen(name);
+                if (nlen > 32) continue;
+                char id[24];
+                if (orphan_parse_file_name(name, id, sizeof(id)) == 0) continue;
+
+                /* Age guard: a concurrent persist_record writes files before
+                 * appending the manifest entry - never reap fresh ids. */
+                unsigned long ts = 0;
+                if (sscanf(name, "cap_%lu_", &ts) == 1 && ts != 0 &&
+                    now < (uint64_t)ts + ORPHAN_SWEEP_MIN_AGE_SEC) continue;
+
+                int live = 0;
+                for (int k = 0; k < nent; k++) {
+                    if (strncmp(ent[k].id, id, sizeof(ent[k].id)) == 0) {
+                        live = 1; break;
+                    }
+                }
+                if (live) continue;
+
+                char path[352];
+                snprintf(path, sizeof(path), "%s/%s", dir, name);
+                struct stat st = {0};
+                if (disk_file_stat(fs, path, &st) != 0) continue;
+                if (disk_file_remove(fs, path) != 0) continue;
+                freed += (uint64_t)st.st_size;
+                removed++;
+            }
+            disk_file_closedir(fs, dd);
+            if (removed > 0) {
+                LOG_SVC_INFO("upload: orphan sweep %s/%02d removed %d files (%lu bytes)",
+                             g_orphan_cursor.date, g_orphan_cursor.hour,
+                             removed, (unsigned long)freed);
+            }
+        }
+        buffer_free(ent);
+    }
+
+    /* Advance regardless of outcome: hour 23→0, then the next older date,
+     * wrapping to the newest so the walk is continuous. */
+    if (--g_orphan_cursor.hour < 0) {
+        int next = (at + 1) % ndates;
+        snprintf(g_orphan_cursor.date, sizeof(g_orphan_cursor.date), "%s", dates[next]);
+        g_orphan_cursor.hour = 23;
+    }
+    buffer_free(dates);
+    return freed;
+}
+
+/* Rate-limited entry point, called from the flush worker only (never the
+ * capture hot path). One bounded dir per call; 60 s cadence while
+ * storage_full so incident debris is reclaimed fast, 10 min otherwise. */
+static void orphan_sweep_maybe(FS_Type_t fs)
+{
+    uint32_t interval = g_up.storage_full ? ORPHAN_SWEEP_INTERVAL_FULL_MS
+                                          : ORPHAN_SWEEP_INTERVAL_MS;
+    uint64_t now = rtc_get_uptime_ms();
+    if (g_orphan_sweep_last_ms != 0 &&
+        now - g_orphan_sweep_last_ms < interval) return;
+    g_orphan_sweep_last_ms = now;
+    (void)orphan_sweep_pass(fs);
+}
+
 /* ==================== Upload one record ==================== */
 
 /* Shared loader: parse metadata + load JPEG + reconstruct mqtt_image_metadata_t.
@@ -1692,7 +2034,10 @@ static void record_mark_failed(FS_Type_t fs, const char *id, const char *err)
     }
     cJSON_Delete(meta);
 
-    if (g_up.cfg.retry_max_attempts > 0 && retry >= g_up.cfg.retry_max_attempts) {
+    /* retry_enable off = no automatic retries: first failure promotes straight
+     * to FAILED (web-manual retry only). On, retry_max_attempts 0 = unlimited. */
+    if (!g_up.cfg.retry_enable ||
+        (g_up.cfg.retry_max_attempts > 0 && retry >= g_up.cfg.retry_max_attempts)) {
         (void)move_record(fs, id, RECORD_STATE_PENDING, RECORD_STATE_FAILED);
     }
 }
@@ -2111,8 +2456,10 @@ static aicam_result_t upload_one_record(FS_Type_t fs, const char *id,
     }
     cJSON_Delete(meta);
 
-    /* 0 = unlimited retries - never promote to failed/ */
-    if (g_up.cfg.retry_max_attempts > 0 && retry >= g_up.cfg.retry_max_attempts) {
+    /* retry_enable off = no automatic retries: promote straight to FAILED
+     * (web-manual retry only). On, 0 = unlimited retries - never promote. */
+    if (!g_up.cfg.retry_enable ||
+        (g_up.cfg.retry_max_attempts > 0 && retry >= g_up.cfg.retry_max_attempts)) {
         return move_record(fs, id, RECORD_STATE_PENDING, RECORD_STATE_FAILED);
     }
     return result;
@@ -2206,6 +2553,12 @@ static bool record_self_heal_if_missing(FS_Type_t fs, const char *id)
 static void do_flush_pass(void)
 {
     if (g_up.active_fs == FS_MAX) return;
+
+    /* Offline janitor first (before the channel check - the uplink being down
+     * is exactly when records pile up and orphans matter). Bounded to one
+     * small dir per pass; see orphan_sweep_maybe. */
+    orphan_sweep_maybe(g_up.active_fs);
+
     if (!upload_channel_ready()) {
         UPLOAD_LOG("flush skipped, channel not ready\r\n");
         return;
@@ -2451,10 +2804,17 @@ aicam_result_t upload_coordinator_init(void *config)
         LOG_SVC_ERROR("upload_coordinator init: osMutexNew failed");
         return AICAM_ERROR;
     }
+    g_up.idx_mutex = osMutexNew(NULL);
+    if (!g_up.idx_mutex) {
+        LOG_SVC_ERROR("upload_coordinator init: osMutexNew(idx) failed");
+        osMutexDelete(g_up.mutex); g_up.mutex = NULL;
+        return AICAM_ERROR;
+    }
 
     g_up.queue = osMessageQueueNew(UPLOAD_QUEUE_DEPTH, sizeof(ULONG), &upload_queue_attr);
     if (!g_up.queue) {
         LOG_SVC_ERROR("upload_coordinator init: osMessageQueueNew failed");
+        osMutexDelete(g_up.idx_mutex); g_up.idx_mutex = NULL;
         osMutexDelete(g_up.mutex); g_up.mutex = NULL;
         return AICAM_ERROR;
     }
@@ -2485,6 +2845,42 @@ aicam_result_t upload_coordinator_init(void *config)
            g_up.cfg.mode, g_up.cfg.storage, g_up.active_fs,
            (unsigned long)(t1-t0), (unsigned long)(t2-t1), (unsigned long)(t3-t2),
            (unsigned long)(t4-t3), (unsigned long)(t4-t0));
+#if UPLOAD_DEBUG
+    /* One-shot diagnosis: is the littlefs tree genuinely fat (used bytes high)
+     * or is the first-alloc traverse amplifying reads over a small tree?
+     * lfs_fs_size is itself a full traverse (~seconds) - debug builds only.
+     * Listing runs first as a mount barrier: disk_file ops block on the
+     * async-mount semaphore, while storage_get_disk_info returns zeroed info
+     * (without error) if the mounted flag is not up yet. */
+    if (g_up.active_fs == FS_FLASH) {
+        void *dd = disk_file_opendir(FS_FLASH, "/");
+        if (dd) {
+            dir_entry_t e;
+            while (disk_file_readdir(FS_FLASH, dd, (char *)&e) > 0) {
+                if (e.name[0] == '.') continue;
+                char p[264];
+                snprintf(p, sizeof(p), "/%s", e.name);
+                struct stat st = {0};
+                if (disk_file_stat(FS_FLASH, p, &st) == 0) {
+                    if (S_ISDIR(st.st_mode)) {
+                        UPLOAD_LOG("root: %s (dir)\r\n", e.name);
+                    } else {
+                        UPLOAD_LOG("root: %s %lu B\r\n", e.name, (unsigned long)st.st_size);
+                    }
+                } else {
+                    UPLOAD_LOG("root: %s ?\r\n", e.name);
+                }
+            }
+            disk_file_closedir(FS_FLASH, dd);
+        }
+        storage_disk_info_t di;
+        int dret = storage_get_disk_info(&di);
+        UPLOAD_LOG("volume: ret=%d mounted=%d total=%lu KB free=%lu KB used=%lu KB\r\n",
+                   dret, (int)storage_is_lfs_mounted(),
+                   (unsigned long)di.total_KBytes, (unsigned long)di.free_KBytes,
+                   (unsigned long)(di.total_KBytes - di.free_KBytes));
+    }
+#endif
     return AICAM_OK;
 }
 
@@ -2538,6 +2934,7 @@ aicam_result_t upload_coordinator_deinit(void)
 {
     if (g_up.running) upload_coordinator_stop();
     if (g_up.queue) { osMessageQueueDelete(g_up.queue); g_up.queue = NULL; }
+    if (g_up.idx_mutex) { osMutexDelete(g_up.idx_mutex); g_up.idx_mutex = NULL; }
     if (g_up.mutex) { osMutexDelete(g_up.mutex); g_up.mutex = NULL; }
     g_up.initialized = AICAM_FALSE;
     g_up.state = SERVICE_STATE_UNINITIALIZED;
@@ -2575,15 +2972,15 @@ aicam_bool_t upload_coordinator_needs_network(void)
         return AICAM_TRUE;
     }
 
-    /* Counting pending/failed is only needed for the BATCH threshold decision.
+    /* Counting pending is only needed for the BATCH threshold decision.
      * INSTANT always uploads, LOCAL_ONLY never, SCHEDULED only at the flush
      * node (wake_scheduler decides) - skip the directory traverses for those
-     * modes to cut wake latency. */
+     * modes to cut wake latency. FAILED is deliberately not counted: a record
+     * there exhausted its retry budget, it never justifies waking the network. */
     capture_mode_t mode = g_up.cfg.mode;
-    uint32_t pending = 0, failed = 0;
+    uint32_t pending = 0;
     if (mode == CAPTURE_MODE_BATCH) {
         pending = count_state(g_up.active_fs, RECORD_STATE_PENDING);
-        failed  = count_state(g_up.active_fs, RECORD_STATE_FAILED);
     }
     uint64_t tn1 = rtc_get_uptime_ms();
     aicam_bool_t decision = AICAM_TRUE;
@@ -2601,14 +2998,12 @@ aicam_bool_t upload_coordinator_needs_network(void)
 
     case CAPTURE_MODE_BATCH:
         /* Bring up network only when this capture would cross the threshold
-         * (pending + 1 >= batch_count) or there's a failed backlog to retry.
-         * Otherwise just enqueue and go back to sleep - saves the multi-second
-         * network bring-up. */
-        if (failed > 0) {
-            decision = AICAM_TRUE;
-        } else {
-            decision = (pending + 1 >= g_up.cfg.batch_count) ? AICAM_TRUE : AICAM_FALSE;
-        }
+         * (pending + 1 >= batch_count). Otherwise just enqueue and go back to
+         * sleep - saves the multi-second network bring-up. FAILED records are
+         * web-manual-retry only (retry budget already exhausted) and must not
+         * wake the network: a stuck FAILED backlog used to force network
+         * bring-up and a single-record upload on every single wake. */
+        decision = (pending + 1 >= g_up.cfg.batch_count) ? AICAM_TRUE : AICAM_FALSE;
         break;
 
     case CAPTURE_MODE_SCHEDULED: {
@@ -2635,9 +3030,9 @@ aicam_bool_t upload_coordinator_needs_network(void)
         break;
     }
 
-    UPLOAD_LOG("needs_network=%d (mode=%d pending=%u failed=%u batch=%u) count_time=%lu ms\r\n",
+    UPLOAD_LOG("needs_network=%d (mode=%d pending=%u batch=%u) count_time=%lu ms\r\n",
            (int)decision, (int)g_up.cfg.mode,
-           (unsigned)pending, (unsigned)failed, (unsigned)g_up.cfg.batch_count,
+           (unsigned)pending, (unsigned)g_up.cfg.batch_count,
            (unsigned long)(tn1 - tn0));
     return decision;
 }
@@ -2924,18 +3319,30 @@ aicam_result_t upload_coordinator_enqueue_capture(
         }
     }
 
-    /* FLASH record-count cap. LittleFS directory operations (opendir/readdir)
-     * degrade sharply beyond a few hundred files per directory; even with the
-     * date-partitioned layout a total record count above FLASH_MAX_RECORDS
-     * makes index rebuild and counting impractically slow. SD storage has no
-     * such limitation (FAT/exFAT handles large directories efficiently). */
+    /* FLASH record-count cap (user-configurable, TOTAL across all states).
+     * LittleFS directory operations (opendir/readdir) degrade sharply beyond
+     * a few hundred files per directory; even with the date-partitioned
+     * layout a large live tree makes index rebuild and counting slow - and
+     * slows every cold boot's first-alloc full-tree scan, lengthening wake
+     * captures. SD storage has no such limitation (FAT/exFAT handles large
+     * directories efficiently). This is the COUNT cap: it only engages while
+     * free space remains - the space-based cleanup can still wrap-delete
+     * oldest records below the count cap when the volume runs out. */
     if (fs == FS_FLASH) {
+#if UPLOAD_DEBUG
+        uint64_t tc0 = rtc_get_uptime_ms();
+#endif
         uint32_t total = count_all_records(fs);
-        if (total >= FLASH_MAX_RECORDS) {
-            LOG_SVC_WARN("upload: flash record cap reached (%lu/%u)",
-                         (unsigned long)total, FLASH_MAX_RECORDS);
+        uint32_t cap = flash_record_cap();
+#if UPLOAD_DEBUG
+        UPLOAD_LOG("count_all=%lu time=%lu ms\r\n",
+                   (unsigned long)total, (unsigned long)(rtc_get_uptime_ms() - tc0));
+#endif
+        if (total >= cap) {
+            LOG_SVC_WARN("upload: flash record cap reached (%lu/%lu)",
+                         (unsigned long)total, (unsigned long)cap);
             if (g_up.cfg.policy == STORAGE_POLICY_WRAP) {
-                uint32_t excess = total - FLASH_MAX_RECORDS + 1;
+                uint32_t excess = total - cap + 1;
                 if (cleanup_for_count(fs, excess) != AICAM_OK) {
                     LOG_SVC_ERROR("upload: count cap cleanup failed");
                     storage_full_set(AICAM_TRUE);
@@ -3194,8 +3601,8 @@ aicam_result_t upload_coordinator_delete_record(const char *id)
 {
     if (!id) return AICAM_ERROR_INVALID_PARAM;
     if (g_up.active_fs == FS_MAX) return AICAM_ERROR_INVALID_PARAM;
-    /* Paths are state-independent now (state lives in the manifest), so a single
-     * call covers the record regardless of its current state. Returns error if a
-     * remove failed (FS likely corrupt) so the web UI can surface it. */
+    /* State lives in the manifest, so a single call covers the record
+     * regardless of its current state. Returns error if a remove failed
+     * (FS likely corrupt) so the web UI can surface it. */
     return delete_record_files(g_up.active_fs, id, RECORD_STATE_PENDING, "web_delete", NULL);
 }

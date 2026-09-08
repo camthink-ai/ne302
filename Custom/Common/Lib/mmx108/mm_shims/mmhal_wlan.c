@@ -18,6 +18,7 @@
 #include "common_utils.h"
 #include "chip_id_mac.h"
 #include "halow_platform_mac.h"
+#include "board_hw.h"
 
 #if defined(MMHAL_WLAN_USE_SOFT_SPI)
 #include "mm_soft_spi.h"
@@ -133,6 +134,17 @@ void mmhal_wlan_hard_reset(void)
     HAL_GPIO_WritePin(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin, GPIO_PIN_SET);
     mmosal_task_sleep(200);
 }
+
+/* New in mm-iot-sdk 2.13.1: drive only the reset line, no timing attached.
+ * mm-iot-sdk 2.10.4 headers do not declare it, so guard on the SDK version. */
+#include "mmversion.h"
+#if MM_VERSION >= MM_VERSION_NUMBER(2, 11, 0)
+void mmhal_wlan_assert_reset(bool assert_reset)
+{
+    HAL_GPIO_WritePin(MM_HALOW_RESET_GPIO_Port, MM_HALOW_RESET_Pin,
+                      assert_reset ? GPIO_PIN_RESET : GPIO_PIN_SET);
+}
+#endif
 
 #if defined(ENABLE_EXT_XTAL_INIT) && ENABLE_EXT_XTAL_INIT
 bool mmhal_wlan_ext_xtal_init_is_required(void)
@@ -297,12 +309,12 @@ void mmhal_wlan_deinit(void)
 
 void mmhal_wlan_wake_assert(void)
 {
-    HAL_GPIO_WritePin(MM_HALOW_WAKE_GPIO_Port, MM_HALOW_WAKE_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(board_hw_halow_wake_port(), board_hw_halow_wake_pin(), GPIO_PIN_SET);
 }
 
 void mmhal_wlan_wake_deassert(void)
 {
-    HAL_GPIO_WritePin(MM_HALOW_WAKE_GPIO_Port, MM_HALOW_WAKE_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(board_hw_halow_wake_port(), board_hw_halow_wake_pin(), GPIO_PIN_RESET);
 }
 
 bool mmhal_wlan_busy_is_asserted(void)

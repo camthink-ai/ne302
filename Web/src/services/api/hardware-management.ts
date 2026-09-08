@@ -22,16 +22,17 @@ export interface SetLightConfigReq {
     light_threshold?: number;
     ambient_light_level?: number;
     connected?: boolean;
+    /* When true, the device keeps the light in sync with the config above
+       for as long as it runs (fill light, regardless of stream viewers),
+       and work-time captures stop flashing the light. Wakeup captures are
+       unaffected. */
+    fill_light_while_streaming?: boolean;
     custom_schedule: {
         start_hour: number;
         start_minute: number;
         end_hour: number;
         end_minute: number;
     }
-}
-
-export interface ControlLightReq {
-    enable: boolean;
 }
 
 /** FSBL persisted profile ids (see fsbl_app_common.h) */
@@ -55,7 +56,6 @@ const hardwareManagement = {
     postIspProfileImportReq: (body: Record<string, unknown>) => request.post('/api/v1/isp/config/import', body),
     getLightConfigReq: () => request.get('/api/v1/device/light/config'),
     setLightConfigReq: (data: SetLightConfigReq) => request.post('/api/v1/device/light/config', data),
-    controlLightReq: (data: ControlLightReq) => request.post('/api/v1/device/light/control', data),
 }
 
 export default hardwareManagement;

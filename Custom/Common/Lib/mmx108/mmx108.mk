@@ -4,10 +4,31 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-MMX108_ROOT_PATH = ../Custom/Common/Lib/mmx108
-MMX108_HOSTAP_DIR = $(MMX108_ROOT_PATH)/hostap
+MMX108_COMMON_PATH = ../Custom/Common/Lib/mmx108
 
-C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mm_shims/*.c)
+# === HaLow SDK tree selection ============================================
+#   mmx108_2_13_1 (default) — official mm-iot-sdk 2.13.1 port (active line)
+#   mmx108                  — vendored mm-iot-sdk 2.10.4 + local patches (rollback)
+# Override on the command line:  make HALOW_SDK=mmx108 app
+# (Same layout as SiliconLabs_SDK_4_1_1 active / SiliconLabs_SDK rollback.)
+# Shared between trees: mm_shims, freertos_mmiot, MbedTLS. Versioned per SDK
+# tree (sources + headers + firmware): morselib, hostap, mmipal, mmpktmem,
+# mmregdb, mmutils, and the paired mmhal_wlan_binaries.c.
+# Appli/Makefile stamps BUILD_DIR with the selected config and auto-cleans it
+# on change, so both trees share the single "build" output directory.
+HALOW_SDK ?= mmx108_2_13_1
+ifeq ($(HALOW_SDK),mmx108)
+MMX108_ROOT_PATH = $(MMX108_COMMON_PATH)
+C_SOURCES += $(wildcard $(MMX108_COMMON_PATH)/mm_shims/*.c)
+else
+MMX108_ROOT_PATH = ../Custom/Common/Lib/$(HALOW_SDK)
+# Shared shim minus its firmware file; the selected tree embeds its own.
+C_SOURCES += $(filter-out %mmhal_wlan_binaries.c,$(wildcard $(MMX108_COMMON_PATH)/mm_shims/*.c))
+C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mmhal_wlan_binaries.c)
+endif
+# hostap is versioned per SDK tree: the 2.13.1 supplicant shim needs the
+# 2.13.1 hostap headers (driver ops / DPP event union changed upstream).
+MMX108_HOSTAP_DIR = $(MMX108_ROOT_PATH)/hostap
 
 # WPA crypto in Appli (always fresh); libmorse built with NE302_WPA_CRYPTO_IN_APP=y omits it.
 NE302_WPA_CRYPTO_IN_APP ?= y
@@ -33,13 +54,15 @@ C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mmipal/lwip/*.c)
 C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mmpktmem/*.c)
 C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mmregdb/*.c)
 C_SOURCES += $(wildcard $(MMX108_ROOT_PATH)/mmutils/*.c)
-
 # halow_example.c logic moved to Custom/Hal/Network/netif_manager/mm_halow_netif.c
 
 C_INCLUDES += -I$(MMX108_ROOT_PATH)
 C_INCLUDES += -I$(MMX108_ROOT_PATH)/morselib/include
-C_INCLUDES += -I$(MMX108_ROOT_PATH)/freertos_mmiot
-C_INCLUDES += -I$(MMX108_ROOT_PATH)/mm_shims
+C_INCLUDES += -I$(MMX108_COMMON_PATH)/freertos_mmiot
+C_INCLUDES += -I$(MMX108_COMMON_PATH)/mm_shims
+# These five dirs are versioned per SDK tree (sources above come from
+# $(MMX108_ROOT_PATH)), so their headers must resolve there too — a stale
+# common-tree -I would shadow the selected SDK's headers.
 C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmipal
 C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmipal/lwip
 C_INCLUDES += -I$(MMX108_ROOT_PATH)/mmpktmem

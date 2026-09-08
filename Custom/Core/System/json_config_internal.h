@@ -115,6 +115,7 @@
  #define NVS_KEY_LIGHT_BRIGHTNESS        "light_brt"
  #define NVS_KEY_LIGHT_AUTO_TRIGGER      "light_auto"
  #define NVS_KEY_LIGHT_THRESHOLD         "light_thr"
+ #define NVS_KEY_LIGHT_FILL_STREAMING    "light_fill"
 
 // ISP configuration key names
 #define NVS_KEY_ISP_VALID               "isp_valid"
@@ -197,6 +198,7 @@
 #define NVS_KEY_HALOW_RC_BW              "hw_rc_bw"
 #define NVS_KEY_HALOW_RC_GI              "hw_rc_gi"
 #define NVS_KEY_HALOW_PS_MODE            "hw_ps"
+#define NVS_KEY_HALOW_JOIN_CHANNEL       "hw_jch"
 
 // Communication type configuration key names
 #define NVS_KEY_COMM_PREFERRED_TYPE     "comm_pref"
@@ -382,6 +384,7 @@
 #define NVS_KEY_CAPUP_SCHED_MIN_FMT "cu_sch_%u"   /* uint16_t index 0..7 */
 #define NVS_KEY_CAPUP_KEEP_HOURS    "cu_keep_h"
 #define NVS_KEY_CAPUP_MAX_PENDING   "cu_max_pd"
+#define NVS_KEY_CAPUP_FLASH_MAX     "cu_fl_max"
 #define NVS_KEY_CAPUP_COMM_TYPE     "cu_comm"
 
 

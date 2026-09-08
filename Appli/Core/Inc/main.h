@@ -155,6 +155,7 @@ void _Error_Handler_(void);
 
 #define MM_HALOW_RESET_Pin GPIO_PIN_0
 #define MM_HALOW_RESET_GPIO_Port GPIOB
+/* NE302: HaLow WAKE is fixed on PA13 — no board-revision strap on this board. */
 #define MM_HALOW_WAKE_Pin GPIO_PIN_13
 #define MM_HALOW_WAKE_GPIO_Port GPIOA
 

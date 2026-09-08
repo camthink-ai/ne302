@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { NumberField } from '@/components/number-field';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/tooltip';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -227,6 +227,25 @@ export default function CaptureConfig() {
                     : i18n._('sys.capture_settings.flash_limit_flash_stop').replace('{max}', String(cfg.flash_max_records)))}
               </div>
             )}
+
+            {/* flash record cap — editable, only shown when records can land on flash */}
+            {(storage === 'flash' || storage === 'auto') && (
+              <>
+                <div className="flex justify-between gap-4 items-center">
+                  <Label>{i18n._('sys.capture_settings.flash_max_records')}</Label>
+                  <NumberField
+                    className="w-24 text-right"
+                    min={16}
+                    max={256}
+                    value={cfg.flash_max_records ?? 32}
+                    onCommit={(v) => patch('flash_max_records', v)}
+                  />
+                </div>
+                <p className="text-xs text-gray-500">
+                  {i18n._('sys.capture_settings.flash_max_records_hint')}
+                </p>
+              </>
+            )}
             <Separator />
 
             {/* policy + capture_storage_ai (only when storage != none) */}
@@ -304,16 +323,12 @@ export default function CaptureConfig() {
                   <>
                     <div className="flex justify-between gap-4 items-center">
                       <Label>{i18n._('sys.capture_settings.batch_count')}</Label>
-                      <Input
+                      <NumberField
                         className="w-24 text-right"
-                        type="number"
                         min={2}
                         max={20}
                         value={cfg.batch_count}
-                        onChange={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value || '2', 10);
-                          patch('batch_count', Math.max(2, Math.min(20, v)));
-                        }}
+                        onCommit={(v) => patch('batch_count', v)}
                       />
                     </div>
                     <Separator />
@@ -397,16 +412,12 @@ export default function CaptureConfig() {
                   <>
                     <div className="flex justify-between gap-4 items-center">
                       <Label>{i18n._('sys.capture_settings.retry_max_attempts')}</Label>
-                      <Input
+                      <NumberField
                         className="w-24 text-right"
-                        type="number"
                         min={0}
                         max={20}
                         value={cfg.retry_max_attempts}
-                        onChange={(e) => {
-                          const v = parseInt((e.target as HTMLInputElement).value || '0', 10);
-                          patch('retry_max_attempts', Math.max(0, Math.min(20, v)));
-                        }}
+                        onCommit={(v) => patch('retry_max_attempts', v)}
                       />
                     </div>
                     <Separator />
@@ -420,16 +431,12 @@ export default function CaptureConfig() {
               <>
               <div className="flex justify-between gap-4 items-center">
                   <Label>{i18n._('sys.capture_settings.keep_sent_hours')}</Label>
-                  <Input
+                  <NumberField
                     className="w-24 text-right"
-                    type="number"
                     min={0}
                     max={72000}
                     value={cfg.keep_sent_hours}
-                    onChange={(e) => {
-                      const v = parseInt((e.target as HTMLInputElement).value || '72000', 10);
-                      patch('keep_sent_hours', Math.max(0, Math.min(72000, v)));
-                    }}
+                    onCommit={(v) => patch('keep_sent_hours', v)}
                   />
               </div>
               {/* amber alert like the storage flash-cap warning */}
@@ -477,16 +484,12 @@ export default function CaptureConfig() {
             {/* skip frames — local state, committed on global save */}
             <div className="flex justify-between gap-4 items-center">
               <Label>{i18n._('sys.hardware_management.fast_capture_skip_frames')}</Label>
-              <Input
+              <NumberField
                 className="w-24 text-right"
-                type="number"
                 min={0}
                 max={300}
                 value={fastSkipFrames}
-                onChange={(e) => {
-                  const v = parseInt((e.target as HTMLInputElement).value || '0', 10);
-                  setFastSkipFrames(Math.max(0, Math.min(300, v)));
-                }}
+                onCommit={setFastSkipFrames}
               />
             </div>
             <Separator />
@@ -527,16 +530,12 @@ export default function CaptureConfig() {
                   </TooltipContent>
                 </Tooltip>
               </div>
-              <Input
+              <NumberField
                 className="w-24 text-right"
-                type="number"
                 min={1}
                 max={100}
                 value={fastJpegQuality}
-                onChange={(e) => {
-                  const v = parseInt((e.target as HTMLInputElement).value || '85', 10);
-                  setFastJpegQuality(Math.max(1, Math.min(100, v)));
-                }}
+                onCommit={setFastJpegQuality}
               />
             </div>
           </div>

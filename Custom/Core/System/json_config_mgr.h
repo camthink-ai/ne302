@@ -261,6 +261,8 @@ typedef struct {
     int32_t halow_rc_gi;
     /** HaLow chip power save: 0 disabled, 1 enabled. */
     uint8_t halow_ps_mode;
+    /** Auto-learned HaLow S1G join channel for selective scan (0: off). Not user-facing. */
+    uint8_t halow_join_channel;
 } network_service_config_t;
  
  // Power mode configuration structure
@@ -545,6 +547,9 @@ typedef struct {
     uint32_t brightness_level;               // brightness level (0-100)
     aicam_bool_t auto_trigger_enabled;       // auto trigger enabled
     uint32_t light_threshold;                // light threshold
+    aicam_bool_t fill_light_while_streaming; // keep the light in sync with this config while the
+                                             // device runs (regardless of stream viewers); runtime
+                                             // captures no longer flash it; wakeup path unaffected
 } light_config_t;
 
 typedef struct {
@@ -629,6 +634,14 @@ typedef struct {
                                                * full / count cap); default = max */
     uint32_t          max_pending_records;    /* hard cap on queue length; default 200 */
 
+    /* Internal-flash (littlefs) record cap - the TOTAL across all states
+     * (pending + sent + failed + local). Range CAPUP_FLASH_RECORDS_MIN..
+     * _MAX, default = CAPUP_FLASH_RECORDS_DEFAULT. A large live tree slows
+     * the per-boot full-tree alloc scan and the count sweeps (longer wake
+     * captures, higher average power); SD storage has no such limitation.
+     * Web-configurable. */
+    uint32_t          flash_max_records;
+
     /* Wake-capture network: which netif to bring up on the wake path.
      * Values = communication_type_t (communication_service.h).
      * COMM_TYPE_NONE (0) = default (use system comm-pref logic, init all). */
@@ -644,6 +657,13 @@ typedef struct {
  * (uint64_t)keep_sent_hours * 3600 in purge_old_sent - 72000h * 3600 =
  * 259,200,000s, fits uint32 (let alone the uint64 it's computed in). */
 #define CAPUP_KEEP_SENT_MAX_HOURS  (72000u)   /* ~= 8.2 years; sentinel = keep forever */
+
+/* Internal-flash total record cap: range and default. The cap counts ALL
+ * record states combined; units without the NVS key yet (and 0/out-of-range
+ * writes) get the default. */
+#define CAPUP_FLASH_RECORDS_MIN     (16u)
+#define CAPUP_FLASH_RECORDS_MAX     (256u)
+#define CAPUP_FLASH_RECORDS_DEFAULT (32u)
 
 // RTMP config is now part of video_stream_mode_config_t
 // These macros are kept for compatibility
@@ -1087,6 +1107,13 @@ aicam_result_t json_config_set_poe_ip_mode(poe_ip_mode_t mode);
  * @return aicam_result_t Operation result
  */
 aicam_result_t json_config_save_poe_last_dhcp_ip(const uint8_t *ip_addr);
+
+/**
+ * @brief Save the auto-learned HaLow join channel (selective scan hint)
+ * @param channel S1G channel number (0 disables selective scan)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_save_halow_join_channel(uint8_t channel);
 
 /**
  * @brief Get PoE status code string

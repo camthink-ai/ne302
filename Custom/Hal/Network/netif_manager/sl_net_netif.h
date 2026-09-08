@@ -96,7 +96,35 @@ int sl_net_wifi_get_region_code(char *buf, size_t len);
 uint32_t sl_net_wifi_get_supported_region_count(void);
 int sl_net_wifi_get_region_code_by_index(uint32_t idx, char *buf, size_t len);
 
+/************************************** NWP Debug (RAM Dump) **********************************************/
+/// @brief Trigger an NWP RAM dump. The content streams out of the Si91x NWP UART pin
+///        (not the bus): capture with Docklight at 460800 8N1 saving HEX; a valid dump
+///        shows the repeating pattern 00 04 04 04 00 04 04 04. Requires a build with
+///        IS_ENABLE_NWP_DEBUG_PRINTS 1 in sl_net_netif.c (debug UART routed at init).
+/// @param address Start address — offset from NWP RAM base (0 = RAM start); absolute
+///        global-map addresses in [0x22000000, +672K) are accepted and converted
+///        (fw 2.16.5 NACKs raw absolute addresses with 0x1003E)
+/// @param length  Bytes to dump (0 = full NWP RAM, 672 KB)
+/// @return SL_STATUS_OK when triggered, SL_STATUS_NOT_SUPPORTED in non-debug builds
+int sl_net_nwp_ram_dump(uint32_t address, uint32_t length);
+/// @brief Read the program counters of NWP firmware threads 0~3 (optionally all 16
+///        registers, R15 = SP). Each 4-byte little-endian value streams out of the
+///        NWP UART port in call order — the console only maps addresses to chunks.
+///        Thread PC/register addresses (0x22000420 / 0x22000440 + 0x80 * n) are
+///        converted to NWP RAM offsets internally (the fw validates them as offsets).
+/// @param with_regs 0 = PC only, 1 = PC + R0~R15
+/// @return SL_STATUS_OK, SL_STATUS_NOT_SUPPORTED in non-debug builds
+int sl_net_nwp_print_thread_pc(uint8_t with_regs);
+
 void sli_firmware_error_callback(int error_code);
+
+/// @brief Real bus-write result for LWIP/transceiver RAW data packets, called by
+///        the SDK DATA-packet TX status handler (hal thread) with the outcome of
+///        sli_hal_si91x_send_packet_to_bus(). Feeds the consecutive bus-write
+///        failure detector in sl_net_netif.c (reset by any real write success,
+///        no time window — must not starve on idle traffic); non-OK means the
+///        chip never received the frame (wakeup failed / BUS_WRITE_ERROR).
+void sl_net_notify_bus_tx_failure(sl_status_t status);
 /***************************************************************************************************/
 
 #ifdef __cplusplus

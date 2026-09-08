@@ -265,9 +265,13 @@ a lot of data that needs to be copied, this should be set high. */
    interfaces. */
 #define LWIP_DHCP               LWIP_UDP
 
-/* 1 if you want to do an ARP check on the offered address
-   (recommended). */
-#define DHCP_DOES_ARP_CHECK    (LWIP_DHCP)
+/* Disable the RFC 5227 address conflict detection after DHCP ACK. The probe
+ * sequence (3 ARP probes 1-2 s apart + 2 announces) delays dhcp_bind() by
+ * 6-8 s on every acquire — measured on the HaLow link the DHCP exchange
+ * itself completes in ~130 ms. Skip it: the address comes from the router's
+ * managed pool, and a missed conflict self-corrects via ARP at first use.
+ * (DHCP_DOES_ARP_CHECK above was the lwip 2.1 name and is ignored here.) */
+#define LWIP_DHCP_DOES_ACD_CHECK    0
 
 
 /* ---------- AUTOIP options ------- */

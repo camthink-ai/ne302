@@ -57,6 +57,9 @@ struct morse_yaps
         bool enabled;
     } chip_queue_full;
 
+    /* Time of the first -ENOMEM TX in the current streak (0 = none). */
+    uint32_t enomem_since_ms;
+
     uint8_t flags;
 
 

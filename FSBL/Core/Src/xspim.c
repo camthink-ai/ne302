@@ -24,6 +24,43 @@
 
 /* USER CODE BEGIN 0 */
 
+/* ---------------------------------------------------------------------------
+ * CPU yield for the NOR ready-poll loop in XSPI_AutoPollingMemReady().
+ * A busy NOR is waited on by tight polling with no yield at all: one 4K
+ * erase keeps the loop spinning 45-200 ms, a chained delete much longer.
+ * When the caller runs above other tasks (web API task = Realtime, wdgTask
+ * demoted to Normal) they starve past the 16 s IWDG window -> silent
+ * watchdog reset. So after a burst of tight polls we back off 1 ms per
+ * poll and give the CPU up. Fast ops (single page program) finish well
+ * inside the burst and never delay.
+ *
+ * This file is compiled into both images and must pick the right wait:
+ *  - Appli (XSPI_SKIP_XSPIM_CONFIG defined): osDelay() once the kernel is
+ *    running — a true yield; HAL_Delay() before osKernelStart (early init).
+ *  - FSBL: no RTOS exists, nothing to yield to — plain HAL wait.
+ * --------------------------------------------------------------------------- */
+#define XSPI_POLL_SPIN_BEFORE_YIELD 64U
+
+#ifdef XSPI_SKIP_XSPIM_CONFIG
+#include "cmsis_os2.h"
+static void XSPI_PollYield(void)
+{
+    if (osKernelGetState() == osKernelRunning)
+    {
+        osDelay(1);
+    }
+    else
+    {
+        HAL_Delay(1);   /* kernel not started yet */
+    }
+}
+#else
+static void XSPI_PollYield(void)
+{
+    HAL_Delay(1);       /* FSBL: bare metal */
+}
+#endif
+
 /* USER CODE END 0 */
 XSPI_HandleTypeDef hxspi1;
 XSPI_HandleTypeDef hxspi2;
@@ -552,6 +589,7 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
     XSPI_RegularCmdTypeDef  sCommand={0};
     uint8_t reg[2];
     uint32_t start_tick = 0;
+    uint32_t spin_cnt = 0;
 
     /* Configure automatic polling mode to wait for memory ready ------ */
     sCommand.OperationType      = HAL_XSPI_OPTYPE_COMMON_CFG;
@@ -590,6 +628,16 @@ static void XSPI_AutoPollingMemReady(XSPI_HandleTypeDef *hxspi)
         if (HAL_XSPI_Receive(hxspi, reg, HAL_XSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
         {
             Error_Handler();
+        }
+
+        /* Memory still busy: once the tight-poll burst is exhausted, back
+           off and yield the CPU on every further poll (see XSPI_PollYield). */
+        if ((reg[0] & MEMORY_READY_MASK_VALUE) != MEMORY_READY_MATCH_VALUE)
+        {
+            if (++spin_cnt >= XSPI_POLL_SPIN_BEFORE_YIELD)
+            {
+                XSPI_PollYield();
+            }
         }
     } while((reg[0] & MEMORY_READY_MASK_VALUE) != MEMORY_READY_MATCH_VALUE && (HAL_GetTick() - start_tick) < HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
 

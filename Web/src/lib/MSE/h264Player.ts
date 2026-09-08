@@ -155,6 +155,8 @@ export default class H264Player {
 
     private recoveryInFlight: boolean = false;
 
+    private progressTimer: number | null = null;
+
     // Set on mseError; while true, incoming frames are dropped until the next
     // IDR so a rebuilt MSE never starts mid-GOP (WebKit: MEDIA_ERR_DECODE).
     private waitForKeyframe: boolean = false;
@@ -477,7 +479,7 @@ export default class H264Player {
         this.isConnected = false;
         this.isStarted = false;
     }
-    
+
     private startHealthCheck(): void {
         this.stopHealthCheck();
         this.lastHealthPlaybackTime = this.videoElement?.currentTime ?? 0;
@@ -908,6 +910,10 @@ export default class H264Player {
         this.snapshotFlag = 0;
         this.lastSec = 0;
         this.videoFrameCnt = 0;
+        if (this.progressTimer !== null) {
+            clearInterval(this.progressTimer);
+            this.progressTimer = null;
+        }
         this.videoPlayer?.uninitMse();
         this.videoPlayer = null;
         if (this.type === 'audio') {
@@ -1038,8 +1044,12 @@ export default class H264Player {
             this.onProgress();
         });
 
+        // initPlayer may run again on the same player; don't stack intervals.
+        if (this.progressTimer !== null) {
+            clearInterval(this.progressTimer);
+        }
         // Also update stats and recover from playback stall
-        setInterval(() => {
+        this.progressTimer = window.setInterval(() => {
             this.calculateBandwidth();
             this.latency = this.calculateLatency();
             if (!this.isPlayback) {

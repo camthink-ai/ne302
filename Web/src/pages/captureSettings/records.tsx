@@ -81,6 +81,10 @@ export default function CaptureRecords() {
 
   /* Batch selection */
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /* Batch delete in flight — a blocking overlay guards against re-entry,
+   * page/tab switching and any other interaction until it settles. */
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [batchDeleteCount, setBatchDeleteCount] = useState(0);
 
   /* Time filter — input values (not yet applied) */
   const [filterFrom, setFilterFrom] = useState('');
@@ -207,15 +211,17 @@ to: appliedTo,
   };
 
   const batchDelete = async () => {
-    if (allOnPage.length === 0) return;
+    if (allOnPage.length === 0 || batchDeleting) return;
     // eslint-disable-next-line no-alert, no-restricted-globals
     if (!confirm(i18n._('sys.capture_settings.confirm_delete_batch')?.replace('{n}', String(allOnPage.length)) ?? 'Confirm delete?')) return;
+    setBatchDeleting(true);
+    setBatchDeleteCount(allOnPage.length);
     try {
       const resp = await captureSettings.deleteRecords(allOnPage.map(rec => rec.id));
       toast.success(`${i18n._('sys.capture_settings.batch_delete_ok')} (${resp.data?.deleted_count ?? 0})`);
       setSelected(new Set());
-      load(tab, offset);
-    } catch { toast.error('Batch delete failed'); }
+      await load(tab, offset);
+    } catch { toast.error('Batch delete failed'); } finally { setBatchDeleting(false); }
   };
 
   /* ── Single actions ── */
@@ -549,6 +555,23 @@ to: appliedTo,
                 </div>
               ) : null}
             </div>
+          </div>
+        </div>
+      )}
+      {/* Batch delete in progress — blocking modal.
+       * Covers the whole viewport (incl. nav) so the user cannot switch pages,
+       * re-trigger batch actions or single-record actions mid-delete. */}
+      {batchDeleting && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm px-6 py-5 flex flex-col items-center gap-3">
+            <span className="inline-block w-8 h-8 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin" />
+            <p className="text-sm text-gray-700 font-medium text-center">
+              {i18n._('sys.capture_settings.batch_delete_in_progress')
+                ?.replace('{n}', String(batchDeleteCount))}
+            </p>
+            <p className="text-xs text-gray-400 text-center">
+              {i18n._('sys.capture_settings.batch_delete_in_progress_hint')}
+            </p>
           </div>
         </div>
       )}

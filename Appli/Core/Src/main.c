@@ -413,10 +413,28 @@ void StartMainTask(void *argument)
     wdg_task_change_priority(osPriorityNormal);
     // printf("[MAIN] Entering main loop\r\n");
 
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) {
-        LOG_WARN("[MAIN] System reset due to IWDG reset\r\n");
-        __HAL_RCC_CLEAR_RESET_FLAGS();
+    /* Dump the full reset-cause register before anything clears it. RSR flags
+       are only read/cleared here, and silent resets (software / NRST from U0 /
+       brownout / power cycle / CPU lockup) otherwise leave no trace at all.
+       Note: NRST pulses internally on software and power-on resets too, so read
+       PINRST combined with SFTRST/PORRST, not on its own. */
+    {
+        uint32_t rsr = READ_REG(RCC->RSR);
+        // Normally, the reset cause register is 0x00e00000 on a clean power-on reset. If it's not, print the flags that are set.
+        if (rsr != 0x00e00000) {
+            LOG_WARN("[MAIN] RSR=0x%08lx%s%s%s%s%s%s%s%s\r\n", (unsigned long)rsr,
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)  ? " SFTRST(software)"  : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)  ? " PINRST(NRST-pin)"  : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST)  ? " BORRST(brownout)"  : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST)  ? " PORRST(power-on)"  : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) ? " IWDGRST"           : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST) ? " WWDGRST"           : ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST) ? " LPWRRST(low-power)": ""),
+                (__HAL_RCC_GET_FLAG(RCC_FLAG_LCKRST)  ? " LCKRST(cpu-lockup)": ""));
+        }
     }
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) __HAL_RCC_CLEAR_RESET_FLAGS();
     
     printf("MAIN: %lu ms\r\n", (unsigned long)rtc_get_uptime_ms());
 

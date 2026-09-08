@@ -293,12 +293,12 @@ void mmosal_free(void *p)
     vPortFree(p);
 }
 
-void *mmosal_realloc(void *ptr, size_t size)
+void *mmosal_realloc_(void *ptr, size_t size)
 {
     return pvPortRealloc(ptr, size);
 }
 
-void *mmosal_calloc(size_t nitems, size_t size)
+void *mmosal_calloc_(size_t nitems, size_t size)
 {
     //void *ptr = pvPortMalloc_(nitems * size);
     void *ptr = pvPortMalloc(nitems * size);
@@ -308,6 +308,37 @@ void *mmosal_calloc(size_t nitems, size_t size)
     }
     return ptr;
 }
+
+/* 2.13.1+ headers macro-split calloc/realloc onto the _ variants (like malloc).
+ * Provide _dbg forms plus old-name shims so the same shim builds against both
+ * SDK trees. mmversion.h lives in the selected morselib/include. */
+#include "mmversion.h"
+
+void *mmosal_calloc_dbg(size_t nitems, size_t size, const char *name, unsigned line_number)
+{
+    (void)name;
+    (void)line_number;
+    return mmosal_calloc_(nitems, size);
+}
+
+void *mmosal_realloc_dbg(void *ptr, size_t size, const char *name, unsigned line_number)
+{
+    (void)name;
+    (void)line_number;
+    return mmosal_realloc_(ptr, size);
+}
+
+#if MM_VERSION < MM_VERSION_NUMBER(2, 11, 0)
+void *mmosal_realloc(void *ptr, size_t size)
+{
+    return mmosal_realloc_(ptr, size);
+}
+
+void *mmosal_calloc(size_t nitems, size_t size)
+{
+    return mmosal_calloc_(nitems, size);
+}
+#endif
 
 #if 0
 /*

@@ -675,7 +675,12 @@ static aicam_result_t unregister_pir_runtime_callback(void);
      if (!controller || !controller->is_initialized) {
          return AICAM_ERROR_INVALID_PARAM;
      }
-     
+
+     /* RTMP/RTSP APIs save video_stream_mode straight to NVS without
+      * touching this RAM copy; refresh it from NVS so this full write
+      * doesn't clobber those values with boot-time stale ones. */
+     (void)json_config_get_video_stream_mode(&controller->work_config.video_stream_mode);
+
      // Save configuration to json_config_mgr (includes NVS persistence)
      aicam_result_t config_result = json_config_set_work_mode_config(&controller->work_config);
      if (config_result != AICAM_OK) {
@@ -1004,6 +1009,13 @@ static void scheduled_interval_timer_callback(void *user_data)
   * @param timer_config Timer trigger configuration
   * @return AICAM_OK on success
   */
+/* Step-generation snapshot taken when the timer jobs were last (re)registered
+ * — consumed by check_rtc_step_reanchor_timer(). Boot-time U0 sync bumps the
+ * counter BEFORE registration, so a poll-side zero baseline would fire one
+ * spurious re-anchor every boot; anchoring here makes "changed since the jobs
+ * were registered" the exact condition. */
+static uint32_t s_timer_reg_step_gen = 0;
+
  static aicam_result_t apply_timer_trigger_config(system_controller_t *controller,
                                                  const timer_trigger_config_t *timer_config)
  {
@@ -1094,6 +1106,10 @@ static void scheduled_interval_timer_callback(void *user_data)
      if (result == AICAM_OK) {
          controller->timer_trigger_active = AICAM_TRUE;
          controller->timer_task_count = 0;
+         /* Jobs now live on the current clock scale — re-baseline the step
+          * detector. A step landing inside this same call is swallowed, but
+          * its own rtc_trigger_scheduler_check already re-armed the alarms. */
+         s_timer_reg_step_gen = rtc_step_generation();
      }
      
      return result;
@@ -1507,6 +1523,9 @@ aicam_result_t system_controller_register_io_trigger(system_controller_t *contro
              if (evs[i].duty == WAKE_DUTY_UPLOAD_FLUSH) need_flush   = AICAM_TRUE;
              wake_scheduler_mark_handled(evs[i].duty, evs[i].due_unix_sec);
          }
+         /* Single NVS write for the whole cycle, before the (potentially
+          * 30s+) drain below so the marks survive a power cut mid-drain. */
+         wake_scheduler_flush_state();
 
          if (need_flush) {
              (void)upload_coordinator_kick();
@@ -1985,16 +2004,13 @@ static aicam_result_t configure_pir_sensor(system_controller_t *controller)
     ms_bridging_pir_cfg_t pir_cfg = {0};
     pir_cfg.sensitivity_level = controller->work_config.pir_trigger.sensitivity_level;
     if (pir_cfg.sensitivity_level == 0) {
-        pir_cfg.sensitivity_level = 30;  // Default if not configured
+        pir_cfg.sensitivity_level = 30;  // Default if not configured (web enforces 10-255, 0 only from degenerate configs)
     }
+    // ignore_time_s == 0 (0.5s) and pulse_count == 0 (1 pulse, web stores value-1)
+    // are legal register values selectable from the web UI - no override here.
+    // Defaults are guaranteed by the NVS base (json_config_mgr.c default_config).
     pir_cfg.ignore_time_s = controller->work_config.pir_trigger.ignore_time_s;
-    if (pir_cfg.ignore_time_s == 0 && controller->work_config.pir_trigger.enable) {
-        pir_cfg.ignore_time_s = 7;  // Default if not configured
-    }
     pir_cfg.pulse_count = controller->work_config.pir_trigger.pulse_count;
-    if (pir_cfg.pulse_count == 0) {
-        pir_cfg.pulse_count = 1;  // Default if not configured
-    }
     pir_cfg.window_time_s = controller->work_config.pir_trigger.window_time_s;
     pir_cfg.motion_enable = 1;         // Enable motion detection
     pir_cfg.interrupt_src = 0;          // Interrupt source: 0 = motion detection
@@ -3187,6 +3203,35 @@ aicam_result_t system_service_request_sleep(uint32_t duration_sec)
 }
 
 /**
+ * @brief Re-anchor the RTC capture timer when the clock scale changed since
+ *        the jobs were last registered (NTP correction, U0 sync, manual set,
+ *        timezone change). The scheduler walks interval jobs back after a
+ *        backward step, but the SCHEDULED capture mode registers a
+ *        REPEAT_ONCE absolute point that keeps the old clock scale until
+ *        wall time reaches it — only re-registering from config re-derives
+ *        the lattice on the new clock. Runs from the awake poll (~15s),
+ *        which executes during both power modes' awake periods; low-power
+ *        sleep is covered by cold-boot re-registration instead.
+ */
+static void check_rtc_step_reanchor_timer(void)
+{
+    system_controller_t *controller = g_system_service_ctx.controller;
+    /* controller->timer_trigger_active tracks apply success precisely (the
+     * ctx-level flag goes stale across set_work_config reconfiguration). */
+    if (!controller || !controller->is_initialized ||
+        !controller->timer_trigger_active) {
+        return;  /* nothing registered - nothing to re-anchor */
+    }
+
+    if (rtc_step_generation() == s_timer_reg_step_gen) {
+        return;
+    }
+
+    LOG_SVC_INFO("RTC clock stepped - re-anchoring timer trigger from config");
+    (void)system_service_apply_timer_trigger_config();
+}
+
+/**
  * @brief Poll for a scheduled upload-flush node that's due now, while awake.
  *        Covers FULL_SPEED mode and LOW_POWER awake periods that span a
  *        scheduled node without a dedicated wake (the wake path only fires on
@@ -3196,6 +3241,10 @@ aicam_result_t system_service_request_sleep(uint32_t duration_sec)
 aicam_result_t system_service_poll_scheduled_flush(void)
 {
     if (!g_system_service_ctx.is_initialized) return AICAM_ERROR_NOT_INITIALIZED;
+
+    /* Re-anchor capture jobs first so both duties run on the clock the
+     * flush-node window below is about to evaluate against. */
+    check_rtc_step_reanchor_timer();
 
     uint64_t now = rtc_get_timeStamp();
     wake_event_t evs[WAKE_DUTY_MAX];
@@ -3208,6 +3257,7 @@ aicam_result_t system_service_poll_scheduled_flush(void)
             LOG_SVC_INFO("[WAKE] scheduled flush due (awake poll) at=%lu",
                          (unsigned long)evs[i].due_unix_sec);
             wake_scheduler_mark_handled(WAKE_DUTY_UPLOAD_FLUSH, evs[i].due_unix_sec);
+            wake_scheduler_flush_state();  /* before the drain below */
             {
                 uint32_t fb = upload_coordinator_get_flush_budget_ms();
                 (void)upload_coordinator_drain(fb > 30000 ? fb + 2000 : 30000);

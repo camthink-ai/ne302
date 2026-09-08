@@ -6,6 +6,7 @@
  */
 
 #include "json_config_internal.h"
+#include "board_hw.h"
 #include "version.h"
 #include "buffer_mgr.h"
 #include "storage.h"
@@ -455,6 +456,9 @@ aicam_result_t json_config_save_capture_upload_to_nvs(const capture_upload_confi
     r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_MAX_PENDING, config->max_pending_records);
     if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup max_pending"); result = r; }
 
+    r = json_config_nvs_write_uint32(NVS_KEY_CAPUP_FLASH_MAX, config->flash_max_records);
+    if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup flash_max"); result = r; }
+
     r = json_config_nvs_write_uint8(NVS_KEY_CAPUP_COMM_TYPE, (uint8_t)config->upload_comm_type);
     if (r != AICAM_OK) { LOG_CORE_ERROR("Failed to save capup upload_comm_type"); result = r; }
 
@@ -493,6 +497,13 @@ aicam_result_t json_config_load_capture_upload_from_nvs(capture_upload_config_t 
     }
     if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_KEEP_HOURS, &u32) == AICAM_OK) config->keep_sent_hours = u32;
     if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_MAX_PENDING, &u32) == AICAM_OK) config->max_pending_records = u32;
+    if (json_config_nvs_read_uint32(NVS_KEY_CAPUP_FLASH_MAX, &u32) == AICAM_OK) {
+        /* Same normalization as json_config_set_capture_upload_config:
+         * 0 or out-of-range = default, floor at min. */
+        if (u32 == 0 || u32 > CAPUP_FLASH_RECORDS_MAX) u32 = CAPUP_FLASH_RECORDS_DEFAULT;
+        if (u32 < CAPUP_FLASH_RECORDS_MIN) u32 = CAPUP_FLASH_RECORDS_MIN;
+        config->flash_max_records = u32;
+    }
     if (json_config_nvs_read_uint8 (NVS_KEY_CAPUP_COMM_TYPE, &u8) == AICAM_OK) {
         config->upload_comm_type = (u8 >= (uint8_t)4 /*COMM_TYPE_MAX*/) ? 0 /*COMM_TYPE_NONE*/ : (uint32_t)u8;
     }
@@ -693,6 +704,10 @@ aicam_result_t json_config_save_device_service_light_config_to_nvs(const light_c
     result = json_config_nvs_write_uint32(NVS_KEY_LIGHT_THRESHOLD, config->light_threshold);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save light threshold to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_LIGHT_FILL_STREAMING, config->fill_light_while_streaming);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save light fill-while-streaming to NVS");
 
     LOG_CORE_INFO("Device service light configuration saved to NVS successfully");
     return result;
@@ -903,6 +918,10 @@ aicam_result_t json_config_save_network_service_config_to_nvs(const network_serv
     result = json_config_nvs_write_uint32(NVS_KEY_HALOW_PS_MODE, config->halow_ps_mode);
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save HaLow PS mode to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_HALOW_JOIN_CHANNEL, config->halow_join_channel);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save HaLow join channel to NVS");
 
     // Save known_network_count
     result = json_config_nvs_write_uint32(NVS_KEY_NETWORK_KNOWN_COUNT, config->known_network_count);
@@ -1470,6 +1489,13 @@ aicam_result_t json_config_set_video_stream_mode(const video_stream_mode_config_
     if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save RTSP password");
 
     LOG_CORE_INFO("Video stream mode configuration saved");
+
+    /* Sync the RAM copy: other save paths (work-mode config full write,
+     * e.g. the pre-sleep save) rewrite these NVS keys from current_config;
+     * without this they would clobber the values just saved above. */
+    if (g_json_config_ctx.initialized) {
+        g_json_config_ctx.current_config.work_mode_config.video_stream_mode = *config;
+    }
     return AICAM_OK;
 }
 
@@ -1724,8 +1750,14 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         json_config_nvs_write_string(NVS_KEY_DEVICE_INFO_SERIAL, config->device_info.serial_number);
 
     result = json_config_nvs_read_string(NVS_KEY_DEVICE_INFO_HW_VER, config->device_info.hardware_version, sizeof(config->device_info.hardware_version));
-    if (result != AICAM_OK)
-        json_config_nvs_write_string(NVS_KEY_DEVICE_INFO_HW_VER, config->device_info.hardware_version);
+    if (result != AICAM_OK || config->device_info.hardware_version[0] == '\0') {
+        /* No factory-written hardware version: report the PE9 board strap band
+         * instead of materializing a default into NVS (a factory write later
+         * still takes precedence). */
+        strncpy(config->device_info.hardware_version, board_hw_version_str(),
+                sizeof(config->device_info.hardware_version) - 1);
+        config->device_info.hardware_version[sizeof(config->device_info.hardware_version) - 1] = '\0';
+    }
 
     // Software version is ALWAYS from compiled FW_VERSION_STRING, not from NVS
     // This ensures version is updated after OTA upgrade
@@ -1939,6 +1971,12 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->device_service.light_config.light_threshold = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_LIGHT_THRESHOLD, config->device_service.light_config.light_threshold);
+
+    result = json_config_nvs_read_bool(NVS_KEY_LIGHT_FILL_STREAMING, &temp_bool);
+    if (result == AICAM_OK)
+        config->device_service.light_config.fill_light_while_streaming = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_LIGHT_FILL_STREAMING, config->device_service.light_config.fill_light_while_streaming);
 
     // Load ISP configuration
     result = json_config_nvs_read_bool(NVS_KEY_ISP_VALID, &temp_bool);
@@ -2209,6 +2247,14 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->network_service.halow_ps_mode = (temp_uint32 != 0U) ? 1U : 0U;
     } else {
         json_config_nvs_write_uint32(NVS_KEY_HALOW_PS_MODE, config->network_service.halow_ps_mode);
+    }
+
+    result = json_config_nvs_read_uint32(NVS_KEY_HALOW_JOIN_CHANNEL, &temp_uint32);
+    if (result == AICAM_OK) {
+        config->network_service.halow_join_channel =
+            (temp_uint32 <= 0xFFU) ? (uint8_t)temp_uint32 : 0U;
+    } else {
+        json_config_nvs_write_uint32(NVS_KEY_HALOW_JOIN_CHANNEL, config->network_service.halow_join_channel);
     }
 
     // Load known_network_count

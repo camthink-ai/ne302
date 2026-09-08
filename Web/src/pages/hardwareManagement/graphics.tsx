@@ -103,32 +103,44 @@ export default function Graphics() {
   const initData = () => (deviceInfo?.camera_module
       ? setConnectionStatus('connected')
       : setConnectionStatus('disconnected'));
-  const initPlayer = async () => {
-    try {
-      setPlayerLoading(true);
-      await startVideoStreamReq();
-      if (!playerRef.current) return;
-      const video = playerRef.current;
-      playerRender = new H264Player(() => {});
-      playerRender.initPlayer(video);
-      playerRender.start(getWebSocketUrl());
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setPlayerLoading(false);
-    }
-  };
+  // Stream lifecycle must NOT depend on `deviceInfo`: the app-level poll
+  // replaces that store object with a new identity every ~10 minutes, and an
+  // effect re-run while the init awaits are in flight leaves the player it
+  // creates on an already-cleaned-up closure - an orphan whose workers and
+  // auto-reconnect keep running (and keep replacing other connections) until
+  // the tab is closed. `cancelled` is re-checked after every await for the
+  // same reason.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       initData();
       await toggleAiReq({ ai_enabled: false });
-      initPlayer();
+      try {
+        setPlayerLoading(true);
+        await startVideoStreamReq();
+        if (cancelled || !playerRef.current) return;
+        const video = playerRef.current;
+        const player = new H264Player(() => {});
+        playerRender = player;
+        player.initPlayer(video);
+        player.start(getWebSocketUrl());
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setPlayerLoading(false);
+      }
     })();
     return () => {
+      cancelled = true;
       playerRender?.destroy();
       playerRender = null;
       stopVideoStreamReq();
     };
+  }, []);
+
+  // Connection label only - cheap, never touches the stream.
+  useEffect(() => {
+    initData();
   }, [deviceInfo]);
 
   const initHardwareInfo = async () => {

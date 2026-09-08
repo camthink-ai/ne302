@@ -19,8 +19,23 @@ TARGET = $(PROJECT_NAME)_App
 MODEL_DIR = ../Model
 BINARY_DIR = Binary
 
-# Local build directory
+# Local build directory. A single dir is guarded by a config stamp: shared
+# sources (mm_shims) compile differently per HALOW_SDK/HALOW_CHIP, and make
+# cannot track flag changes — the stamp check below wipes the directory at
+# parse time whenever the HaLow config changes, so switching trees or chips
+# always produces one clean full build instead of reusing stale objects.
+# (Early ?=s mirror mmx108.mk's defaults so BUILD_DIR resolves before the include.)
+HALOW_SDK ?= mmx108_2_13_1
+HALOW_CHIP ?= mm8108
 BUILD_DIR = build
+
+HALOW_CONFIG_KEY := $(HALOW_SDK):$(HALOW_CHIP)
+ifneq ($(shell cat $(BUILD_DIR)/.halow_config 2>/dev/null),$(HALOW_CONFIG_KEY))
+$(shell rm -rf $(BUILD_DIR) 2>/dev/null)
+$(shell mkdir -p $(BUILD_DIR) 2>/dev/null)
+$(shell echo '$(HALOW_CONFIG_KEY)' > $(BUILD_DIR)/.halow_config 2>/dev/null)
+$(info === HaLow config changed to $(HALOW_CONFIG_KEY): cleaned $(BUILD_DIR) ===)
+endif
 
 ######################################
 # Source Files
@@ -98,6 +113,7 @@ C_SOURCES += ../Custom/Services/Video/video_stream_hub.c
 
 # Custom - Hal
 C_SOURCES += ../Custom/Hal/ai_draw.c
+C_SOURCES += ../Custom/Hal/board_hw.c
 C_SOURCES += ../Custom/Hal/camera.c
 C_SOURCES += ../Custom/Hal/cat1.c
 C_SOURCES += ../Custom/Hal/codec.c

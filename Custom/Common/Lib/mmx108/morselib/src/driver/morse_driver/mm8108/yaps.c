@@ -13,6 +13,7 @@
 
 #include "mmlog.h"
 #include "driver/driver.h"
+#include "driver/health/driver_health.h"
 #include "driver/morse_driver/morse.h"
 #include "driver/morse_driver/ps.h"
 #include "driver/morse_driver/skb_header.h"
@@ -242,6 +243,15 @@ static int morse_yaps_tx(struct morse_yaps *yaps, struct morse_skbq *mq)
     struct mmpkt *pfirst, *pnext;
     struct morse_buff_skb_header *hdr;
 
+    /*
+     * A write_pkt -ENOMEM is normal backpressure for a burst. If it persists
+     * for this long the chip has stopped draining its queues (observed with
+     * PS on: the chip did not wake, status reads come back zeroed so the pool
+     * reads 0 pages while packet slots read free). Demand a health check so
+     * the chip is restarted in seconds instead of wedging every command until
+     * the next periodic check fires.
+     */
+#define MORSE_YAPS_ENOMEM_ESCALATE_MS (3000)
 
     spin_lock(&mq->lock);
     mmpkt = mmpkt_list_peek(&mq->skbq);
@@ -299,6 +309,7 @@ static int morse_yaps_tx(struct morse_yaps *yaps, struct morse_skbq *mq)
 
         if (ret == 0)
         {
+            yaps->enomem_since_ms = 0;
             mmpkt_list_remove(&skbq_to_send, pfirst);
             mmpkt_list_append(&skbq_sent, pfirst);
         }
@@ -307,6 +318,27 @@ static int morse_yaps_tx(struct morse_yaps *yaps, struct morse_skbq *mq)
             MMLOG_ERR("TX skb failed for queue %d with err %d\n", tc_queue, ret);
             mmpkt_list_remove(&skbq_to_send, pfirst);
             mmpkt_list_append(&skbq_failed, pfirst);
+
+            if (ret == -ENOMEM)
+            {
+                uint32_t now = mmosal_get_time_ms();
+                if (yaps->enomem_since_ms == 0)
+                {
+                    yaps->enomem_since_ms = now;
+                }
+                else if (mmosal_time_has_passed(yaps->enomem_since_ms +
+                                               MORSE_YAPS_ENOMEM_ESCALATE_MS))
+                {
+                    MMLOG_ERR("queue %d un-writable for >%u ms, demanding health check\n",
+                              tc_queue,
+                              MORSE_YAPS_ENOMEM_ESCALATE_MS);
+                    /* The chip may just have missed the WAKE edge: try a fresh
+                     * handshake before letting the health check reset it. */
+                    morse_ps_kick_wake(yaps->driverd);
+                    driver_health_demand_check(yaps->driverd);
+                    yaps->enomem_since_ms = now;
+                }
+            }
         }
     }
 
@@ -637,6 +669,7 @@ int morse_yaps_init(struct driver_data *driverd, struct morse_yaps *yaps, uint8_
 
     yaps->driverd = driverd;
     yaps->flags = flags;
+    yaps->enomem_since_ms = 0;
     driverd->chip_if->active_chip_if = MORSE_CHIP_IF_YAPS;
 
     if (yaps->flags & MORSE_CHIP_IF_FLAGS_DATA)

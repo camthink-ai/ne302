@@ -8,6 +8,7 @@
 
 #include "morse.h"
 #include "hw.h"
+#include "driver/morse_driver/ps.h"
 #include "driver/morse_driver/mm6108/pager_if.h"
 #include "driver/beacon/beacon.h"
 #include "driver/health/driver_health.h"
@@ -195,6 +196,9 @@ void morse_hw_pager_update_consec_failure_cnt(struct driver_data *driverd, int r
         if (driverd->pageset_consec_failure_cnt > MAX_CONSEC_FAILURES)
         {
             driverd->pageset_consec_failure_cnt = 0;
+            /* Chip unresponsive: try a fresh WAKE handshake before demanding
+             * a health check (which may hard reset the chip). */
+            morse_ps_kick_wake(driverd);
             driver_health_demand_check(driverd);
         }
     }

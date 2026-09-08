@@ -26,6 +26,7 @@ typedef struct {
 } wake_state_nvs_t;
 
 static aicam_bool_t  s_state_loaded = AICAM_FALSE;
+static aicam_bool_t  s_state_dirty  = AICAM_FALSE;
 static wake_state_nvs_t s_state = { .magic = WAKE_STATE_MAGIC };
 
 static void load_state_if_needed(void)
@@ -334,37 +335,48 @@ int wake_scheduler_due_events(uint64_t from_unix_sec, uint64_t to_unix_sec,
     uint64_t cap_handled = get_handled_at(WAKE_DUTY_CAPTURE);
     uint64_t flu_handled = get_handled_at(WAKE_DUTY_UPLOAD_FLUSH);
 
-    int n = 0;
+    /* One event PER DUTY (the header contract): every consumer only needs to
+     * know whether a duty falls in the window plus one timestamp to mark
+     * handled. Emitting every lattice point starves the second duty once the
+     * first fills the caller's small buffer — e.g. a 1-minute capture
+     * interval keeps >=2 capture events inside the ±60s poll window, the
+     * WAKE_DUTY_MAX-sized buffer filled with capture events alone, and the
+     * flush event was silently dropped: scheduled upload never fired in
+     * full-speed mode. Use the LATEST unfiltered event per duty — the
+     * handled markers are monotonic maxima, so marking the latest suppresses
+     * every earlier one as well. */
+    uint64_t cap_due = 0, flu_due = 0;
 
-    /* Capture events */
     uint64_t cap_times[8];
     int n_cap = collect_capture_in_range(from_unix_sec, to_unix_sec, cap_times, 8);
-    for (int i = 0; i < n_cap && n < max_events; i++) {
+    for (int i = 0; i < n_cap; i++) {
         if (cap_times[i] <= cap_handled) continue;
-        out_events[n].duty = WAKE_DUTY_CAPTURE;
-        out_events[n].due_unix_sec = cap_times[i];
-        n++;
+        if (cap_times[i] > cap_due) cap_due = cap_times[i];
     }
 
-    /* Upload-flush events */
     uint64_t flu_times[8];
     int n_flu = collect_upload_in_range(from_unix_sec, to_unix_sec, flu_times, 8);
-    for (int i = 0; i < n_flu && n < max_events; i++) {
+    for (int i = 0; i < n_flu; i++) {
         if (flu_times[i] <= flu_handled) continue;
-        out_events[n].duty = WAKE_DUTY_UPLOAD_FLUSH;
-        out_events[n].due_unix_sec = flu_times[i];
-        n++;
+        if (flu_times[i] > flu_due) flu_due = flu_times[i];
     }
 
-    /* simple insertion sort by due time (n is small) */
-    for (int i = 1; i < n; i++) {
-        wake_event_t tmp = out_events[i];
-        int j = i - 1;
-        while (j >= 0 && out_events[j].due_unix_sec > tmp.due_unix_sec) {
-            out_events[j + 1] = out_events[j];
-            j--;
-        }
-        out_events[j + 1] = tmp;
+    int n = 0;
+    if (cap_due != 0 && n < max_events) {
+        out_events[n].duty = WAKE_DUTY_CAPTURE;
+        out_events[n].due_unix_sec = cap_due;
+        n++;
+    }
+    if (flu_due != 0 && n < max_events) {
+        out_events[n].duty = WAKE_DUTY_UPLOAD_FLUSH;
+        out_events[n].due_unix_sec = flu_due;
+        n++;
+    }
+    /* keep output sorted by due time (n <= 2) */
+    if (n == 2 && out_events[0].due_unix_sec > out_events[1].due_unix_sec) {
+        wake_event_t tmp = out_events[0];
+        out_events[0] = out_events[1];
+        out_events[1] = tmp;
     }
     return n;
 }
@@ -374,24 +386,59 @@ void wake_scheduler_mark_handled(wake_duty_t duty, uint64_t at_unix_sec)
     load_state_if_needed();
     switch (duty) {
     case WAKE_DUTY_CAPTURE:
-        if (at_unix_sec > s_state.capture_handled_at) s_state.capture_handled_at = at_unix_sec;
+        if (at_unix_sec > s_state.capture_handled_at) {
+            s_state.capture_handled_at = at_unix_sec;
+            s_state_dirty = AICAM_TRUE;
+        }
         break;
     case WAKE_DUTY_UPLOAD_FLUSH:
-        if (at_unix_sec > s_state.flush_handled_at)   s_state.flush_handled_at   = at_unix_sec;
+        if (at_unix_sec > s_state.flush_handled_at) {
+            s_state.flush_handled_at = at_unix_sec;
+            s_state_dirty = AICAM_TRUE;
+        }
         break;
     default: return;
     }
+    /* NVS write is deferred to wake_scheduler_flush_state(): one wake cycle
+     * handles capture + flush, and each persist_state() is an NVS append
+     * (30-byte ate + data, eventually a 4K sector erase) — coalesce the two
+     * marks into a single write. Callers must flush soon after processing,
+     * before any long drain/sleep. */
+}
+
+void wake_scheduler_flush_state(void)
+{
+    if (!s_state_dirty) return;
+    s_state.magic = WAKE_STATE_MAGIC;
     persist_state();
+    s_state_dirty = AICAM_FALSE;
 }
 
 void wake_scheduler_reset_state(void)
 {
+    load_state_if_needed();
+
+    /* Old-scale markers only hurt when they sit AHEAD of the (new) clock -
+     * i.e. the clock stepped backwards: due_events would then suppress every
+     * event until wall time passes the marker (mark_handled never moves
+     * backwards to self-heal), and without persisting the clear, every reboot
+     * reloads the poison marker from NVS. Only that case is worth a flash
+     * write. After a FORWARD step the stale markers are in the past -
+     * harmless - so a persist would just burn one NVS write per cold-boot
+     * first time-sync. */
+    uint64_t now = rtc_get_timeStamp();
+    aicam_bool_t stale_ahead =
+        (s_state.capture_handled_at > now || s_state.flush_handled_at > now);
+
     s_state.magic = WAKE_STATE_MAGIC;
     s_state.capture_handled_at = 0;
     s_state.flush_handled_at = 0;
-    s_state_loaded = AICAM_TRUE;
-    persist_state();
-    LOG_CORE_INFO("wake_scheduler: state reset");
+    s_state_dirty = AICAM_FALSE;   /* drop any pending marks from the old scale */
+
+    if (stale_ahead) {
+        persist_state();
+        LOG_CORE_INFO("wake_scheduler: state reset (stale markers ahead of clock)");
+    }
 }
 
 void wake_scheduler_invalidate(void)

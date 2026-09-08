@@ -2,6 +2,7 @@
 #include "quick_trace.h"
 #include "json_config_internal.h"
 #include "json_config_mgr.h"
+#include "board_hw.h"
 #include "camera.h"
 #include "cmsis_os2.h"
 #include "mem.h"
@@ -1064,8 +1065,13 @@ int quick_storage_read_device_info(qs_device_info_t *device_info)
                                       sizeof(device_info->mac_address));
     (void)qs_nvs_read_string(NVS_KEY_DEVICE_INFO_SERIAL, device_info->serial_number,
                                       sizeof(device_info->serial_number));
-    (void)qs_nvs_read_string(NVS_KEY_DEVICE_INFO_HW_VER, device_info->hardware_version,
-                                      sizeof(device_info->hardware_version));
+    if (qs_nvs_read_string(NVS_KEY_DEVICE_INFO_HW_VER, device_info->hardware_version,
+                           sizeof(device_info->hardware_version)) != AICAM_OK ||
+        device_info->hardware_version[0] == '\0') {
+        /* No factory-written hardware version: fall back to the board strap */
+        strncpy(device_info->hardware_version, board_hw_version_str(),
+                sizeof(device_info->hardware_version) - 1);
+    }
 
     return AICAM_OK;
 }

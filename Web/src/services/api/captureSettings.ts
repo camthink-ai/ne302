@@ -19,7 +19,8 @@ export interface CaptureUploadConfig {
   max_pending_records: number;
   /** 'default' = use system comm-pref (init all netifs); else a specific netif */
   upload_network: 'default' | 'wifi' | 'halow' | 'cellular' | 'poe';
-  /** Compile-time flash record cap (0 = no limit / SD). Exposed for UI display. */
+  /** Total record cap on internal flash, all states combined (16-256, default
+   *  32). User-configurable; only meaningful when storage can land on flash. */
   flash_max_records: number;
 }
 

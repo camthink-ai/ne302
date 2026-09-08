@@ -1,5 +1,6 @@
 #include "driver_core.h"
 #include "debug.h"
+#include "board_hw.h"
 #include "storage.h"
 #include "drtc.h"
 #include "camera.h"
@@ -88,6 +89,12 @@ bool driver_core_init(void)
     LOG_DRV_DEBUG("driver_core_init end \r\n");
     driver_test_main();
     set_slot_boot_success(FIRMWARE_APP, true);
+
+    /* Detect the board revision strap last: the quick-snapshot pipeline is
+     * already registered above, and the osDelay-based sampling yields the
+     * CPU so the capture path is not stalled. */
+    board_hw_init();
+
     return true;
 }
 

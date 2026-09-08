@@ -263,13 +263,6 @@ aicam_result_t device_service_light_set_config(const light_config_t *config);
 aicam_bool_t device_service_light_is_connected(void);
 
 /**
- * @brief Control light manually (for testing)
- * @param enable Enable/disable light
- * @return aicam_result_t Operation result
- */
-aicam_result_t device_service_light_control(aicam_bool_t enable);
-
-/**
  * @brief Set light brightness level
  * @param brightness_level Brightness level (0-100)
  * @return aicam_result_t Operation result

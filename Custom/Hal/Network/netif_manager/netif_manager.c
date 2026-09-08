@@ -20,6 +20,7 @@
 #include "cat1.h"
 #include "ms_modem.h"
 #include "drtc.h"
+#include "wake_scheduler.h"
 #include "iperf_test.h"
 #include "ms_mqtt_client_test.h"
 #include "ms_network_test.h"
@@ -83,8 +84,16 @@ static const char *netif_encryption_str[] = {"default", "no_encryption", "wep", 
 
 void sntp_set_system_time(uint32_t sec)
 {
-    rtc_set_timeStamp(sec);
-    LOG_SIMPLE("NTP: %d s\r\n", sec);
+    /* rtc_set_timeStamp() guards sub-2s steps and re-arms the RTC alarm when
+     * the clock actually moves (see rtc_setup_by_timestamp). On a real step,
+     * drop wake_scheduler's last-handled-at markers — they are on the old
+     * clock scale. reset_state only writes NVS when the step was backwards
+     * (markers ahead of the new clock); forward steps are RAM-only. */
+    LOG_SIMPLE("NTP: %d s (delta %d s)\r\n", sec,
+               (int)((int64_t)sec - (int64_t)(uint32_t)rtc_get_timeStamp()));
+    if (rtc_set_timeStamp(sec)) {
+        wake_scheduler_reset_state();
+    }
 }
 
 void sntp_get_system_time(uint32_t *sec, uint32_t *us)
@@ -101,6 +110,75 @@ static void wireless_scan_callback_func(int recode, wireless_scan_result_t *scan
         nm_print_wireless_scan_result(wireless_scan_cb_if_name, scan_result);
     } else {
         LOG_SIMPLE("wireless scan failed: %d\r\n", recode);
+    }
+}
+
+/* ==================== AP Client Event Subscription ==================== */
+
+#define NM_AP_CLIENT_EVT_SUBSCRIBER_MAX  4
+
+static netif_ap_client_event_cb_t ap_client_event_cbs[NM_AP_CLIENT_EVT_SUBSCRIBER_MAX];
+
+int nm_subscribe_ap_client_event(netif_ap_client_event_cb_t cb)
+{
+    if (cb == NULL) return AICAM_ERROR_INVALID_PARAM;
+    if (netif_manager_mutex == NULL) return AICAM_ERROR_NOT_INITIALIZED;
+
+    osMutexAcquire(netif_manager_mutex, osWaitForever);
+    for (int i = 0; i < NM_AP_CLIENT_EVT_SUBSCRIBER_MAX; i++) {
+        if (ap_client_event_cbs[i] == cb) {
+            osMutexRelease(netif_manager_mutex);
+            return AICAM_OK;  /* already subscribed */
+        }
+    }
+    for (int i = 0; i < NM_AP_CLIENT_EVT_SUBSCRIBER_MAX; i++) {
+        if (ap_client_event_cbs[i] == NULL) {
+            ap_client_event_cbs[i] = cb;
+            osMutexRelease(netif_manager_mutex);
+            return AICAM_OK;
+        }
+    }
+    osMutexRelease(netif_manager_mutex);
+    LOG_DRV_WARN("AP client event subscriber table full (%d)", NM_AP_CLIENT_EVT_SUBSCRIBER_MAX);
+    return AICAM_ERROR_FULL;
+}
+
+int nm_unsubscribe_ap_client_event(netif_ap_client_event_cb_t cb)
+{
+    if (cb == NULL) return AICAM_ERROR_INVALID_PARAM;
+    if (netif_manager_mutex == NULL) return AICAM_ERROR_NOT_INITIALIZED;
+
+    osMutexAcquire(netif_manager_mutex, osWaitForever);
+    for (int i = 0; i < NM_AP_CLIENT_EVT_SUBSCRIBER_MAX; i++) {
+        if (ap_client_event_cbs[i] == cb) {
+            ap_client_event_cbs[i] = NULL;
+            osMutexRelease(netif_manager_mutex);
+            return AICAM_OK;
+        }
+    }
+    osMutexRelease(netif_manager_mutex);
+    return AICAM_ERROR_INVALID_PARAM;  /* not subscribed */
+}
+
+void nm_report_ap_client_event(netif_ap_client_event_t event, const uint8_t mac_addr[6])
+{
+    /* Snapshot under the lock, invoke outside it: subscribers stay free to
+     * call subscribe/unsubscribe from their own context, and a slow callback
+     * never blocks the registry. A callback may fire once more after its
+     * unsubscribe returns — subscribers must tolerate that. */
+    netif_ap_client_event_cb_t snapshot[NM_AP_CLIENT_EVT_SUBSCRIBER_MAX];
+
+    if (mac_addr == NULL) return;
+    if (netif_manager_mutex == NULL) return;
+
+    osMutexAcquire(netif_manager_mutex, osWaitForever);
+    memcpy(snapshot, ap_client_event_cbs, sizeof(snapshot));
+    osMutexRelease(netif_manager_mutex);
+
+    for (int i = 0; i < NM_AP_CLIENT_EVT_SUBSCRIBER_MAX; i++) {
+        if (snapshot[i] != NULL) {
+            snapshot[i](event, mac_addr);
+        }
     }
 }
 
@@ -525,6 +603,23 @@ static int netif_manager_cmd(int argc, char* argv[])
         }
         if (argc > 3) wakeup_mode = (sl_net_wakeup_mode_t)atoi(argv[3]);
         ret = sl_net_netif_romote_wakeup_mode_ctrl(wakeup_mode);
+    } else if (strcmp(argv[2], "nwp_dump") == 0) {
+        // NWP RAM dump: content streams out of the NWP UART pin, not the console.
+        // Capture with Docklight (460800 8N1, HEX); defaults dump the full 672 KB.
+        if (strcmp(if_name, NETIF_NAME_WIFI_STA) && strcmp(if_name, NETIF_NAME_WIFI_AP)) {
+            LOG_SIMPLE("Only wl/ap support nwp_dump cmd\r\n");
+            return -1;
+        }
+        ret = sl_net_nwp_ram_dump((argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 0) : 0,
+                                  (argc > 4) ? (uint32_t)strtoul(argv[4], NULL, 0) : 0);
+    } else if (strcmp(argv[2], "nwp_pc") == 0) {
+        // NWP thread PC (0~3) via RAM-log reads; regs=1 also dumps R0~R15 (R15=SP).
+        // Values stream on the NWP UART as 4-byte LE words; the console maps addresses.
+        if (strcmp(if_name, NETIF_NAME_WIFI_STA) && strcmp(if_name, NETIF_NAME_WIFI_AP)) {
+            LOG_SIMPLE("Only wl/ap support nwp_pc cmd\r\n");
+            return -1;
+        }
+        ret = sl_net_nwp_print_thread_pc((argc > 3) ? (uint8_t)atoi(argv[3]) : 0);
     } else if (strcmp(argv[2], "scan") == 0) {
         if (strcmp(if_name, NETIF_NAME_WIFI_STA) && strcmp(if_name, NETIF_NAME_WIFI_AP)
 #if NETIF_WIFI_HALOW_IS_ENABLE

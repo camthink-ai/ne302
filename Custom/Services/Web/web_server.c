@@ -28,6 +28,7 @@
 #include "api_ota_module.h"
 #include "api_file_module.h"
 #include "web_recovery.h"
+#include "netif_manager.h"
 
 #define WEB_SERVER_STACK_SIZE (1024 * 32)
 #define WEB_SERVER_AP_SLEEP_TIMER_STACK_SIZE (1024 * 8)
@@ -57,6 +58,7 @@
  static aicam_result_t web_server_validate_request(http_handler_context_t* ctx);
  static aicam_result_t web_server_log_request(http_handler_context_t* ctx);
  static char *my_strdup(const char *s);
+ static void web_server_ap_client_event_cb(netif_ap_client_event_t event, const uint8_t mac_addr[6]);
 
  /* ==================== FreeRTOS Task Attributes ==================== */
  static osThreadAttr_t web_server_task_attributes = {
@@ -270,7 +272,19 @@ static void web_conn_forget(struct mg_connection *c)
     if (!g_web_server.ap_sleep_timer_thread) {
         return AICAM_ERROR_SERVICE_INIT;
     }
- 
+
+    /* Subscribe once per boot: AP client association refreshes the sleep
+     * countdown (see web_server_ap_client_event_cb). http_server_start may
+     * run again after a stop cycle; keep the registration, only log retries. */
+    static uint8_t ap_client_evt_subscribed = 0;
+    if (!ap_client_evt_subscribed) {
+        if (nm_subscribe_ap_client_event(web_server_ap_client_event_cb) == AICAM_OK) {
+            ap_client_evt_subscribed = 1;
+        } else {
+            LOG_SVC_ERROR("[WEB_SERVER] AP client event subscribe failed");
+        }
+    }
+
      return AICAM_OK;
  }
  
@@ -461,6 +475,29 @@ aicam_result_t api_response_error(http_handler_context_t* ctx,
     // - When fn_data is the server instance (&g_web_server)
     if (c->fn_data != NULL && c->pfn == NULL &&
         !c->is_listening && c->fn_data != &g_web_server) {
+        /* Streaming mode detached c->pfn, so MG_EV_HTTP_MSG never fires again
+         * and the idle-reaper's last_ms stays at ACCEPT time: a stream that
+         * outlives WEB_CONN_IDLE_TIMEOUT_MS (a ~3.8MB app package at
+         * ~125KB/s) is reaped on its FIRST post-completion poll - before the
+         * queued response can flush, since mg_iotest only asks for POLLOUT
+         * once send.len > 0 - and close_conn() discards the unsent response.
+         * Browser sees a failed XHR (0 B, ~30s) while the burn succeeded.
+         * Refresh on socket-progress events only: MG_EV_POLL fires every
+         * tick for open conns and would neuter the vanished-peer reap. */
+        if (ev == MG_EV_READ || ev == MG_EV_WRITE) {
+            web_conn_touch(c, osKernelGetTickCount());
+            /* Socket progress also keeps the AP sleep timer alive: this
+             * stream never fires MG_EV_HTTP_MSG, so without this a body
+             * transfer longer than the low-power 90 s window is killed by
+             * a mid-flight sleep. */
+            web_server_ap_sleep_timer_reset();
+        }
+        /* Streaming CLOSE returns below before the lifecycle block's
+         * web_conn_forget() - without this the ACCEPT-time entry leaks one
+         * of the 16 table slots per transfer until reaping stops working. */
+        if (ev == MG_EV_CLOSE) {
+            web_conn_forget(c);
+        }
         // use POLL or READ event to drive data write
         // most Mongoose versions will trigger callbacks after POLL or each IO
         if (ota_is_upload_in_progress()) {
@@ -1071,6 +1108,23 @@ static char *my_strdup(const char *s) {
    return copy;
 }
 
+/* ==================== AP Client Event Handling ==================== */
+
+/* Runs in the WiFi driver's event context (see netif_manager.h) — short and
+ * non-blocking only. A station associating with the AP restarts the sleep
+ * countdown so the device cannot fall asleep between the client joining and
+ * its first HTTP request (user connected but has not opened the web UI yet). */
+static void web_server_ap_client_event_cb(netif_ap_client_event_t event,
+                                          const uint8_t mac_addr[6])
+{
+    if (event == NETIF_AP_CLIENT_CONNECTED) {
+        LOG_SVC_INFO("[WEB_SERVER] AP client %02X:%02X:%02X:%02X:%02X:%02X connected, resetting AP sleep timer",
+                     mac_addr[0], mac_addr[1], mac_addr[2],
+                     mac_addr[3], mac_addr[4], mac_addr[5]);
+        web_server_ap_sleep_timer_reset();
+    }
+}
+
 /* ==================== AP Sleep Timer Management Functions ==================== */
 
 aicam_result_t web_server_ap_sleep_timer_init(uint32_t sleep_timeout)
@@ -1092,35 +1146,43 @@ aicam_result_t web_server_ap_sleep_timer_reset(void)
     if (!g_web_server.initialized) {
         return AICAM_ERROR_NOT_INITIALIZED;
     }
-    
-    if (g_web_server.ap_sleep_enabled) {
-        g_web_server.last_request_time = get_relative_timestamp();
-    }
-    
+
+    /* Unconditional: last_request_time is THE web-activity timestamp. It
+     * feeds both the AP sleep countdown and the low-power 90 s web-idle
+     * sleep check, so it must keep refreshing even when the AP sleep
+     * feature is disabled — system sleep is a separate config. */
+    g_web_server.last_request_time = get_relative_timestamp();
+
     return AICAM_OK;
 }
 
 aicam_result_t web_server_ap_sleep_timer_check(void)
 {
-    if (!g_web_server.initialized || !g_web_server.ap_sleep_enabled ) {
-        return AICAM_OK; // Not enabled, no action needed
+    if (!g_web_server.initialized) {
+        return AICAM_OK; // Not initialized, no action needed
     }
-    
+
     uint64_t current_time = get_relative_timestamp();
     uint64_t time_since_last_request = current_time - g_web_server.last_request_time;
 
     //get current power mode
     power_mode_t current_power_mode = system_service_get_current_power_mode();
-    
+
 
     if(time_since_last_request >= 90 && current_power_mode == POWER_MODE_LOW_POWER) {
-        //enter sleep mode
+        //enter sleep mode — system sleep is a SEPARATE config from AP sleep:
+        // it must keep triggering even when the AP sleep feature is disabled
         LOG_SVC_INFO("[WEB_SERVER] AP sleep timeout reached (90s) in low power mode, entering sleep");
         system_service_task_completed();
-        
+
         return AICAM_OK;
     }
-    else if(g_web_server.ap_sleep_timeout == 0) {
+
+    if (!g_web_server.ap_sleep_enabled ) {
+        return AICAM_OK; // AP sleep feature disabled — everything below is AP-sleep behavior only
+    }
+
+    if(g_web_server.ap_sleep_timeout == 0) {
         // no sleep timeout, keep AP running
         return AICAM_OK;
     }

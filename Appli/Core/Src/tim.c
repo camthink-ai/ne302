@@ -133,6 +133,10 @@ void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef* tim_pwmHandle)
 }
 
 /* USER CODE BEGIN 1 */
+/* NE302 uses a different fill-light LED driver than NE301: its output is
+ * stable across the whole duty range, so no minimum-duty remapping is
+ * needed — duty maps linearly onto compare values. */
+
 void MX_TIM3_DeInit(void)
 {
   HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_3);

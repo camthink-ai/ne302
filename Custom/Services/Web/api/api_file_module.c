@@ -448,6 +448,13 @@ static void file_download_event_handler(struct mg_connection *c, int ev, void *e
                 mg_send(c, chunk, (size_t)n);
                 ctx->remaining -= (size_t)n;
                 ctx->sent += (size_t)n;
+                /* Keep the AP sleep timer alive while the body streams: this
+                 * connection was handed off and never fires MG_EV_HTTP_MSG,
+                 * so a download longer than the low-power 90 s window would
+                 * be killed by a mid-flight sleep. Reset only on real
+                 * progress — a vanished peer stops producing chunks and the
+                 * idle timeout still applies. */
+                web_server_ap_sleep_timer_reset();
             } else {
                 c->is_draining = 1;
             }

@@ -114,6 +114,36 @@ static void process_wakeup_jobs(scheduler_t *sched, scheduler_manager_t *mgr)
     wakeup_job_t *job = mgr->wake_jobs;
 
     while (job) {
+        if (job->sched == sched) {
+            /* Backward clock-step heal. A step back (NTP correction, manual
+             * set) leaves next_trigger on the old — ahead — clock scale, up
+             * to |step| in the future, while the catch-up loop below only
+             * walks forward. The job would stay not-due until wall time
+             * reaches the stale point (hours, with a real correction).
+             * Steady state never trips: after every fire next_trigger sits
+             * in (now, now + period]. Pull the due point back instead:
+             *  - INTERVAL: walk back whole intervals (lattice phase kept),
+             *    landing in (now, now + interval].
+             *  - DAILY/WEEKLY: recompute from the new clock, guarded by
+             *    "provably beyond one period" so a legit near value is
+             *    never rewritten (the recompute is idempotent, so even a
+             *    false trip on the weekly far-edge just rewrites the same
+             *    time).
+             * REPEAT_ONCE is skipped on purpose: its wall-clock point is
+             * the intent itself and doesn't go stale with a clock step. */
+            if (job->repeat == REPEAT_INTERVAL) {
+                while (job->interval > 0 &&
+                       job->next_trigger > now + job->interval) {
+                    job->next_trigger -= job->interval;
+                }
+            } else if (job->repeat == REPEAT_DAILY &&
+                       job->next_trigger > now + 86400u) {
+                job->next_trigger = calculate_wakeup_trigger(job, now);
+            } else if (job->repeat == REPEAT_WEEKLY &&
+                       job->next_trigger > now + 7u * 86400u) {
+                job->next_trigger = calculate_wakeup_trigger(job, now);
+            }
+        }
         if (job->sched == sched && job->next_trigger <= now) {
             if (job->repeat == REPEAT_ONCE) {
                 // Remove from list BEFORE callback so the callback can safely

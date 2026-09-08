@@ -25,9 +25,9 @@ export interface PhotoCaptureReq {
 }
 
 export interface RtmpConfigReq {
-  url: string;
-  stream_key: string;
-  enabled: boolean;
+  enable?: boolean;
+  url?: string;
+  stream_key?: string;
 }
 export interface RtmpStartReq {
   url?: string;
