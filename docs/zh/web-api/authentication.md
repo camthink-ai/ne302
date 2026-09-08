@@ -2,7 +2,7 @@
 
 ## 认证模型
 
-NE301 使用单用户（`admin`）模型：
+NE302 使用单用户（`admin`）模型：
 
 - **`POST /api/v1/login`**：前端管理界面使用的登录接口，请求体为 `{"password": "..."}`，校验通过仅表示密码正确（用于前端路由判断），不会签发 token。
 - **HTTP Basic Auth**：所有 `require_auth = true` 的接口在请求头中直接校验凭据：

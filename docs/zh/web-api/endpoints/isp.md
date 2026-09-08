@@ -8,7 +8,7 @@ title: 图像调优 (ISP) 端点参考
 
 图像效果参数的读取与设置
 
-源文件: [`Custom/Services/Web/api/api_isp_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_isp_module.c)
+源文件: [`Custom/Services/Web/api/api_isp_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_isp_module.c)
 
 共 **35** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

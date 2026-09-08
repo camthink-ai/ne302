@@ -8,9 +8,9 @@ title: 网络管理 端点参考
 
 WiFi / 蜂窝 / PoE 网络配置与状态
 
-源文件: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_network_module.c)
+源文件: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_network_module.c)
 
-共 **34** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
+共 **47** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 
 | 方法 | 路径 | 鉴权 | 处理函数 |
 |------|------|:----:|----------|
@@ -21,6 +21,19 @@ WiFi / 蜂窝 / PoE 网络配置与状态
 | `POST` | `/api/v1/system/network/wifi/scan` | ✅ | `network_scan_refresh_handler` |
 | `POST` | `/api/v1/system/network/wifi/disconnect` | ✅ | `network_disconnect_handler` |
 | `POST` | `/api/v1/system/network/wifi/delete` | ✅ | `network_delete_known_handler` |
+| `GET` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_get_handler` |
+| `PUT` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_set_handler` |
+| `GET` | `/api/v1/system/network/halow/sta` | ✅ | `network_halow_sta_handler` |
+| `GET` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_get_handler` |
+| `PUT` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_set_handler` |
+| `POST` | `/api/v1/system/network/halow/scan` | ✅ | `network_halow_scan_handler` |
+| `POST` | `/api/v1/system/network/halow` | ✅ | `network_halow_connect_handler` |
+| `POST` | `/api/v1/system/network/halow/disconnect` | ✅ | `network_halow_disconnect_handler` |
+| `POST` | `/api/v1/system/network/halow/delete` | ✅ | `network_halow_delete_handler` |
+| `GET` | `/api/v1/system/network/halow/ip` | ✅ | `network_halow_ip_handler` |
+| `POST` | `/api/v1/system/network/halow/ip` | ✅ | `network_halow_ip_handler` |
+| `GET` | `/api/v1/system/network/halow/radio` | ✅ | `network_halow_radio_handler` |
+| `PUT` | `/api/v1/system/network/halow/radio` | ✅ | `network_halow_radio_handler` |
 | `POST` | `/api/v1/system/network/wifi` | ✅ | `network_wifi_config_handler` |
 | `POST` | `/api/v1/system/network/scan` | ✅ | `network_scan_refresh_handler` |
 | `POST` | `/api/v1/system/network/disconnect` | ✅ | `network_disconnect_handler` |

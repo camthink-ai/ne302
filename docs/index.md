@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: NE301
+  name: NE302
   text: AI Camera Firmware & Web API Docs
   tagline: STM32N6 edge AI camera · firmware build, Web API and frontend integration reference
   actions:
@@ -14,7 +14,7 @@ hero:
       link: /zh/
     - theme: alt
       text: GitHub
-      link: https://github.com/camthink-ai/ne301
+      link: https://github.com/camthink-ai/ne302
 
 features:
   - icon: 📡

@@ -8,7 +8,7 @@ title: Webhook Endpoints
 
 Event callback notification configuration
 
-Source: [`Custom/Services/Web/api/api_webhook_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_webhook_module.c)
+Source: [`Custom/Services/Web/api/api_webhook_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_webhook_module.c)
 
 **6** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

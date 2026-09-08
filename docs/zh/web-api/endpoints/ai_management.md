@@ -8,7 +8,7 @@ title: AI 模型管理 端点参考
 
 AI 模型的上传、切换与推理配置
 
-源文件: [`Custom/Services/Web/api/api_ai_management_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_ai_management_module.c)
+源文件: [`Custom/Services/Web/api/api_ai_management_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_ai_management_module.c)
 
 共 **6** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

@@ -8,7 +8,7 @@ title: 模型校验 端点参考
 
 AI 模型包的校验与验证
 
-源文件: [`Custom/Services/Web/api/api_model_validation_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_model_validation_module.c)
+源文件: [`Custom/Services/Web/api/api_model_validation_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_model_validation_module.c)
 
 共 **2** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

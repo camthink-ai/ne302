@@ -8,7 +8,7 @@ title: RTSP Streaming Endpoints
 
 RTSP pull-stream service management
 
-Source: [`Custom/Services/Web/api/api_rtsp_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_rtsp_module.c)
+Source: [`Custom/Services/Web/api/api_rtsp_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_rtsp_module.c)
 
 **5** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

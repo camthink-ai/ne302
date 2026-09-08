@@ -16,7 +16,7 @@
 
 ## 文档维护与同步机制
 
-文档站使用 [VitePress](https://vitepress.dev/)，本地开发与构建方式见 [docs/README.md](https://github.com/camthink-ai/ne301/blob/main/docs/README.md)。
+文档站使用 [VitePress](https://vitepress.dev/)，本地开发与构建方式见 [docs/README.md](https://github.com/camthink-ai/ne302/blob/main/docs/README.md)。
 
 **Web API 端点参考是自动生成的**：脚本扫描 `Custom/Services/Web/api/*.c` 中的路由注册表，生成 `docs/web-api/endpoints/` 下的页面。因此：
 

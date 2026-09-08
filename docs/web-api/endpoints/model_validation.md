@@ -8,7 +8,7 @@ title: Model Validation Endpoints
 
 AI model package validation
 
-Source: [`Custom/Services/Web/api/api_model_validation_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_model_validation_module.c)
+Source: [`Custom/Services/Web/api/api_model_validation_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_model_validation_module.c)
 
 **2** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

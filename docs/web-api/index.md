@@ -1,6 +1,6 @@
 # Web API Overview
 
-The NE301 device embeds an HTTP server exposing a complete RESTful API for device configuration, status queries and streaming control. The bundled web UI (`Web/`) is built on top of these APIs.
+The NE302 device embeds an HTTP server exposing a complete RESTful API for device configuration, status queries and streaming control. The bundled web UI (`Web/`) is built on top of these APIs.
 
 ## Basics
 

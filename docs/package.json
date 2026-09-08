@@ -1,5 +1,5 @@
 {
-  "name": "ne301-docs",
+  "name": "ne302-docs",
   "private": true,
   "scripts": {
     "dev": "vitepress dev",

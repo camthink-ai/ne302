@@ -8,7 +8,7 @@ title: ISP Tuning Endpoints
 
 Image quality parameter get/set
 
-Source: [`Custom/Services/Web/api/api_isp_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_isp_module.c)
+Source: [`Custom/Services/Web/api/api_isp_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_isp_module.c)
 
 **35** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

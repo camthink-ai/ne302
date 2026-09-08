@@ -8,7 +8,7 @@ title: 预览流 端点参考
 
 摄像头实时预览控制
 
-源文件: [`Custom/Services/Web/api/api_preview_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_preview_module.c)
+源文件: [`Custom/Services/Web/api/api_preview_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_preview_module.c)
 
 共 **3** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

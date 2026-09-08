@@ -11,10 +11,10 @@ import { resolve } from 'node:path'
 //
 // withMermaid：启用 mermaid 代码块渲染（```mermaid -> 图表）
 export default withMermaid(defineConfig({
-  // 部署在 https://camthink-ai.github.io/ne301/ 子路径下
-  base: '/ne301/',
-  title: 'NE301',
-  description: 'NE301 AI camera firmware and Web API documentation',
+  // 部署在 https://camthink-ai.github.io/ne302/ 子路径下
+  base: '/ne302/',
+  title: 'NE302',
+  description: 'NE302 AI camera firmware and Web API documentation',
   lang: 'en-US',
 
   // 内部调试/工作记录与维护说明不发布到公开站点
@@ -32,7 +32,7 @@ export default withMermaid(defineConfig({
           { text: 'Home', link: '/' },
           { text: 'Web API', link: '/web-api/', activeMatch: '/web-api/' },
           { text: 'More Docs', link: '/misc/', activeMatch: '/misc|/api/|/design/' },
-          { text: 'GitHub', link: 'https://github.com/camthink-ai/ne301' },
+          { text: 'GitHub', link: 'https://github.com/camthink-ai/ne302' },
         ],
         sidebar: {
           '/web-api/': [
@@ -83,7 +83,7 @@ export default withMermaid(defineConfig({
           { text: '首页', link: '/zh/' },
           { text: 'Web API', link: '/zh/web-api/', activeMatch: '/zh/web-api/' },
           { text: '其他文档', link: '/zh/misc/', activeMatch: '/zh/misc|/api/|/design/' },
-          { text: 'GitHub', link: 'https://github.com/camthink-ai/ne301' },
+          { text: 'GitHub', link: 'https://github.com/camthink-ai/ne302' },
         ],
         sidebar: {
           '/zh/web-api/': [
@@ -127,17 +127,17 @@ export default withMermaid(defineConfig({
     },
   },
 
-  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ne301/logo.svg' }]],
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/ne302/logo.svg' }]],
 
   // 各语言共用的主题选项；语言相关内容在上面 locales.<key>.themeConfig
   themeConfig: {
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/camthink-ai/ne301' },
+      { icon: 'github', link: 'https://github.com/camthink-ai/ne302' },
     ],
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2026 NE301 Contributors',
+      copyright: 'Copyright © 2026 NE302 Contributors',
     },
 
     search: {

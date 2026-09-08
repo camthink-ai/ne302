@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: NE301
+  name: NE302
   text: AI 摄像头固件与 Web API 文档
   tagline: STM32N6 边缘 AI 摄像头 · 固件构建、Web API 与前端集成参考
   actions:
@@ -11,7 +11,7 @@ hero:
       link: /zh/web-api/
     - theme: alt
       text: GitHub
-      link: https://github.com/camthink-ai/ne301
+      link: https://github.com/camthink-ai/ne302
 
 features:
   - icon: 📡

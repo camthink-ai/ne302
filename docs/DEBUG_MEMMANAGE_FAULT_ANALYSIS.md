@@ -69,7 +69,7 @@ void MemManage_Handler(void)
 通过 `arm-none-eabi-addr2line` 解析 LR 地址：
 
 ```bash
-$ arm-none-eabi-addr2line -e build/ne301_App.elf -f -C 0x90085997
+$ arm-none-eabi-addr2line -e build/ne302_App.elf -f -C 0x90085997
 mg_call
 mongoose.c:518
 ```
@@ -176,22 +176,22 @@ void* buffer_calloc(size_t count, size_t size)
 
 ### 1. 查看函数地址对应的源码
 ```bash
-arm-none-eabi-addr2line -e build/ne301_App.elf -f -C <address>
+arm-none-eabi-addr2line -e build/ne302_App.elf -f -C <address>
 ```
 
 ### 2. 查看符号表
 ```bash
-arm-none-eabi-nm build/ne301_App.elf | grep <symbol>
+arm-none-eabi-nm build/ne302_App.elf | grep <symbol>
 ```
 
 ### 3. 反汇编查看函数实现
 ```bash
-arm-none-eabi-objdump -d build/ne301_App.elf | grep -A 20 "<function_name>:"
+arm-none-eabi-objdump -d build/ne302_App.elf | grep -A 20 "<function_name>:"
 ```
 
 ### 4. 查看内存段使用情况
 ```bash
-arm-none-eabi-size build/ne301_App.elf
+arm-none-eabi-size build/ne302_App.elf
 ```
 
 ### 5. 比较 map 文件

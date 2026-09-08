@@ -8,7 +8,7 @@ title: MQTT Endpoints
 
 MQTT connection configuration and status
 
-Source: [`Custom/Services/Web/api/api_mqtt_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_mqtt_module.c)
+Source: [`Custom/Services/Web/api/api_mqtt_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_mqtt_module.c)
 
 **8** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

@@ -8,7 +8,7 @@ title: RTMP 推流 端点参考
 
 RTMP 推流配置与控制
 
-源文件: [`Custom/Services/Web/api/api_rtmp_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_rtmp_module.c)
+源文件: [`Custom/Services/Web/api/api_rtmp_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_rtmp_module.c)
 
 共 **5** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

@@ -184,7 +184,7 @@ title: {title} Endpoints
 
 {desc}
 
-Source: [`Custom/Services/Web/api/{src_file}`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/{src_file})
+Source: [`Custom/Services/Web/api/{src_file}`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/{src_file})
 
 **{len(routes)}** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 
@@ -205,7 +205,7 @@ title: {title} 端点参考
 
 {desc}
 
-源文件: [`Custom/Services/Web/api/{src_file}`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/{src_file})
+源文件: [`Custom/Services/Web/api/{src_file}`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/{src_file})
 
 共 **{len(routes)}** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

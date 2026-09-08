@@ -8,7 +8,7 @@ title: Webhook 端点参考
 
 事件回调通知配置
 
-源文件: [`Custom/Services/Web/api/api_webhook_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_webhook_module.c)
+源文件: [`Custom/Services/Web/api/api_webhook_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_webhook_module.c)
 
 共 **6** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

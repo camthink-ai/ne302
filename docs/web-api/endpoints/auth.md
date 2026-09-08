@@ -8,7 +8,7 @@ title: Authentication Endpoints
 
 Device login and password management
 
-Source: [`Custom/Services/Web/api/api_auth_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_auth_module.c)
+Source: [`Custom/Services/Web/api/api_auth_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_auth_module.c)
 
 **2** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

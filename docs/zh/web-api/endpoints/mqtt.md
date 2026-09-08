@@ -8,7 +8,7 @@ title: MQTT 端点参考
 
 MQTT 连接配置与状态
 
-源文件: [`Custom/Services/Web/api/api_mqtt_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_mqtt_module.c)
+源文件: [`Custom/Services/Web/api/api_mqtt_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_mqtt_module.c)
 
 共 **8** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

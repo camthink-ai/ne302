@@ -1,8 +1,8 @@
-# NE301 文档站
+# NE302 文档站
 
 基于 [VitePress](https://vitepress.dev/) 的双语文档站（**默认英文**，中文在 `/zh/`，
 导航栏可切换），通过 GitHub Actions 部署到
-GitHub Pages：<https://camthink-ai.github.io/ne301/>
+GitHub Pages：<https://camthink-ai.github.io/ne302/>
 
 ## 目录结构
 
@@ -34,7 +34,7 @@ docs/
 ```bash
 cd docs
 npm install
-npm run dev        # http://localhost:5173/ne301/
+npm run dev        # http://localhost:5173/ne302/
 ```
 
 ## Web API 端点参考的自动生成
@@ -43,7 +43,7 @@ npm run dev        # http://localhost:5173/ne301/
 页面由 `Script/gen_web_api_docs.py` 扫描固件源码 `Custom/Services/Web/api/*.c`
 中的路由注册表自动生成，包含每个端点的方法、路径、鉴权要求与处理函数，
 同时输出 `manifest.json` 供程序化使用（线上副本：
-`/ne301/web-api/endpoints-manifest.json`）。模块在上游删除后，其旧端点页会被
+`/ne302/web-api/endpoints-manifest.json`）。模块在上游删除后，其旧端点页会被
 自动清理，不会残留。
 
 **修改 Web API 代码后必须同步文档**：

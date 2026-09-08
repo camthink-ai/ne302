@@ -8,7 +8,7 @@ title: RTMP Streaming Endpoints
 
 RTMP stream configuration and control
 
-Source: [`Custom/Services/Web/api/api_rtmp_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_rtmp_module.c)
+Source: [`Custom/Services/Web/api/api_rtmp_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_rtmp_module.c)
 
 **5** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 

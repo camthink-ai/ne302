@@ -8,7 +8,7 @@ title: 工作模式 端点参考
 
 设备工作模式与联动策略
 
-源文件: [`Custom/Services/Web/api/api_work_mode_module.c`](https://github.com/camthink-ai/ne301/blob/main/Custom/Services/Web/api/api_work_mode_module.c)
+源文件: [`Custom/Services/Web/api/api_work_mode_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_work_mode_module.c)
 
 共 **9** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 

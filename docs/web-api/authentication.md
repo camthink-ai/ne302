@@ -2,7 +2,7 @@
 
 ## Auth Model
 
-NE301 uses a single-user (`admin`) model:
+NE302 uses a single-user (`admin`) model:
 
 - **`POST /api/v1/login`**: the login endpoint used by the web UI. The request body is `{"password": "..."}`; a successful response only means the password is correct (used for frontend routing) — no token is issued.
 - **HTTP Basic Auth**: every endpoint with `require_auth = true` validates credentials directly from the request header:

@@ -17,7 +17,7 @@ This site is deployed on GitHub Pages from the `docs/` directory of the reposito
 
 ## Maintenance & Sync Mechanism
 
-The site is built with [VitePress](https://vitepress.dev/). See [docs/README.md](https://github.com/camthink-ai/ne301/blob/main/docs/README.md) for local development and build instructions. The site is bilingual — English is the default at the root path, 简体中文 lives under [`/zh/`](/zh/).
+The site is built with [VitePress](https://vitepress.dev/). See [docs/README.md](https://github.com/camthink-ai/ne302/blob/main/docs/README.md) for local development and build instructions. The site is bilingual — English is the default at the root path, 简体中文 lives under [`/zh/`](/zh/).
 
 **The Web API endpoint reference is auto-generated**: the script scans the route registration tables in `Custom/Services/Web/api/*.c` and produces the pages under `web-api/endpoints/` (both languages). Therefore:
 
