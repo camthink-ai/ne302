@@ -266,6 +266,11 @@ export default function CaptureConfig() {
                     </SelectContent>
                   </Select>
                 </div>
+                {policy === 'stop' && (
+                  <div className="rounded bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                    {i18n._('sys.capture_settings.policy_stop_hint')}
+                  </div>
+                )}
                 <Separator />
 
                 {/* storage AI — moved here from camera params; hidden when storage=none */}

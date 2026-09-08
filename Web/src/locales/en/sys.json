@@ -743,6 +743,7 @@
       "policy": "Storage Policy",
       "policy_wrap": "Wrap (oldest first)",
       "policy_stop": "Stop when full",
+      "policy_stop_hint": "⚠ Stop when full: once full, instant mode still uploads directly (nothing saved); batch/scheduled captures fail until expired sent records are auto-purged to free space. Retention-based cleanup is unaffected by this policy; to keep every record forever, set the retention below to 72000.",
       "flash_limit_auto_wrap": "⚠ Without an SD card, records go to internal flash: once the TOTAL across all categories (pending/sent/failed/local) reaches {max}, the oldest records are deleted automatically; when space runs low, oldest records are deleted even below the limit. Adjust the limit below; insert an SD card to remove this limit.",
       "flash_limit_auto_stop": "⚠ Without an SD card, records go to internal flash: once the TOTAL across all categories (pending/sent/failed/local) reaches {max}, new captures are rejected. Adjust the limit below; insert an SD card to remove this limit.",
       "flash_limit_flash_wrap": "⚠ Internal flash: once the TOTAL across all categories (pending/sent/failed/local) reaches {max}, the oldest records are deleted automatically; when space runs low, oldest records are deleted even below the limit. Adjust the limit below; switch to SD card to remove this limit.",

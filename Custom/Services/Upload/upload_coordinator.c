@@ -12,7 +12,7 @@
  *
  * Record STATE (pending/sent/failed/local) lives ONLY in the manifest, NOT in
  * the directory path - the metadata .json never moves between state directories.
- * State transitions append a new 32-byte entry to the day's manifest; the
+ * State transitions append a new 36-byte entry to the day's manifest; the
  * current state of a record is its latest non-tombstone entry. This makes
  * count/list O(days) file reads instead of O(records) opendir, and eliminates
  * expensive LittleFS renames on every upload. The .json retains a `state`
@@ -1786,6 +1786,20 @@ static aicam_result_t purge_old_sent(FS_Type_t fs)
     return AICAM_OK;
 }
 
+/* STOP-policy rejection (storage full / flash count cap / persist failed):
+ * best-effort retention purge before failing the capture. Without this,
+ * BATCH deadlocks - rejected captures never grow pending to the batch
+ * threshold, so no flush (and no purge inside it) ever runs, and the
+ * volume stays full forever. One bounded sweep of expired SENT records
+ * (date-range pruned); the freed space or record count lets the NEXT
+ * capture through - at most one capture is lost at the boundary. With
+ * keep-forever retention this is a no-op: pure reject, as configured.
+ * SCHEDULED also purges at its upload nodes; INSTANT never needs storage. */
+static void stop_reject_purge_sent(FS_Type_t fs)
+{
+    (void)purge_old_sent(fs);
+}
+
 /* ==================== Orphan sweep (manifest-less files) ==================== */
 
 /* Cursor for the incremental orphan sweep: walks data/<date>/<hour> dirs
@@ -2483,7 +2497,7 @@ typedef struct {
 
 /* Visitor: collect record ids into an array. Used by do_flush_pass to snapshot
  * pending ids before publishing - iterate_records traverses date subdirs
- * (direct readdir of /captures/pending only returns date dirs, not .json). */
+ * (direct readdir of /captures/meta only returns date dirs, not .json). */
 typedef struct { char (*ids)[64]; uint32_t n; uint32_t cap; } collect_ctx_t;
 static aicam_result_t collect_visitor(FS_Type_t fs, const char *id, void *user)
 {
@@ -3315,6 +3329,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
                 UPLOAD_LOG("storage_full + STOP - INSTANT fast-path, direct publish\r\n");
                 return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in, ai_result);
             }
+            stop_reject_purge_sent(fs);
             return AICAM_ERROR_NO_MEMORY;
         }
     }
@@ -3359,6 +3374,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
                 if (mode == CAPTURE_MODE_INSTANT) {
                     return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in, ai_result);
                 }
+                stop_reject_purge_sent(fs);
                 return AICAM_ERROR_NO_MEMORY;
             }
         }
@@ -3391,6 +3407,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
                 UPLOAD_LOG("storage full - INSTANT fallback to direct publish\r\n");
                 return direct_publish_capture(jpeg_buffer, jpeg_size, meta_in, ai_result);
             }
+            stop_reject_purge_sent(fs);
             return AICAM_ERROR_NO_MEMORY;
         }
     }

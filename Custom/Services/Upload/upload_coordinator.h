@@ -2,8 +2,12 @@
  * @file upload_coordinator.h
  * @brief Capture-record persistence, mode dispatch, retry, and cleanup.
  *
- * Owns the on-disk /captures/ tree (pending/sent/failed/local/data subdirs) on
- * whichever filesystem the user has chosen (auto/flash/sd/none). After a
+ * Owns the on-disk /captures/ tree on whichever filesystem the user has chosen
+ * (auto/flash/sd/none). Layout: meta/<date>/<hour>/cap_*.json (metadata - the
+ * record state pending/sent/failed/local is a field in this file, records are
+ * never moved between directories), data/<date>/<hour>/cap_*_{p,i,a} (payload
+ * files), and index/<date>.idx (append-only daily manifest with tombstones -
+ * the source of truth for enumeration, rebuilt from meta/ if lost). After a
  * capture completes the system_service hands the JPEG buffer here; the
  * coordinator persists it, attaches metadata, and dispatches according to
  * capture_upload_config_t.mode:
