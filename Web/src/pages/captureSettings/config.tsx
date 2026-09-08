@@ -317,6 +317,9 @@ export default function CaptureConfig() {
                     </SelectContent>
                   </Select>
                 </div>
+                <p className="text-xs text-gray-500">
+                  {i18n._('sys.capture_settings.upload_net_hint')}
+                </p>
                 <Separator />
 
                 {isBatch && (

@@ -754,7 +754,7 @@
       "proto_webhook": "WebHook",
       "upload_network": "Upload Network",
       "upload_net_default": "Default (follow comm type)",
-      "upload_net_hint": "On wake-capture, only the selected netif is initialized; Default keeps current behavior (multi-netif by priority)",
+      "upload_net_hint": "Applies only to low-power wake captures: on wake, only the network selected here is brought up (Default initializes by comm-type priority) - make sure it is already configured in its settings page. Captures taken while the device is running still use the system's current network connection.",
       "batch_count": "Batch Threshold",
       "schedule_minutes": "Upload Schedule",
       "schedule_hint": "At each scheduled time, the device wakes and uploads all pending images.",
