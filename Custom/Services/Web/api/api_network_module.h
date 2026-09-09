@@ -37,6 +37,13 @@ aicam_result_t network_status_handler(http_handler_context_t *ctx);
 aicam_result_t network_wifi_sta_handler(http_handler_context_t *ctx);
 
 /**
+ * @brief WiFi STA detailed info handler
+ * @param ctx HTTP request context
+ * @return Operation result
+ */
+aicam_result_t network_wifi_info_handler(http_handler_context_t *ctx);
+
+/**
  * @brief WiFi AP (Hotspot) config handler
  * @param ctx HTTP request context
  * @return Operation result

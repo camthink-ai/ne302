@@ -87,6 +87,7 @@ const systemSettings = {
     disconnectWifi: (data: { interface: string }) => request.post('/api/v1/system/network/wifi/disconnect', data),
     getWifiRegionReq: () => request.get('/api/v1/system/network/wifi/region'),
     setWifiRegionReq: (data: { region: string }) => request.put('/api/v1/system/network/wifi/region', data),
+    getWifiInfoReq: () => request.get('/api/v1/system/network/wifi/info'),
 
     // cellular
     getCellularStatusReq: () => request.get('/api/v1/system/network/cellular/status'),

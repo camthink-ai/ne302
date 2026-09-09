@@ -58,6 +58,14 @@ function canPreviewImage(name: string, size: number): boolean {
 
 function isEditableFile(name: string): boolean { return isTextFile(name); }
 
+/* Capture records (/captures on either volume) are owned by the upload
+ * service — the file browser exposes them read-only: no upload/delete/
+ * edit/rename/create. Records are managed from the Capture Records page. */
+function isInCaptures(path: string): boolean {
+  const p = path.toLowerCase();
+  return p === '/captures' || p.startsWith('/captures/');
+}
+
 function getFileIcon(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase();
   if (['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'ico'].includes(ext || '')) return '🖼️';
@@ -215,6 +223,14 @@ function FileBrowserModal({ fsType, onClose, availableMB, onStorageChange }: { f
 
   const fullPath = (name: string) => (currentPath === '/' ? `/${name}` : `${currentPath}/${name}`);
 
+  const inCaptures = isInCaptures(currentPath);
+
+  /* Service-owned entries must stay locked even when listed from the volume
+   * root: deleting/renaming the captures dir itself would wipe the whole
+   * tree. Covers both the root-level /captures entry and everything inside. */
+  const entryLocked = (name: string) => isInCaptures(fullPath(name));
+  const selectableEntries = entries.filter((e) => !entryLocked(e.name));
+
   // preview
   const handlePreview = async (entry: FileEntry) => {
     if (isImageFile(entry.name) && !canPreviewImage(entry.name, entry.size)) {
@@ -254,6 +270,7 @@ function FileBrowserModal({ fsType, onClose, availableMB, onStorageChange }: { f
 
   // edit
   const handleEdit = async (entry: FileEntry) => {
+    if (entryLocked(entry.name)) { toast.error(t('captures_readonly')); return; }
     const fp = fullPath(entry.name);
     try {
       const res = await fileManagement.preview(fsType, fp, false);
@@ -266,6 +283,7 @@ function FileBrowserModal({ fsType, onClose, availableMB, onStorageChange }: { f
 
   const handleSaveEdit = async () => {
     if (!editFile) return;
+    if (inCaptures) { toast.error(t('captures_readonly')); return; }
     setEditSaving(true);
     try {
       await fileManagement.edit(fsType, fullPath(editFile), editContent);
@@ -308,6 +326,7 @@ fp,
 
   // delete
   const handleDeleteClick = (entry: FileEntry) => {
+    if (entryLocked(entry.name)) { toast.error(t('captures_readonly')); return; }
     setDeleteTarget({ name: entry.name, path: fullPath(entry.name), isDir: entry.type === 'dir' });
     setDeleteInput('');
   };
@@ -330,6 +349,7 @@ fp,
 
   const handleBatchDelete = async () => {
     if (selected.size === 0) return;
+    if (Array.from(selected).some((n) => entryLocked(n))) { toast.error(t('captures_readonly')); return; }
     const toDelete = Array.from(selected);
     setBatchDeleting(true);
     setDeleting(true);
@@ -358,6 +378,7 @@ fp,
 
   // rename
   const handleRenameClick = (entry: FileEntry) => {
+    if (entryLocked(entry.name)) { toast.error(t('captures_readonly')); return; }
     const fp = fullPath(entry.name);
     setRenameTarget({ name: entry.name, path: fp });
     setRenameInput(entry.name);
@@ -379,6 +400,11 @@ fp,
   // upload
   const handleUpload = async (e: Event) => {
     const input = e.target as HTMLInputElement;
+    if (inCaptures) {
+      input.value = '';
+      toast.error(t('captures_readonly'));
+      return;
+    }
     const files = input?.files;
     if (!files?.length) return;
 
@@ -426,6 +452,7 @@ file,
   // create
   const handleCreate = async () => {
     if (!createDialog || !createName.trim()) return;
+    if (inCaptures) { toast.error(t('captures_readonly')); return; }
     setCreating(true);
     try {
       await fileManagement.create(fsType, currentPath, createName.trim(), createDialog.type);
@@ -439,6 +466,7 @@ file,
 
   // format flash with password verification
   const handleFormatClick = () => {
+    if (inCaptures) { toast.error(t('captures_readonly')); return; }
     setFormatPassword('');
     setFormatPasswordError('');
     setFormatDialogOpen(true);
@@ -521,29 +549,33 @@ file,
             onChange={handleUpload}
             disabled={uploading}
           />
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            📤 {t('upload')}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => { setCreateDialog({ type: 'dir' }); setCreateName(''); }}
-          >
-            📁 {t('new_folder')}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => { setCreateDialog({ type: 'file' }); setCreateName(''); }}
-          >
-            📄 {t('new_file')}
-          </Button>
-          {selected.size > 0 && (
+          {!inCaptures && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                📤 {t('upload')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => { setCreateDialog({ type: 'dir' }); setCreateName(''); }}
+              >
+                📁 {t('new_folder')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => { setCreateDialog({ type: 'file' }); setCreateName(''); }}
+              >
+                📄 {t('new_file')}
+              </Button>
+            </>
+          )}
+          {selected.size > 0 && !inCaptures && (
             <Button
               size="sm"
               variant="destructive"
@@ -553,7 +585,7 @@ file,
             </Button>
           )}
           <div className="flex-1" />
-          {fsType === 'flash' && (
+          {fsType === 'flash' && !inCaptures && (
             <Button
               size="sm"
               variant="outline"
@@ -583,6 +615,13 @@ file,
           )}
         </div>
 
+        {/* Captures read-only banner */}
+        {inCaptures && (
+          <div className="mx-4 my-2 rounded bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            {t('captures_readonly')}
+          </div>
+        )}
+
         {/* File list */}
         <div className="flex-1 overflow-auto min-h-0 pb-4">
           {loading && entries.length === 0 ? (
@@ -594,16 +633,18 @@ file,
               <thead className="sticky top-0 bg-gray-50 z-10">
                 <tr className="border-b text-left text-gray-500">
                   <th className="py-2 pl-3 w-8">
-                    <input
-                      type="checkbox"
-                      className="w-3.5 h-3.5 accent-blue-600 cursor-pointer"
-                      aria-label={t('select_all')}
-                      checked={selected.size === entries.length && entries.length > 0}
-                      onChange={() => {
-                             if (selected.size === entries.length) setSelected(new Set());
-                             else setSelected(new Set(entries.map(e => e.name)));
+                    {!inCaptures && (
+                      <input
+                        type="checkbox"
+                        className="w-3.5 h-3.5 accent-blue-600 cursor-pointer"
+                        aria-label={t('select_all')}
+                        checked={selected.size === selectableEntries.length && selectableEntries.length > 0}
+                        onChange={() => {
+                             if (selected.size === selectableEntries.length) setSelected(new Set());
+                             else setSelected(new Set(selectableEntries.map(e => e.name)));
                            }}
-                    />
+                      />
+                    )}
                   </th>
                   <th className="py-2 w-8" aria-hidden="true" />
                   <th className="py-2">{t('name')}</th>
@@ -622,18 +663,20 @@ file,
                     role="row"
                   >
                     <td className="py-2 pl-3">
-                      <input
-                        type="checkbox"
-                        className="w-3.5 h-3.5 accent-blue-600 cursor-pointer"
-                        aria-label={entry.name}
-                        checked={isSelected}
-                        onChange={() => {
+                      {!entryLocked(entry.name) && (
+                        <input
+                          type="checkbox"
+                          className="w-3.5 h-3.5 accent-blue-600 cursor-pointer"
+                          aria-label={entry.name}
+                          checked={isSelected}
+                          onChange={() => {
                                const next = new Set(selected);
                                if (isSelected) next.delete(entry.name);
                                else next.add(entry.name);
                                setSelected(next);
                              }}
-                      />
+                        />
+                      )}
                     </td>
                     <td className="py-2">
                       {entry.type === 'dir' ? '📁' : getFileIcon(entry.name)}
@@ -665,12 +708,14 @@ file,
                       {formatTime(entry.mtime)}
                     </td>
                     <td className="py-2 pr-3 relative">
-                      <button
-                        className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 ml-auto"
-                        onClick={() => setMenuOpen(menuOpen === entry.name ? null : entry.name)}
-                        title={t('actions')}
-                      >⋮
-                      </button>
+                      {!(entryLocked(entry.name) && entry.type === 'dir') && (
+                        <button
+                          className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 ml-auto"
+                          onClick={() => setMenuOpen(menuOpen === entry.name ? null : entry.name)}
+                          title={t('actions')}
+                        >⋮
+                        </button>
+                      )}
                       {menuOpen === entry.name && (
                         <div
                           className="absolute right-0 top-1/2 -translate-y-1/2 z-30 flex gap-1 items-center bg-white border rounded-lg shadow-lg px-2 py-1.5 whitespace-nowrap"
@@ -692,7 +737,7 @@ file,
                                   👁 {t('preview')}
                                 </Button>
                               )}
-                              {isEditableFile(entry.name) && (
+                              {isEditableFile(entry.name) && !entryLocked(entry.name) && (
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -710,20 +755,24 @@ file,
                               </Button>
                             </>
                           )}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => { setMenuOpen(null); handleRenameClick(entry); }}
-                          >
-                            📝 {t('rename')}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => { setMenuOpen(null); handleDeleteClick(entry); }}
-                          >
-                            🗑 {t('delete')}
-                          </Button>
+                          {!entryLocked(entry.name) && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => { setMenuOpen(null); handleRenameClick(entry); }}
+                              >
+                                📝 {t('rename')}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => { setMenuOpen(null); handleDeleteClick(entry); }}
+                              >
+                                🗑 {t('delete')}
+                              </Button>
+                            </>
+                          )}
                           <button
                             className="text-gray-400 hover:text-gray-600 ml-1 px-1 text-lg"
                             onClick={() => setMenuOpen(null)}
@@ -748,7 +797,7 @@ file,
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
                 <span className="text-sm font-medium">👁 {t('previewing')}: {previewFile}</span>
                 <div className="flex gap-2">
-                  {isEditableFile(previewFile) && (
+                  {isEditableFile(previewFile) && !entryLocked(previewFile) && (
                     <Button
                       size="sm"
                       variant="outline"

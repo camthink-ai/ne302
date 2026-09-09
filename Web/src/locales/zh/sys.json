@@ -597,7 +597,10 @@
       "power_recovery_delay": "电源恢复延迟",
       "check_gateway": "是否验证网关",
       "format_error": "格式错误",
-      "mac_address": "Mac地址"
+      "mac_address": "Mac地址",
+      "ip_mode": "IP获取方式",
+      "channel": "信道",
+      "security": "加密方式"
     },
     "storage_management": {
       "storage_management_title": "存储管理",
@@ -658,6 +661,7 @@
       "delete": "删除",
       "delete_success": "删除成功",
       "delete_failed": "删除失败",
+      "captures_readonly": "⚠ 抓拍记录目录由上传服务管理：此处仅供浏览、下载和预览。如需删除或重试记录，请前往「抓拍设置 → 抓拍记录」页面操作。",
       "deleting": "正在删除",
       "delete_confirm_title": "确认删除",
       "delete_confirm_msg": "确定要删除文件",

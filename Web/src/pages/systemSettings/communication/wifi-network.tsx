@@ -34,6 +34,22 @@ type WifiData = {
     last_connected_time: number;
 }
 
+type WifiDetailInfo = {
+    connected: boolean;
+    ssid: string;
+    bssid: string;
+    rssi: number;
+    channel: number;
+    security: string;
+    ip_mode: string;
+    ip_address: string;
+    netmask: string;
+    gateway: string;
+    dns_primary: string;
+    dns_secondary: string;
+    mac_address: string;
+}
+
 // When refreshing/reconnecting, poll the STA interface instead of failing fast on a
 // transient 500. Only surface "network disconnected" after this timeout elapses.
 const POLL_TIMEOUT = 20000;
@@ -44,7 +60,7 @@ export default function WifiNetworkPage() {
     const { i18n } = useLingui();
     const isMobile = useIsMobile();
     const { locale } = useLanguage();
-    const { getNetworkSTAReq, scanWifi, setWifi, disconnectWifi, deleteWifi, getWifiRegionReq, setWifiRegionReq } = systemSettings;
+    const { getNetworkSTAReq, scanWifi, setWifi, disconnectWifi, deleteWifi, getWifiRegionReq, setWifiRegionReq, getWifiInfoReq } = systemSettings;
     const { getCommunicationData } = useCommunicationData();
     // const wifiDataList = wifiData.data.scan_results.known_networks;
     const [isLoading, setIsLoading] = useState(true);
@@ -62,6 +78,29 @@ export default function WifiNetworkPage() {
     const [region, setRegion] = useState('us');
     const [activeRegion, setActiveRegion] = useState('us');
     const [supportedRegions, setSupportedRegions] = useState<string[]>(['us', 'eu', 'jp', 'kr', 'cn']);
+    const [isConnMenuOpen, setIsConnMenuOpen] = useState(false);
+    const [isWifiDetailOpen, setIsWifiDetailOpen] = useState(false);
+    const [isWifiDetailLoading, setIsWifiDetailLoading] = useState(false);
+    const [wifiDetailInfo, setWifiDetailInfo] = useState<WifiDetailInfo | null>(null);
+
+    const handleGetWifiInfo = async () => {
+        try {
+            setIsWifiDetailLoading(true);
+            const res = await getWifiInfoReq();
+            setWifiDetailInfo(res.data);
+        } catch (error) {
+            console.error('handleGetWifiInfo', error);
+        } finally {
+            setIsWifiDetailLoading(false);
+        }
+    }
+
+    const openWifiDetailDialog = () => {
+        setIsConnMenuOpen(false);
+        setIsWifiDetailOpen(true);
+        handleGetWifiInfo();
+    }
+
     const getNetworkSTA = async () => {
         try {
             setIsLoading(true);
@@ -418,12 +457,14 @@ export default function WifiNetworkPage() {
                                             <p className="text-sm text-green-500">{i18n._('common.connected')}</p>
                                         </div>
                                         <SvgIcon icon={currentWifiData.rssi >= -55 ? 'wifi' : currentWifiData.rssi >= -75 ? 'wifi_middle' : 'wifi_low'} className="w-4 h-4 text-[#272E3B]" />
-                                        <Popover>
+                                        <Popover open={isConnMenuOpen} onOpenChange={setIsConnMenuOpen}>
                                             <PopoverTrigger onClick={(e: any) => e.stopPropagation()}>
                                                 <SvgIcon icon="more" className="w-4 h-4 text-white cursor-pointer" />
                                             </PopoverTrigger>
                                             <PopoverContent className="w-auto p-0">
                                                 <div className="flex flex-col gap-2 mx-2 py-2">
+                                                    <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={openWifiDetailDialog}>{i18n._('common.details')}</div>
+                                                    <Separator />
                                                     <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleForgetWifi()}>{i18n._('sys.system_management.disconnect')}</div>
                                                     <Separator />
                                                     <div className="text-sm px-4 py-1 cursor-pointer hover:bg-gray-100 hover:rounded-md" onClick={() => handleDeleteWifi(currentWifiData)}>{i18n._('sys.system_management.forget')}</div>
@@ -489,6 +530,79 @@ export default function WifiNetworkPage() {
             )}
             {connectWifiDialog()}
             {/* {refreshWifiDialog()} */}
+            <Dialog open={isWifiDetailOpen} onOpenChange={setIsWifiDetailOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>{i18n._('common.details')}</DialogTitle>
+                    </DialogHeader>
+                    <div className="mt-4">
+                        {isWifiDetailLoading && <CommunicationSkeleton />}
+                        {!isWifiDetailLoading && (
+                            <div className="flex flex-col gap-2 bg-gray-100 p-4 rounded-lg">
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">SSID</Label>
+                                    <p>{wifiDetailInfo?.ssid || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">BSSID</Label>
+                                    <p>{wifiDetailInfo?.bssid || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.rssi')}</Label>
+                                    <p>{wifiDetailInfo ? `${wifiDetailInfo.rssi} dBm` : '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.channel')}</Label>
+                                    <p>{wifiDetailInfo ? (wifiDetailInfo.channel || '-') : '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.security')}</Label>
+                                    <p>{wifiDetailInfo?.security || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.ip_mode')}</Label>
+                                    <p>{wifiDetailInfo ? (wifiDetailInfo.ip_mode === 'static' ? i18n._('sys.system_management.static') : i18n._('sys.system_management.dhcp')) : '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.ip_address')}</Label>
+                                    <p>{wifiDetailInfo?.ip_address || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.netmask')}</Label>
+                                    <p>{wifiDetailInfo?.netmask || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.gateway')}</Label>
+                                    <p>{wifiDetailInfo?.gateway || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.dns_primary')}</Label>
+                                    <p>{wifiDetailInfo?.dns_primary || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.dns_secondary')}</Label>
+                                    <p>{wifiDetailInfo?.dns_secondary || '-'}</p>
+                                </div>
+                                <Separator />
+                                <div className="flex justify-between my-2">
+                                    <Label className="text-sm text-text-primary shrink-0">{i18n._('sys.system_management.mac_address')}</Label>
+                                    <p>{wifiDetailInfo?.mac_address || '-'}</p>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
             {showWifiReloadMask && <WifiReloadMask loadingText={loadingText} isLoading={isReloading} />}
         </div>
     )

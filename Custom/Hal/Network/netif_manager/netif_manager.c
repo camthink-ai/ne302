@@ -36,6 +36,13 @@ static ip_addr_t default_dns_server[DNS_MAX_SERVERS] = {
     IPADDR4_INIT(NETIF_DEFAULT_DNS_SERVER1),
     IPADDR4_INIT(NETIF_DEFAULT_DNS_SERVER2),
 };
+/* Pristine boot-time copies. nm_ctrl_set_dns_server() overwrites
+ * default_dns_server[] with network-specific DNS (e.g. PoE user config), so
+ * uplink teardown must restore from here, not from the mutable array. */
+static const ip_addr_t boot_dns_server[DNS_MAX_SERVERS] = {
+    IPADDR4_INIT(NETIF_DEFAULT_DNS_SERVER1),
+    IPADDR4_INIT(NETIF_DEFAULT_DNS_SERVER2),
+};
 static const char *default_sntp_server[SNTP_MAX_SERVERS] = {
     "time.windows.com",
     "pool.ntp.org",
@@ -1313,6 +1320,37 @@ int nm_ctrl_netif_up(const char *if_name)
     return AICAM_OK;
 }
 
+/// @brief Whether this interface is an uplink (WAN) interface
+/// @param if_name Network interface name
+/// @return 1: uplink, 0: local-only interface (lo/ap)
+static int nm_is_uplink_netif(const char *if_name)
+{
+    /* Hotspot (ap) and loopback (lo) are excluded on purpose: taking the AP
+     * down must not wipe the global DNS while the STA uplink is still using
+     * it (AP + STA can run concurrently). */
+    return (strcmp(if_name, NETIF_NAME_WIFI_STA) == 0
+            || strcmp(if_name, NETIF_NAME_ETH_WAN) == 0
+            || strcmp(if_name, NETIF_NAME_WIFI_HALOW) == 0
+            || strcmp(if_name, NETIF_NAME_4G_CAT1) == 0
+            || strcmp(if_name, NETIF_NAME_USB_ECM) == 0);
+}
+
+/// @brief Reset lwip DNS servers to the boot defaults
+/// @details lwip's DHCP client (wl/wn/ue) and the PoE static config write
+///          network-local DNS servers into the global resolver and never clear
+///          them on teardown. Without this reset, switching networks keeps the
+///          previous network's DNS alive, which is unreachable from the new
+///          network (4G never sets lwip DNS at all). Every uplink reprograms
+///          DNS on connect: DHCP re-learns it, PoE re-applies user config.
+static void nm_reset_dns_servers(void)
+{
+    for (int i = 0; i < DNS_MAX_SERVERS; i++) {
+        dns_setserver(i, &boot_dns_server[i]);
+    }
+    LOG_DRV_INFO("DNS reset to boot defaults: %s, %s",
+                 ipaddr_ntoa(&boot_dns_server[0]), ipaddr_ntoa(&boot_dns_server[1]));
+}
+
 /// @brief Stop network interface
 /// @param if_name Network interface name
 /// @return Error code
@@ -1325,6 +1363,9 @@ int nm_ctrl_netif_down(const char *if_name)
     if (ret != 0) {
         LOG_DRV_ERROR("down netif failed(ret = %d)!", ret);
         return ret;
+    }
+    if (nm_is_uplink_netif(if_name)) {
+        nm_reset_dns_servers();
     }
     return AICAM_OK;
 }
@@ -1341,6 +1382,9 @@ int nm_ctrl_netif_deinit(const char *if_name)
     if (ret != 0) {
         LOG_DRV_ERROR("uninit netif failed(ret = %d)!", ret);
         return ret;
+    }
+    if (nm_is_uplink_netif(if_name)) {
+        nm_reset_dns_servers();
     }
     return AICAM_OK;
 }

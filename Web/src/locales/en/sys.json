@@ -599,7 +599,10 @@
       "power_recovery_delay": "Power Recovery Delay",
       "check_gateway": "Check Gateway",
       "format_error": "Format Error",
-      "mac_address": "Mac Address"
+      "mac_address": "Mac Address",
+      "ip_mode": "IP Mode",
+      "channel": "Channel",
+      "security": "Security"
     },
     "storage_management": {
       "storage_management_title": "Storage Management",
@@ -660,6 +663,7 @@
       "delete": "Delete",
       "delete_success": "File deleted successfully",
       "delete_failed": "Delete failed",
+      "captures_readonly": "⚠ The captures directory is managed by the upload service: read-only here (browse / download / preview). To delete or retry records, use the Capture Settings → Capture Records page.",
       "deleting": "Deleting",
       "delete_confirm_title": "Confirm Deletion",
       "delete_confirm_msg": "Are you sure you want to delete",
