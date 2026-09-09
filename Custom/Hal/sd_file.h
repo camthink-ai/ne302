@@ -29,8 +29,13 @@
 
 typedef struct {
     FX_MEDIA *media;
-    CHAR saved_dir[FX_MAX_LONG_NAME_LEN];  // saved default dir, restored on close
-    CHAR path[FX_MAX_LONG_NAME_LEN];
+    /* FileX keeps the selected directory AND the iteration cursor in the
+     * media-global default path (FX_PATH), updating it in place during the
+     * first/next full entry find calls. Each handle carries its own copy:
+     * readdir swaps it in for the duration of every call and saves it back,
+     * so concurrent iterators and path resolutions (which rebuild the global
+     * default path) cannot corrupt each other's iteration. */
+    FX_PATH state;
     CHAR entry_name[FX_MAX_LONG_NAME_LEN];
     UINT attributes;
     ULONG size;
@@ -70,6 +75,9 @@ typedef struct {
     osThreadId_t sd_processId;
     FX_MEDIA        sdio_disk;
     uint32_t media_status;
+    uint32_t media_generation;  /* +1 on every successful fx_media_open - lets
+                                 * observers detect a card swap without watching
+                                 * the close window (see sd_media_generation) */
     int file_ops_handle;
     PowerHandle     pwr_handle;
     bool hs_switched;   /* CMD6 High-Speed switch applied by sd_set_speed_mode */
@@ -114,6 +122,7 @@ int sd_speed_test(uint32_t total_kb, uint32_t chunk_kb,
                   uint32_t *write_kbps, uint32_t *read_kbps);
 int sd_is_detected(void);
 int sd_is_media_open(void);              /* non-blocking: true once fx_media_open completed */
+uint32_t sd_media_generation(void);      /* increments on every successful media open (card swap edge) */
 int sd_wait_ready_for_open(uint32_t timeout_ms);
 int sd_register(void);
 int sd_unregister(void);

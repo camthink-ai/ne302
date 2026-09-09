@@ -256,7 +256,15 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
 
     /* ---- Connection closed / error ---- */
     if (ev == MG_EV_CLOSE || ev == MG_EV_ERROR) {
-        if (ctx) { file_upload_cleanup(ctx); c->fn_data = NULL; }
+        if (ctx) {
+            /* Close/error before the success path ran means a truncated body:
+             * mark failed so cleanup drops the buffered partial instead of
+             * flushing it, and removes the partial file rather than leaving a
+             * truncated copy over the "w"-opened target. */
+            ctx->failed = AICAM_TRUE;
+            file_upload_cleanup(ctx);
+            c->fn_data = NULL;
+        }
         return;
     }
 
@@ -360,8 +368,11 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
             if (disk_file_fwrite(ctx->fs_type, ctx->fd, ctx->write_buf,
                                  FILE_UPLOAD_STREAM_BUF_SIZE)
                 != FILE_UPLOAD_STREAM_BUF_SIZE) {
+                /* cleanup (not bare buffer_free): failed is set, so it closes
+                 * the still-open fd and removes the partial file instead of
+                 * leaking the handle on every failed upload. */
                 ctx->failed = AICAM_TRUE;
-                buffer_free(ctx); c->fn_data = NULL;
+                file_upload_cleanup(ctx); c->fn_data = NULL;
                 file_upload_send_response(c, API_ERROR_INTERNAL_ERROR, "Write failed");
                 return;
             }
@@ -374,8 +385,9 @@ void file_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data
             if (ctx->write_buf_pos > 0) {
                 if (disk_file_fwrite(ctx->fs_type, ctx->fd, ctx->write_buf,
                                      ctx->write_buf_pos) != (int)ctx->write_buf_pos) {
+                    /* same as above: close fd + drop the partial file */
                     ctx->failed = AICAM_TRUE;
-                    buffer_free(ctx); c->fn_data = NULL;
+                    file_upload_cleanup(ctx); c->fn_data = NULL;
                     file_upload_send_response(c, API_ERROR_INTERNAL_ERROR, "Final write failed");
                     return;
                 }
@@ -850,12 +862,13 @@ aicam_result_t file_rename_handler(http_handler_context_t *ctx)
     }
 
     int result = disk_file_rename(fs_type, old_item->valuestring, new_item->valuestring);
-    cJSON_Delete(request_json);
-
     if (result != 0) {
+        cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to rename file");
     }
 
+    /* fs_str / old_item / new_item point into request_json — the tree must
+     * outlive the response construction (deleting it first was a UAF). */
     cJSON *response_json = cJSON_CreateObject();
     cJSON_AddStringToObject(response_json, "fs", fs_str);
     cJSON_AddStringToObject(response_json, "old_path", old_item->valuestring);
@@ -864,6 +877,7 @@ aicam_result_t file_rename_handler(http_handler_context_t *ctx)
     char *json_str = cJSON_Print(response_json);
     aicam_result_t ret = api_response_success(ctx, json_str, "File renamed successfully");
     cJSON_Delete(response_json);
+    cJSON_Delete(request_json);
     return ret;
 }
 
@@ -936,7 +950,9 @@ aicam_result_t file_preview_handler(http_handler_context_t *ctx)
             mg_send(ctx->conn, chunk, (size_t)n);
         hal_mem_free(chunk);
         disk_file_fclose(fs_type, fd);
-        return AICAM_OK;
+        /* Binary response already sent above - suppress the router's JSON
+         * response, same as the download handler after its own send */
+        return AICAM_ERROR_NOT_SENT_AGAIN;
     }
 
     uint8_t *buffer = NULL;
@@ -1037,12 +1053,13 @@ aicam_result_t file_edit_handler(http_handler_context_t *ctx)
     int written = disk_file_fwrite(fs_type, fd, new_content, content_len);
     disk_file_fclose(fs_type, fd);
 
-    cJSON_Delete(request_json);
-
     if (written < 0 || (size_t)written != content_len) {
+        cJSON_Delete(request_json);
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to write file content");
     }
 
+    /* fs_str / file_path point into request_json — the tree must outlive the
+     * response construction (deleting it first was a UAF). */
     cJSON *response_json = cJSON_CreateObject();
     cJSON_AddStringToObject(response_json, "fs", fs_str);
     cJSON_AddStringToObject(response_json, "path", file_path);
@@ -1051,6 +1068,7 @@ aicam_result_t file_edit_handler(http_handler_context_t *ctx)
     char *json_str = cJSON_Print(response_json);
     aicam_result_t ret = api_response_success(ctx, json_str, "File edited successfully");
     cJSON_Delete(response_json);
+    cJSON_Delete(request_json);
     return ret;
 }
 
@@ -1099,11 +1117,13 @@ aicam_result_t file_create_handler(http_handler_context_t *ctx)
         if (fd) { disk_file_fclose(fst, fd); res = 0; }
         else res = -1;
     }
-    cJSON_Delete(req);
-
-    if (res != 0)
+    if (res != 0) {
+        cJSON_Delete(req);
         return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create item");
+    }
 
+    /* fs / name / type point into req — the tree must outlive the response
+     * construction (deleting it first was a UAF). */
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "fs", fs);
     cJSON_AddStringToObject(out, "path", fp);
@@ -1112,6 +1132,7 @@ aicam_result_t file_create_handler(http_handler_context_t *ctx)
     char *js = cJSON_Print(out);
     aicam_result_t ret = api_response_success(ctx, js, "Created successfully");
     cJSON_Delete(out);
+    cJSON_Delete(req);
     return ret;
 }
 

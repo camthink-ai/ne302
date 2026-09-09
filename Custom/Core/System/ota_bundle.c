@@ -116,14 +116,38 @@ int ota_bundle_layout_matches_device(const ota_bundle_header_t *hdr)
     return 0;
 }
 
+/* Partitions the bundle burn path resolves addresses from — mirrors
+ * bundle_direct_part_id() in api_ota_module.c (entries burn at their type's
+ * partition). Everything else in the table is a layout declaration: after
+ * reboot the firmware's own mem_map governs, so an out-of-flash declaration
+ * is a layout mismatch (reported via layout_changed), never a burn hazard.
+ * Keep in sync with that mapping; drift fails safe — a newly burnable
+ * partition outside flash is still caught by upgrade_begin_direct's bound. */
+static int bundle_part_is_burned(bundle_part_id_t id)
+{
+    switch (id) {
+        case BUNDLE_PART_FSBL:
+        case BUNDLE_PART_APP1:
+        case BUNDLE_PART_WEB:
+        case BUNDLE_PART_AI_1:
+        case BUNDLE_PART_WIFI:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 /* Structural validity of the bundle's partition table. Only two things are
  * hard-rejected: physically impossible tables (unknown/duplicate ids, zero
- * sizes, out of flash, overlapping ranges) and a moved FSBL — the boot ROM
- * fetches the FSBL at a silicon-fixed address, so a relocated FSBL can never
- * take effect and its burn would only clobber whatever now lives at the new
- * address. Every other partition may move: the cost is user-visible data
- * reset (NVS = settings back to defaults, LITTLEFS = storage reformatted)
- * and is surfaced via layout_changed/layout_diff instead of blocking. */
+ * sizes, burn targets outside flash, overlapping ranges) and a moved FSBL —
+ * the boot ROM fetches the FSBL at a silicon-fixed address, so a relocated
+ * FSBL can never take effect and its burn would only clobber whatever now
+ * lives at the new address. Every other partition may move: the cost is
+ * user-visible data reset (NVS = settings back to defaults, LITTLEFS =
+ * storage reformatted) and is surfaced via layout_changed/layout_diff instead
+ * of blocking. The flash bound applies to burn targets only — tables packed
+ * before RESERVE2 was pulled back to the chip boundary declare a 1MiB-oversized
+ * tail and must keep validating. */
 int ota_bundle_layout_change_valid(const ota_bundle_header_t *hdr)
 {
     if (!hdr || hdr->part_count == 0 || hdr->part_count > BUNDLE_MAX_PARTS) return -1;
@@ -139,7 +163,15 @@ int ota_bundle_layout_change_valid(const ota_bundle_header_t *hdr)
         seen[p->part_id] = 1;
 
         if (p->size == 0) return -1;
-        if (p->base < FLASH_BASE || p->base + p->size > flash_end + 1) return -1;
+        /* Subtraction form: `p->base + p->size` wraps in uint32_t, which let a
+         * crafted table (base near UINT32_MAX + a size that wraps the sum back
+         * below flash_end) through this gate and on to the unchecked XSPI
+         * erase/write path. With base <= flash_end the right side cannot
+         * underflow either. Declarations (non-burn partitions) skip the bound:
+         * see bundle_part_is_burned(). */
+        if (bundle_part_is_burned((bundle_part_id_t)p->part_id) &&
+            (p->base < FLASH_BASE || p->base > flash_end ||
+             p->size > flash_end + 1 - p->base)) return -1;
 
         if (p->part_id == BUNDLE_PART_FSBL) {
             fsbl_seen = 1;

@@ -498,6 +498,23 @@ static FS_Type_t resolve_storage_target(capture_storage_t cs)
  * actual_fs tracks the card). Both checks are flag/GPIO reads - no IO. */
 static void auto_storage_track(void)
 {
+    /* SD media generation edge: pulling and reinserting a card reopens the
+     * media, and the replacement card may lack the /captures tree.
+     * s_ensured_fs still remembers the OLD card's successful ensure_dirs run,
+     * so without this invalidation ensure_dirs would skip and the first
+     * capture's date-subdir mkdir would fail with a missing parent
+     * ("ensure_dir_exists: mkdir failed path=/captures/meta/<date>"). The
+     * generation counter (not an open/closed edge) is used so a quick swap
+     * with no track() call during the closed window is still detected. Runs
+     * before the AUTO gate: a card swap under a fixed storage config has the
+     * same stale-cache problem. */
+    static uint32_t s_prev_sd_gen = 0;
+    uint32_t sd_gen = sd_media_generation();
+    if (sd_gen != s_prev_sd_gen) {
+        s_prev_sd_gen = sd_gen;
+        s_ensured_fs = FS_MAX;
+    }
+
     if (g_up.cfg.storage != CAPTURE_STORE_AUTO || !g_up.initialized) return;
     if (g_up.active_fs == FS_FLASH && sd_is_media_open()) {
         g_up.active_fs = FS_SD;

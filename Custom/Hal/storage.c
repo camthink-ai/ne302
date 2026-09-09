@@ -50,6 +50,9 @@ static int mem_block_read(const struct lfs_config *cfg, lfs_block_t block,
     XSPI_NOR_DisableMemoryMappedMode();
     if (XSPI_NOR_Read((uint8_t *)buffer, addr, size) != 0) {
         XSPI_NOR_EnableMemoryMappedMode();
+        /* Must not return locked: this mutex guards every flash/NVS/littlefs
+         * op — leaking it here froze all of them until reboot. */
+        storage_unlock();
         return LFS_ERR_IO;
     }
     XSPI_NOR_EnableMemoryMappedMode();

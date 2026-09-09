@@ -246,6 +246,13 @@ static void media_close_callback(FX_MEDIA *media_ptr)
 /* Forward declaration */
 static int sd_resolve_dir_path(FX_MEDIA *media, const char *path, char *fx_out, size_t out_sz);
 static int sd_resolve_file_path(FX_MEDIA *media, const char *path, char *fx_out, size_t out_sz);
+static bool sd_str_is_ascii(const char *s);
+static bool sd_media_is_exfat(FX_MEDIA *media);
+static bool sd_name_needs_unicode(FX_MEDIA *media, const char *name);
+static int sd_utf8_to_utf16(const char *utf8, UCHAR *u16, size_t u16_max);
+static int sd_utf16_to_utf8(const UCHAR *u16, ULONG u16_len, char *out, size_t out_sz);
+static const char *sd_split_path(const char *path, char *parent, size_t parent_sz);
+static int sd_fx_join(const char *parent, const char *name, char *out, size_t out_sz);
 
 void* sd_filex_fopen(void *context, const char *path, const char *mode)
 {
@@ -264,13 +271,6 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
         return NULL;
     }
 
-    /* Resolve UTF-8 path for FileX */
-    char fx_path[FX_MAX_LONG_NAME_LEN];
-    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) {
-        hal_mem_free(file);
-        return NULL;
-    }
-
     int reading = 0, writing = 0, appending = 0, plus = 0;
 
     // Parse mode
@@ -282,7 +282,73 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
 
     ULONG open_mode = 0;
 
+    /* Non-ASCII (e.g. Chinese) filenames must go through FileX's unicode
+     * API family: the CHAR* APIs zero-extend every UTF-8 byte into a UTF-16
+     * code unit, so names they create render as mojibake on a PC. The
+     * unicode APIs write a genuine UTF-16 LFN (plus a numeric 8.3 alias)
+     * and address bare names inside the current default directory, so the
+     * parent is resolved and selected first. */
+    char parent[FX_MAX_LONG_NAME_LEN];
+    const char *fname = sd_split_path(path, parent, sizeof(parent));
+    int name_unicode = sd_name_needs_unicode(media, fname);
+    UCHAR u16[FX_MAX_LONG_NAME_LEN * 2];
+    int u16n = 0;
+    CHAR u16_short[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+    int fresh = 0;   /* entry just (re)created via the unicode API */
+
+    char fx_path[FX_MAX_LONG_NAME_LEN];
     sd_lock();
+    if (name_unicode) {
+        char fx_parent[FX_MAX_LONG_NAME_LEN];
+        u16n = sd_utf8_to_utf16(fname, u16, FX_MAX_LONG_NAME_LEN);
+        if (u16n <= 0 ||
+            sd_resolve_dir_path(media, (parent[0] == '\0') ? "/" : parent,
+                                fx_parent, sizeof(fx_parent)) != 0 ||
+            fx_directory_default_set(media, fx_parent) != FX_SUCCESS) {
+            sd_unlock();
+            LOG_DRV_ERROR("sd_filex_fopen: resolve failed path=%s\r\n", path);
+            hal_mem_free(file);
+            return NULL;
+        }
+        UINT ls = fx_unicode_short_name_get_extended(media, u16, (ULONG)u16n,
+                                                     u16_short, FX_MAX_SHORT_NAME_LEN);
+        if (ls == FX_SUCCESS && writing && !appending) {
+            /* "w"/"w+" truncate: delete + recreate keeps a valid LFN (a plain
+             * in-place truncate would strand the old LFN entries). */
+            char tmp[FX_MAX_LONG_NAME_LEN];
+            if (sd_fx_join(fx_parent, u16_short, tmp, sizeof(tmp)) == 0)
+                fx_file_delete(media, tmp);
+            ls = FX_NOT_FOUND;
+        }
+        if (ls != FX_SUCCESS) {
+            if (reading) {
+                sd_unlock();
+                hal_mem_free(file);
+                return NULL;
+            }
+            ls = fx_unicode_file_create(media, u16, (ULONG)u16n, u16_short);
+            if (ls != FX_SUCCESS) {
+                sd_unlock();
+                LOG_DRV_ERROR("fx_unicode_file_create failed: 0x%02X path=%s\r\n", ls, path);
+                hal_mem_free(file);
+                return NULL;
+            }
+            fresh = 1;
+        }
+        if (sd_fx_join(fx_parent, u16_short, fx_path, sizeof(fx_path)) != 0) {
+            sd_unlock();
+            hal_mem_free(file);
+            return NULL;
+        }
+    } else if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) {
+        /* Resolve UTF-8 path for FileX under the lock: resolution flips the
+         * media-global default directory and must not interleave with a
+         * concurrent directory scan. */
+        sd_unlock();
+        hal_mem_free(file);
+        return NULL;
+    }
+
     if (reading && !plus) { // "r"
         open_mode = FX_OPEN_FOR_READ;
         status = fx_file_open(media, file, fx_path, open_mode);
@@ -290,19 +356,23 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
         open_mode = FX_OPEN_FOR_READ | FX_OPEN_FOR_WRITE;
         status = fx_file_open(media, file, fx_path, open_mode);
     } else if (writing && !appending && !plus) { // "w"
-        fx_file_delete(media, fx_path);
-        UINT create_status = fx_file_create(media, fx_path);
-        if (create_status != FX_SUCCESS && create_status != FX_ALREADY_CREATED) {
-            sd_unlock();
-            LOG_DRV_ERROR("fx_file_create failed: 0x%02X path=%s\r\n", create_status, path);
-            hal_mem_free(file);
-            return NULL;
+        if (!fresh) {
+            fx_file_delete(media, fx_path);
+            UINT create_status = fx_file_create(media, fx_path);
+            if (create_status != FX_SUCCESS && create_status != FX_ALREADY_CREATED) {
+                sd_unlock();
+                LOG_DRV_ERROR("fx_file_create failed: 0x%02X path=%s\r\n", create_status, path);
+                hal_mem_free(file);
+                return NULL;
+            }
         }
         open_mode = FX_OPEN_FOR_WRITE;
         status = fx_file_open(media, file, fx_path, open_mode);
     } else if (writing && !appending && plus) { // "w+"
-        fx_file_delete(media, fx_path);
-        fx_file_create(media, fx_path);
+        if (!fresh) {
+            fx_file_delete(media, fx_path);
+            fx_file_create(media, fx_path);
+        }
         open_mode = FX_OPEN_FOR_READ | FX_OPEN_FOR_WRITE;
         status = fx_file_open(media, file, fx_path, open_mode);
     } else if (appending && !plus) { // "a"
@@ -312,7 +382,10 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
              * open FAILED; if it succeeded the FX_FILE is already open and a
              * second fx_file_open on it errors out (the "first OK, second
              * fails" bug). */
-            fx_file_create(media, fx_path);
+            if (name_unicode)
+                fx_unicode_file_create(media, u16, (ULONG)u16n, u16_short);
+            else
+                fx_file_create(media, fx_path);
             status = fx_file_open(media, file, fx_path, FX_OPEN_FOR_WRITE);
         }
         if (status == FX_SUCCESS) {
@@ -322,7 +395,10 @@ void* sd_filex_fopen(void *context, const char *path, const char *mode)
     } else if (appending && plus) { // "a+"
         status = fx_file_open(media, file, fx_path, FX_OPEN_FOR_READ | FX_OPEN_FOR_WRITE);
         if (status != FX_SUCCESS) {
-            fx_file_create(media, fx_path);
+            if (name_unicode)
+                fx_unicode_file_create(media, u16, (ULONG)u16n, u16_short);
+            else
+                fx_file_create(media, fx_path);
             status = fx_file_open(media, file, fx_path, FX_OPEN_FOR_READ | FX_OPEN_FOR_WRITE);
         }
         if (status == FX_SUCCESS) {
@@ -470,8 +546,11 @@ int sd_filex_remove(void *context, const char *path)
 {
     FX_MEDIA *media = (FX_MEDIA*)context;
     char fx_path[FX_MAX_LONG_NAME_LEN];
-    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) return -1;
     sd_lock();
+    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) {
+        sd_unlock();
+        return -1;
+    }
     UINT status = fx_file_delete(media, fx_path);
     if (status == FX_NOT_A_FILE) {
         /* fx_file_delete cannot remove a directory (returns FX_NOT_A_FILE).
@@ -498,21 +577,307 @@ int sd_filex_remove(void *context, const char *path)
     return 0;
 }
 
-// Rename file (FileX fx_file_rename does NOT overwrite - remove target first)
-int sd_filex_rename(void *context, const char *oldpath, const char *newpath)
+// Case-insensitive path compare: FAT names are case-insensitive and both
+// arguments are resolved absolute fx paths, so an equal pair means FileX will
+// treat the rename as a case-only change of the same entry.
+static int sd_path_ieq(const char *a, const char *b)
 {
-    FX_MEDIA *media = (FX_MEDIA*)context;
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca += 'a' - 'A';
+        if (cb >= 'A' && cb <= 'Z') cb += 'a' - 'A';
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* Rename over plain single-byte paths. sd_lock must be held. Destination is
+ * parked under ~RNMBAK.TMP and restored if the swap fails. */
+static int sd_rename_plain_locked(FX_MEDIA *media, const char *oldpath, const char *newpath)
+{
     char fx_old[FX_MAX_LONG_NAME_LEN], fx_new[FX_MAX_LONG_NAME_LEN];
     if (sd_resolve_file_path(media, oldpath, fx_old, sizeof(fx_old)) != 0) return -1;
     if (sd_resolve_file_path(media, newpath, fx_new, sizeof(fx_new)) != 0) return -1;
-    sd_lock();
-    (void)fx_file_delete(media, fx_new);   /* remove target if exists (ignore NOT_FOUND) */
-    UINT status = fx_file_rename(media, fx_old, fx_new);
+
+    UINT attr;
+    ULONG size;
+    UINT year, month, day, hour, minute, second;
+
+    /* Source must exist; pick the FileX call matching its type (fx_file_rename
+     * rejects directories with FX_NOT_A_FILE). */
+    UINT status = fx_directory_information_get(
+        media, fx_old, &attr, &size,
+        &year, &month, &day, &hour, &minute, &second);
+    if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("rename: source not found: 0x%02X path=%s\r\n", status, oldpath);
+        return -1;
+    }
+    int src_is_dir = (attr & FX_DIRECTORY) ? 1 : 0;
+
+    /* Park an existing destination aside so it can be restored if the swap
+     * fails. A case-only rename of the same entry is skipped: FileX handles
+     * it directly and the destination IS the source. */
+    char fx_bak[FX_MAX_LONG_NAME_LEN];
+    int have_backup = 0, bak_is_dir = 0;
+    if (!sd_path_ieq(fx_old, fx_new)) {
+        status = fx_directory_information_get(
+            media, fx_new, &attr, &size,
+            &year, &month, &day, &hour, &minute, &second);
+        if (status == FX_SUCCESS) {
+            bak_is_dir = (attr & FX_DIRECTORY) ? 1 : 0;
+            if (bak_is_dir != src_is_dir) {
+                /* Replacing a file with a dir (or vice versa) was never
+                 * possible before either - refuse without touching anything */
+                LOG_DRV_ERROR("rename: destination exists with different type: %s\r\n", newpath);
+                return -1;
+            }
+            /* Backup name next to the destination, 8.3-safe so it never
+             * needs a long-name entry */
+            const char *sep = strrchr(fx_new, '\\');
+            size_t plen = sep ? (size_t)(sep - fx_new + 1) : 0;
+            if (plen + sizeof("~RNMBAK.TMP") > sizeof(fx_bak)) {
+                LOG_DRV_ERROR("rename: destination path too long for backup\r\n");
+                return -1;
+            }
+            memcpy(fx_bak, fx_new, plen);
+            strcpy(fx_bak + plen, "~RNMBAK.TMP");
+            /* Drop a stale backup left by an earlier interrupted rename */
+            if (bak_is_dir) (void)fx_directory_delete(media, fx_bak);
+            else            (void)fx_file_delete(media, fx_bak);
+            status = bak_is_dir ? fx_directory_rename(media, fx_new, fx_bak)
+                                : fx_file_rename(media, fx_new, fx_bak);
+            if (status != FX_SUCCESS) {
+                /* Could not park - destination stays untouched, just fail */
+                LOG_DRV_ERROR("rename: parking destination failed: 0x%02X path=%s\r\n", status, newpath);
+                return -1;
+            }
+            have_backup = 1;
+        }
+    }
+
+    status = src_is_dir ? fx_directory_rename(media, fx_old, fx_new)
+                        : fx_file_rename(media, fx_old, fx_new);
     if (status == FX_SUCCESS) {
+        if (have_backup) {
+            UINT ds = bak_is_dir ? fx_directory_delete(media, fx_bak)
+                                 : fx_file_delete(media, fx_bak);
+            if (ds != FX_SUCCESS)
+                LOG_DRV_ERROR("rename: replaced destination backup left at %s (0x%02X)\r\n", fx_bak, ds);
+        }
         UINT fs = fx_media_flush(media);
         if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after rename failed: 0x%02X\r\n", fs);
     } else {
-        LOG_DRV_ERROR("fx_file_rename failed: 0x%02X, old=%s, new=%s\r\n", status, oldpath, newpath);
+        LOG_DRV_ERROR("fx rename failed: 0x%02X, old=%s, new=%s\r\n", status, oldpath, newpath);
+        if (have_backup) {
+            /* Put the original destination back */
+            UINT rs = bak_is_dir ? fx_directory_rename(media, fx_bak, fx_new)
+                                 : fx_file_rename(media, fx_bak, fx_new);
+            if (rs != FX_SUCCESS) {
+                LOG_DRV_ERROR("rename: restoring destination failed: old copy left at %s (0x%02X)\r\n", fx_bak, rs);
+            } else {
+                (void)fx_media_flush(media);
+            }
+        }
+    }
+    return (status == FX_SUCCESS) ? 0 : -1;
+}
+
+// Rename file or directory. FileX rename never overwrites an existing target
+// (FX_ALREADY_CREATED), and the destination must survive a failed swap (e.g.
+// upload_coordinator renames tmp metadata over the committed manifest): an
+// existing destination is parked under a backup name and restored if the
+// rename fails, instead of being deleted up front.
+//
+// Non-ASCII names go through FileX's unicode API family: CHAR* renames
+// zero-extend UTF-8 bytes into LFN code units (mojibake on a PC), while the
+// unicode variants write real UTF-16 LFNs but only address bare names inside
+// the current default directory - hence the parent-resolve + default-set
+// dance below.
+int sd_filex_rename(void *context, const char *oldpath, const char *newpath)
+{
+    FX_MEDIA *media = (FX_MEDIA*)context;
+
+    /* Plain byte-oriented flow for pure-ASCII paths, and for any path on
+     * exFAT media (fx_unicode_* rejects exFAT - see sd_media_is_exfat). */
+    if ((sd_str_is_ascii(oldpath) && sd_str_is_ascii(newpath)) ||
+        sd_media_is_exfat(media)) {
+        sd_lock();
+        int r = sd_rename_plain_locked(media, oldpath, newpath);
+        sd_unlock();
+        return r;
+    }
+
+    char old_parent[FX_MAX_LONG_NAME_LEN], new_parent[FX_MAX_LONG_NAME_LEN];
+    const char *old_name = sd_split_path(oldpath, old_parent, sizeof(old_parent));
+    const char *new_name = sd_split_path(newpath, new_parent, sizeof(new_parent));
+
+    UCHAR u16_old[FX_MAX_LONG_NAME_LEN * 2], u16_new[FX_MAX_LONG_NAME_LEN * 2];
+    UCHAR u16_bak[FX_MAX_LONG_NAME_LEN * 2];
+    int n_old = sd_utf8_to_utf16(old_name, u16_old, FX_MAX_LONG_NAME_LEN);
+    int n_new = sd_utf8_to_utf16(new_name, u16_new, FX_MAX_LONG_NAME_LEN);
+    int n_bak = sd_utf8_to_utf16("~RNMBAK.TMP", u16_bak, FX_MAX_LONG_NAME_LEN);
+    if (n_old <= 0 || n_new <= 0 || n_bak <= 0) return -1;
+
+    sd_lock();
+
+    char P1[FX_MAX_LONG_NAME_LEN], P2[FX_MAX_LONG_NAME_LEN];
+    if (sd_resolve_dir_path(media, (old_parent[0] == '\0') ? "/" : old_parent, P1, sizeof(P1)) != 0 ||
+        sd_resolve_dir_path(media, (new_parent[0] == '\0') ? "/" : new_parent, P2, sizeof(P2)) != 0) {
+        sd_unlock();
+        return -1;
+    }
+
+    /* Source must exist; map it to its 8.3 short name and learn its type */
+    if (fx_directory_default_set(media, P1) != FX_SUCCESS) {
+        sd_unlock();
+        return -1;
+    }
+    CHAR s_old[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+    if (fx_unicode_short_name_get_extended(media, u16_old, (ULONG)n_old, s_old, FX_MAX_SHORT_NAME_LEN) != FX_SUCCESS) {
+        sd_unlock();
+        LOG_DRV_ERROR("rename: source not found path=%s\r\n", oldpath);
+        return -1;
+    }
+    UINT attr;
+    ULONG size;
+    UINT year, month, day, hour, minute, second;
+    char src_abs[FX_MAX_LONG_NAME_LEN];
+    if (sd_fx_join(P1, s_old, src_abs, sizeof(src_abs)) != 0 ||
+        fx_directory_information_get(media, src_abs, &attr, &size,
+                                     &year, &month, &day, &hour, &minute, &second) != FX_SUCCESS) {
+        sd_unlock();
+        return -1;
+    }
+    int src_is_dir = (attr & FX_DIRECTORY) ? 1 : 0;
+
+    if (sd_path_ieq(P1, P2)) {
+        /* Same directory: one unicode rename; park an existing destination
+         * under ~RNMBAK.TMP so a failure can be rolled back. */
+        int have_bak = 0, bak_is_dir = 0;
+        if (n_old != n_new || memcmp(u16_old, u16_new, (size_t)n_old * 2) != 0) {
+            CHAR s_new[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+            if (fx_unicode_short_name_get_extended(media, u16_new, (ULONG)n_new,
+                                                   s_new, FX_MAX_SHORT_NAME_LEN) == FX_SUCCESS &&
+                strcmp(s_new, s_old) != 0) {   /* same 8.3 = same entry, case-only rename */
+                char dst_abs[FX_MAX_LONG_NAME_LEN];
+                if (sd_fx_join(P1, s_new, dst_abs, sizeof(dst_abs)) != 0 ||
+                    fx_directory_information_get(media, dst_abs, &attr, &size,
+                                                 &year, &month, &day, &hour, &minute, &second) != FX_SUCCESS) {
+                    sd_unlock();
+                    return -1;
+                }
+                bak_is_dir = (attr & FX_DIRECTORY) ? 1 : 0;
+                if (bak_is_dir != src_is_dir) {
+                    LOG_DRV_ERROR("rename: destination exists with different type: %s\r\n", newpath);
+                    sd_unlock();
+                    return -1;
+                }
+                char bak_abs[FX_MAX_LONG_NAME_LEN];
+                if (sd_fx_join(P1, "~RNMBAK.TMP", bak_abs, sizeof(bak_abs)) != 0) {
+                    sd_unlock();
+                    return -1;
+                }
+                if (bak_is_dir) (void)fx_directory_delete(media, bak_abs);
+                else            (void)fx_file_delete(media, bak_abs);
+                CHAR s_ign[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+                UINT ps = bak_is_dir
+                    ? fx_unicode_directory_rename(media, u16_new, (ULONG)n_new, u16_bak, (ULONG)n_bak, s_ign)
+                    : fx_unicode_file_rename(media, u16_new, (ULONG)n_new, u16_bak, (ULONG)n_bak, s_ign);
+                if (ps != FX_SUCCESS) {
+                    LOG_DRV_ERROR("rename: parking destination failed: 0x%02X path=%s\r\n", ps, newpath);
+                    sd_unlock();
+                    return -1;
+                }
+                have_bak = 1;
+            }
+        }
+
+        CHAR s_out[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+        UINT status = src_is_dir
+            ? fx_unicode_directory_rename(media, u16_old, (ULONG)n_old, u16_new, (ULONG)n_new, s_out)
+            : fx_unicode_file_rename(media, u16_old, (ULONG)n_old, u16_new, (ULONG)n_new, s_out);
+        if (status == FX_SUCCESS) {
+            if (have_bak) {
+                CHAR s_bak[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+                if (fx_unicode_short_name_get_extended(media, u16_bak, (ULONG)n_bak,
+                                                       s_bak, FX_MAX_SHORT_NAME_LEN) == FX_SUCCESS) {
+                    char bak_abs[FX_MAX_LONG_NAME_LEN];
+                    if (sd_fx_join(P1, s_bak, bak_abs, sizeof(bak_abs)) == 0) {
+                        UINT ds = bak_is_dir ? fx_directory_delete(media, bak_abs)
+                                             : fx_file_delete(media, bak_abs);
+                        if (ds != FX_SUCCESS)
+                            LOG_DRV_ERROR("rename: backup left at %s (0x%02X)\r\n", bak_abs, ds);
+                    }
+                }
+            }
+            UINT fs = fx_media_flush(media);
+            if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after rename failed: 0x%02X\r\n", fs);
+        } else {
+            LOG_DRV_ERROR("unicode rename failed: 0x%02X, old=%s, new=%s\r\n", status, oldpath, newpath);
+            if (have_bak) {
+                CHAR s_ign[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+                UINT rs = bak_is_dir
+                    ? fx_unicode_directory_rename(media, u16_bak, (ULONG)n_bak, u16_new, (ULONG)n_new, s_ign)
+                    : fx_unicode_file_rename(media, u16_bak, (ULONG)n_bak, u16_new, (ULONG)n_new, s_ign);
+                if (rs != FX_SUCCESS)
+                    LOG_DRV_ERROR("rename: restoring destination failed, old copy left at ~RNMBAK.TMP (0x%02X)\r\n", rs);
+                else
+                    (void)fx_media_flush(media);
+            }
+        }
+        sd_unlock();
+        return (status == FX_SUCCESS) ? 0 : -1;
+    }
+
+    /* Cross-directory move with a non-ASCII component: FileX unicode renames
+     * only work inside one directory, so first plain-rename the entry onto a
+     * temp 8.3 name in the target directory (this drops its LFN), then give
+     * it the final display name there. */
+    char tmp_abs[FX_MAX_LONG_NAME_LEN];
+    if (sd_fx_join(P2, "~MVBAK.TMP", tmp_abs, sizeof(tmp_abs)) != 0) {
+        sd_unlock();
+        return -1;
+    }
+    fx_file_delete(media, tmp_abs);
+    fx_directory_delete(media, tmp_abs);
+    UINT status = src_is_dir ? fx_directory_rename(media, src_abs, tmp_abs)
+                              : fx_file_rename(media, src_abs, tmp_abs);
+    if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("rename: move to target dir failed: 0x%02X, %s -> %s\r\n", status, oldpath, newpath);
+        sd_unlock();
+        return -1;
+    }
+    if (!sd_str_is_ascii(new_name)) {
+        UCHAR u16_tmp[FX_MAX_LONG_NAME_LEN * 2];
+        int n_tmp = sd_utf8_to_utf16("~MVBAK.TMP", u16_tmp, FX_MAX_LONG_NAME_LEN);
+        CHAR s_ign[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+        if (n_tmp > 0 && fx_directory_default_set(media, P2) == FX_SUCCESS) {
+            status = src_is_dir
+                ? fx_unicode_directory_rename(media, u16_tmp, (ULONG)n_tmp, u16_new, (ULONG)n_new, s_ign)
+                : fx_unicode_file_rename(media, u16_tmp, (ULONG)n_tmp, u16_new, (ULONG)n_new, s_ign);
+        } else {
+            status = FX_INVALID_NAME;
+        }
+    } else {
+        char dst_abs[FX_MAX_LONG_NAME_LEN];
+        if (sd_fx_join(P2, new_name, dst_abs, sizeof(dst_abs)) == 0) {
+            status = src_is_dir ? fx_directory_rename(media, tmp_abs, dst_abs)
+                                  : fx_file_rename(media, tmp_abs, dst_abs);
+        } else {
+            status = FX_INVALID_PATH;
+        }
+    }
+    if (status != FX_SUCCESS) {
+        LOG_DRV_ERROR("rename: final name failed: 0x%02X, old=%s, new=%s\r\n", status, oldpath, newpath);
+        /* Roll the entry back to its origin */
+        UINT rb = src_is_dir ? fx_directory_rename(media, tmp_abs, src_abs)
+                              : fx_file_rename(media, tmp_abs, src_abs);
+        if (rb != FX_SUCCESS)
+            LOG_DRV_ERROR("rename: rollback failed, entry left at %s\r\n", tmp_abs);
+    } else {
+        UINT fs = fx_media_flush(media);
+        if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after rename failed: 0x%02X\r\n", fs);
     }
     sd_unlock();
     return (status == FX_SUCCESS) ? 0 : -1;
@@ -572,6 +937,154 @@ int sd_filex_fflush(void *context, void *fd)
  * @brief Resolve a directory path to FileX-compatible short-name path.
  *        All components are resolved (last component is a directory).
  */
+static bool sd_str_is_ascii(const char *s)
+{
+    for (; *s; s++)
+        if ((unsigned char)*s > 0x7F) return false;
+    return true;
+}
+
+/* FileX 6.1's fx_unicode_* API family rejects exFAT media with
+ * FX_NOT_IMPLEMENTED. On exFAT cards we therefore stay on the CHAR* path for
+ * non-ASCII names; the FileX exFAT read/write/search patch layer (see
+ * fx_directory_exFAT_entry_{read,write}.c and fx_directory_search.c)
+ * transparently converts between the CHAR* UTF-8 names used by this module
+ * and the real UTF-16 on-disk names, so PC interop works as well. */
+static bool sd_media_is_exfat(FX_MEDIA *media)
+{
+#ifdef FX_ENABLE_EXFAT
+    return media->fx_media_FAT_type == FX_exFAT;
+#else
+    (void)media;
+    return false;
+#endif
+}
+
+/* True when the final path component needs the unicode LFN API (FAT media
+ * with a non-ASCII name). */
+static bool sd_name_needs_unicode(FX_MEDIA *media, const char *name)
+{
+    return !sd_str_is_ascii(name) && !sd_media_is_exfat(media);
+}
+
+/* Decode UTF-8 into UTF-16LE (surrogate pairs for code points > 0xFFFF).
+ * Returns the number of UTF-16 code units written, or -1 on malformed
+ * input / buffer overflow. */
+static int sd_utf8_to_utf16(const char *utf8, UCHAR *u16, size_t u16_max)
+{
+    size_t n = 0;
+    const unsigned char *p = (const unsigned char *)utf8;
+
+    while (*p) {
+        unsigned long cp;
+        int len;
+        unsigned char c = *p;
+
+        if (c < 0x80)            { cp = c;           len = 1; }
+        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; len = 2; }
+        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; len = 3; }
+        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; len = 4; }
+        else return -1;          /* stray continuation byte */
+
+        if (len > 1) {
+            for (int i = 1; i < len; i++) {
+                if ((p[i] & 0xC0) != 0x80) return -1;
+                cp = (cp << 6) | (p[i] & 0x3F);
+            }
+        }
+        /* reject overlong forms and surrogates encoded in UTF-8 */
+        if ((len == 2 && cp < 0x80) || (len == 3 && cp < 0x800) ||
+            (len == 4 && cp < 0x10000) || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+            return -1;
+
+        if (cp >= 0x10000) {
+            if (n + 2 > u16_max) return -1;
+            cp -= 0x10000;
+            u16[n * 2]     = (UCHAR)((cp >> 10) & 0xFF);
+            u16[n * 2 + 1] = (UCHAR)((((cp >> 10) >> 8) & 0x03) | 0xD8);
+            n++;
+            u16[n * 2]     = (UCHAR)(cp & 0x3FF);
+            u16[n * 2 + 1] = (UCHAR)(((cp & 0x3FF) >> 8) | 0xDC);
+            n++;
+        } else {
+            if (n + 1 > u16_max) return -1;
+            u16[n * 2]     = (UCHAR)(cp & 0xFF);
+            u16[n * 2 + 1] = (UCHAR)(cp >> 8);
+            n++;
+        }
+        p += len;
+    }
+    return (int)n;
+}
+
+/* Encode UTF-16LE (with surrogate pairs) into UTF-8. u16_len is the number
+ * of UTF-16 code units. Returns bytes written (NUL-terminated), or -1. */
+static int sd_utf16_to_utf8(const UCHAR *u16, ULONG u16_len, char *out, size_t out_sz)
+{
+    size_t o = 0;
+
+    for (ULONG i = 0; i < u16_len; i++) {
+        unsigned long cp = u16[i * 2] | ((unsigned long)u16[i * 2 + 1] << 8);
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < u16_len) {
+            unsigned long lo = u16[(i + 1) * 2] | ((unsigned long)u16[(i + 1) * 2 + 1] << 8);
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                i++;
+            }
+        }
+        if (cp < 0x80) {
+            if (o + 1 >= out_sz) return -1;
+            out[o++] = (char)cp;
+        } else if (cp < 0x800) {
+            if (o + 2 >= out_sz) return -1;
+            out[o++] = (char)(0xC0 | (cp >> 6));
+            out[o++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            if (o + 3 >= out_sz) return -1;
+            out[o++] = (char)(0xE0 | (cp >> 12));
+            out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            if (o + 4 >= out_sz) return -1;
+            out[o++] = (char)(0xF0 | (cp >> 18));
+            out[o++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[o++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    if (o + 1 > out_sz) return -1;
+    out[o] = '\0';
+    return (int)o;
+}
+
+/* Split "dir/name" into the parent path (written to parent) and a pointer to
+ * the final component inside path. No separator -> parent is "" (root). */
+static const char *sd_split_path(const char *path, char *parent, size_t parent_sz)
+{
+    const char *fname = strrchr(path, '/');
+    if (!fname) fname = strrchr(path, '\\');
+    if (fname) {
+        size_t plen = (size_t)(fname - path);
+        if (plen >= parent_sz) plen = parent_sz - 1;
+        memcpy(parent, path, plen);
+        parent[plen] = '\0';
+        return fname + 1;
+    }
+    parent[0] = '\0';
+    return path;
+}
+
+/* Join a resolved absolute fx parent path and an 8.3 short name. */
+static int sd_fx_join(const char *parent, const char *name, char *out, size_t out_sz)
+{
+    size_t pl = strlen(parent), nl = strlen(name);
+    if (pl + 1 + nl + 1 > out_sz) return -1;
+    memcpy(out, parent, pl);
+    if (pl == 0 || out[pl - 1] != '\\') out[pl++] = '\\';
+    memcpy(out + pl, name, nl + 1);
+    return 0;
+}
+
 static int sd_resolve_dir_path(FX_MEDIA *media, const char *path, char *fx_out, size_t out_sz)
 {
     char saved_buf[FX_MAX_LONG_NAME_LEN];
@@ -601,20 +1114,9 @@ static int sd_resolve_dir_path(FX_MEDIA *media, const char *path, char *fx_out, 
 
         /* Convert UTF-8 → UTF-16LE */
         UCHAR utf16[512];
-        ULONG utf16_bytes = 0;
-        const char *s = comp;
-        while (*s && utf16_bytes + 1 < sizeof(utf16)) {
-            UCHAR c = (UCHAR)*s;
-            ULONG cp;
-            if (c < 0x80) { cp = c; s++; }
-            else if (c < 0xE0) { cp = ((c & 0x1FUL) << 6) | (*(s+1) & 0x3F); s += 2; }
-            else { cp = ((c & 0x0FUL) << 12) | ((ULONG)(*(s+1) & 0x3F) << 6) | (*(s+2) & 0x3F); s += 3; }
-            utf16[utf16_bytes++] = (UCHAR)(cp & 0xFF);
-            utf16[utf16_bytes++] = (UCHAR)(cp >> 8);
-        }
-        ULONG char_count = utf16_bytes / 2;
-        utf16[utf16_bytes] = 0;
-        utf16[utf16_bytes + 1] = 0;
+        int utf16_units = sd_utf8_to_utf16(comp, utf16, sizeof(utf16) / 2);
+        if (utf16_units < 0) continue;
+        ULONG char_count = (ULONG)utf16_units;
 
         char short_name[14] = {0};
         const char *resolved = comp;  /* default: use as-is */
@@ -642,25 +1144,16 @@ static int sd_resolve_dir_path(FX_MEDIA *media, const char *path, char *fx_out, 
 
 /**
  * @brief Resolve a file path: resolve parent directory, keep filename as-is.
- *        Output is a FileX-compatible absolute path.
+ *        Output is a FileX-compatible absolute path. For non-ASCII filenames
+ *        the final component is additionally mapped to its 8.3 short name via
+ *        the unicode LFN lookup, so entries created on a PC (real UTF-16 LFN)
+ *        are reachable. Returns -1 when the entry does not exist.
  */
 static int sd_resolve_file_path(FX_MEDIA *media, const char *path, char *fx_out, size_t out_sz)
 {
     /* Split into parent directory and filename */
     char parent[FX_MAX_LONG_NAME_LEN];
-    const char *fname = strrchr(path, '/');
-    if (!fname) fname = strrchr(path, '\\');
-    if (fname) {
-        size_t plen = fname - path;
-        if (plen >= sizeof(parent)) plen = sizeof(parent) - 1;
-        memcpy(parent, path, plen);
-        parent[plen] = '\0';
-        fname++;  /* skip the separator */
-    } else {
-        /* No parent - file in current/root directory */
-        parent[0] = '\0';
-        fname = path;
-    }
+    const char *fname = sd_split_path(path, parent, sizeof(parent));
 
     /* Resolve parent directory */
     char resolved_parent[FX_MAX_LONG_NAME_LEN];
@@ -668,16 +1161,29 @@ static int sd_resolve_file_path(FX_MEDIA *media, const char *path, char *fx_out,
                             resolved_parent, sizeof(resolved_parent)) != 0)
         return -1;
 
-    /* Build full path: parent\filename */
-    size_t pl = strlen(resolved_parent);
-    size_t fl = strlen(fname);
-    if (pl + 1 + fl >= out_sz) return -1;
-    memcpy(fx_out, resolved_parent, pl);
-    if (pl > 0 && resolved_parent[pl-1] != '\\')
-        fx_out[pl++] = '\\';
-    memcpy(fx_out + pl, fname, fl + 1);  /* includes '\0' */
+    /* Non-ASCII final name on FAT media: an entry only exists under a
+     * matching LFN - map it to its 8.3 short name (fx_* CHAR* APIs can
+     * address short names). exFAT keeps the raw name (see sd_media_is_exfat). */
+    char resolved_name[FX_MAX_LONG_NAME_LEN];
+    if (sd_name_needs_unicode(media, fname)) {
+        UCHAR u16[FX_MAX_LONG_NAME_LEN * 2];
+        int u16n = sd_utf8_to_utf16(fname, u16, FX_MAX_LONG_NAME_LEN);
+        if (u16n <= 0) return -1;
+        if (fx_directory_default_set(media, resolved_parent) != FX_SUCCESS)
+            return -1;
+        CHAR short_name[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+        UINT status = fx_unicode_short_name_get_extended(
+            media, u16, (ULONG)u16n, short_name, FX_MAX_SHORT_NAME_LEN);
+        if (status != FX_SUCCESS || short_name[0] == '\0') return -1;
+        strncpy(resolved_name, short_name, sizeof(resolved_name) - 1);
+        resolved_name[sizeof(resolved_name) - 1] = '\0';
+    } else {
+        if (strlen(fname) >= sizeof(resolved_name)) return -1;
+        strcpy(resolved_name, fname);
+    }
 
-    return 0;
+    /* Build full path: parent\filename */
+    return sd_fx_join(resolved_parent, resolved_name, fx_out, out_sz);
 }
 
 void* sd_filex_opendir(void *context, const char *path)
@@ -688,12 +1194,26 @@ void* sd_filex_opendir(void *context, const char *path)
     dir->media = media;
 
     char fx_path[FX_MAX_LONG_NAME_LEN];
+
+    /* Resolve and select under the lock, then snapshot the whole default
+     * path into the handle (see filex_dir_t): readdir swaps this copy in
+     * for every call, so other tasks' iterators and path resolutions -
+     * which rebuild the media-global default path - cannot corrupt this
+     * iteration, and vice versa. */
+    sd_lock();
     if (sd_resolve_dir_path(media, path, fx_path, sizeof(fx_path)) != 0) {
+        sd_unlock();
         hal_mem_free(dir);
         return NULL;
     }
-    /* sd_resolve_dir_path restores old default - re-set to target for readdir */
-    fx_directory_default_set(media, fx_path);
+    if (fx_directory_default_set(media, fx_path) != FX_SUCCESS) {
+        sd_unlock();
+        hal_mem_free(dir);
+        return NULL;
+    }
+    dir->state = media->fx_media_default_path;
+    dir->state.fx_path_current_entry = 0;
+    sd_unlock();
 
     dir->first_entry = 1;
     dir->finished = 0;
@@ -708,6 +1228,12 @@ int sd_filex_readdir(void *context, void *dd, char *info)
     if (dir->finished) return 0;
 
     sd_lock();
+    /* Swap this handle's saved default path into the media for the duration
+     * of the call: the find calls below advance the iteration cursor and
+     * directory-size cache in place, and any default_set() by another task
+     * between our calls would discard them (FileX keeps no other iteration
+     * state). Saved back below before unlocking. */
+    dir->media->fx_media_default_path = dir->state;
     if (dir->first_entry) {
         /* directory_name is OUTPUT - receives entry name in current default dir */
         CHAR entry_name[FX_MAX_LONG_NAME_LEN] = {0};
@@ -742,44 +1268,39 @@ int sd_filex_readdir(void *context, void *dd, char *info)
             &dir->second);
     }
 
+    /* Capture the advanced iteration state (cursor, directory size cache)
+     * for the next call before anyone else can touch the global path. */
+    dir->state = dir->media->fx_media_default_path;
+
     if (status != FX_SUCCESS) {
         dir->finished = 1;
         sd_unlock();
         return 0;
     }
 
-    // Fill info - only call fx_unicode_name_get for non-ASCII names
-    // (fx_unicode_name_get does O(N) directory scan - skip it for ASCII to avoid O(N²))
+    // Fill info - only call fx_unicode_name_get when the CHAR* name is not
+    // the display name: either it has non-ASCII bytes, or it is a numeric
+    // 8.3 alias ("NAME~1.TXT") FileX falls back to when the LFN holds real
+    // UTF-16 (e.g. Chinese names created on a PC). The lookup is an O(N)
+    // directory scan, so plain ASCII names skip it to avoid O(N²) listings.
     sd_info->name[0] = '\0';
     {
         bool need_unicode = false;
         for (const char *p = dir->entry_name; *p; p++) {
-            if ((unsigned char)*p > 0x7F) { need_unicode = true; break; }
+            if ((unsigned char)*p > 0x7F || *p == '~') { need_unicode = true; break; }
         }
 
         if (need_unicode) {
             UCHAR unicode_name[FX_MAX_LONG_NAME_LEN * 2];
             ULONG unicode_len = 0;
-            UINT uni_status = fx_unicode_name_get(dir->media, dir->entry_name,
-                                                   unicode_name, &unicode_len);
+            UINT uni_status = fx_unicode_name_get_extended(dir->media, dir->entry_name,
+                                                   unicode_name, &unicode_len, sizeof(unicode_name));
             if (uni_status == FX_SUCCESS && unicode_len > 0 && unicode_len * 2 <= sizeof(unicode_name)) {
                 // Convert UTF-16LE to UTF-8 for sd_info->name
-                size_t out = 0;
-            for (ULONG u = 0; u < unicode_len && out + 3 < FX_MAX_LONG_NAME_LEN; u++) {
-                ULONG cp = unicode_name[u * 2] | ((ULONG)unicode_name[u * 2 + 1] << 8);
-                if (cp < 0x80) {
-                    sd_info->name[out++] = (char)cp;
-                } else if (cp < 0x800) {
-                    sd_info->name[out++] = (char)(0xC0 | (cp >> 6));
-                    sd_info->name[out++] = (char)(0x80 | (cp & 0x3F));
-                } else {
-                    sd_info->name[out++] = (char)(0xE0 | (cp >> 12));
-                    sd_info->name[out++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                    sd_info->name[out++] = (char)(0x80 | (cp & 0x3F));
-                }
+                if (sd_utf16_to_utf8(unicode_name, unicode_len,
+                                     sd_info->name, FX_MAX_LONG_NAME_LEN) < 0)
+                    sd_info->name[0] = '\0';
             }
-            sd_info->name[out] = '\0';
-        }
         }
     }
     // Fallback: use short name if Unicode conversion failed
@@ -814,7 +1335,9 @@ int sd_filex_readdir(void *context, void *dd, char *info)
 
 int sd_filex_closedir(void *context, void *dd)
 {
-    /* Reset default to root so later ops start fresh */
+    /* Reset default to root so later ops start fresh. Iterators keep their
+     * own path state in the handle, so this cannot disturb an in-flight
+     * concurrent iteration (it restores its state on its next call). */
     sd_lock();
     fx_directory_default_set(((filex_dir_t*)dd)->media, "\\");
     sd_unlock();
@@ -826,15 +1349,40 @@ int sd_filex_mkdir(void *context, const char *path)
 {
     FX_MEDIA *media = (FX_MEDIA*)context;
     if (!media || !path) return -1;
-    char fx_path[FX_MAX_LONG_NAME_LEN];
-    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) return -1;
+
+    char parent[FX_MAX_LONG_NAME_LEN];
+    const char *fname = sd_split_path(path, parent, sizeof(parent));
+
     sd_lock();
-    UINT status = fx_directory_create(media, fx_path);
+    UINT status;
+    if (!sd_name_needs_unicode(media, fname)) {
+        char fx_path[FX_MAX_LONG_NAME_LEN];
+        if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) {
+            sd_unlock();
+            return -1;
+        }
+        status = fx_directory_create(media, fx_path);
+    } else {
+        /* Non-ASCII name: create through the unicode API (proper UTF-16 LFN,
+         * see sd_filex_fopen) with the parent selected as default dir. */
+        char fx_parent[FX_MAX_LONG_NAME_LEN];
+        UCHAR u16[FX_MAX_LONG_NAME_LEN * 2];
+        int n = sd_utf8_to_utf16(fname, u16, FX_MAX_LONG_NAME_LEN);
+        if (n <= 0 ||
+            sd_resolve_dir_path(media, (parent[0] == '\0') ? "/" : parent,
+                                fx_parent, sizeof(fx_parent)) != 0 ||
+            fx_directory_default_set(media, fx_parent) != FX_SUCCESS) {
+            sd_unlock();
+            return -1;
+        }
+        CHAR short_name[FX_MAX_SHORT_NAME_LEN + 1] = {0};
+        status = fx_unicode_directory_create(media, u16, (ULONG)n, short_name);
+    }
     if (status == FX_SUCCESS) {
         UINT fs = fx_media_flush(media);
         if (fs != FX_SUCCESS) LOG_DRV_ERROR("fx_media_flush after mkdir failed: 0x%02X\r\n", fs);
     } else {
-        LOG_DRV_ERROR("fx_directory_create failed: 0x%02X path=%s\r\n", status, fx_path);
+        LOG_DRV_ERROR("fx_directory_create failed: 0x%02X path=%s\r\n", status, path);
     }
     sd_unlock();
     return (status == FX_SUCCESS) ? 0 : -1;
@@ -843,8 +1391,6 @@ int sd_filex_mkdir(void *context, const char *path)
 int sd_filex_stat(void *context, const char *path, struct stat *st)
 {
     FX_MEDIA *media = (FX_MEDIA*)context;
-    char fx_path[FX_MAX_LONG_NAME_LEN];
-    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) return -1;
     UINT attributes;
     ULONG size;
     UINT year, month, day, hour, minute, second;
@@ -854,7 +1400,12 @@ int sd_filex_stat(void *context, const char *path, struct stat *st)
         return -1;
     }
 
+    char fx_path[FX_MAX_LONG_NAME_LEN];
     sd_lock();
+    if (sd_resolve_file_path(media, path, fx_path, sizeof(fx_path)) != 0) {
+        sd_unlock();
+        return -1;
+    }
     status = fx_directory_information_get(
         media,
         fx_path,
@@ -962,6 +1513,7 @@ static void sdProcess(void *argument)
              * cache an empty result (racy 0 record counts after hot-plug). */
             sd->file_ops_handle = file_ops_register(FS_SD, &sd_file_ops, &sd->sdio_disk);
             sd->media_status = MEDIA_OPENED;
+            sd->media_generation++;
             sd->mode = SD_MODE_NORMAL;
             file_ops_switch(sd->file_ops_handle);
         }
@@ -996,6 +1548,7 @@ static void sdProcess(void *argument)
                         file_ops_switch(sd->file_ops_handle);
                     }
                     sd->media_status = MEDIA_OPENED;
+                    sd->media_generation++;
                     sd->mode = SD_MODE_NORMAL;
                 }
 
@@ -1427,6 +1980,11 @@ int sd_is_media_open(void)
     /* Non-blocking readiness check: true only after sdProcess has completed
      * fx_media_open(). Used to avoid mkdir/write attempts on a closed media. */
     return (g_sd.is_init == true && g_sd.media_status == MEDIA_OPENED) ? 1 : 0;
+}
+
+uint32_t sd_media_generation(void)
+{
+    return g_sd.media_generation;
 }
 
 int sd_wait_ready_for_open(uint32_t timeout_ms)

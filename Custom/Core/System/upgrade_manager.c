@@ -213,6 +213,12 @@ int upgrade_begin_direct(upgrade_handle_t *handle, FirmwareType type, firmware_h
 {
     if (!flash_erase || type >= FIRMWARE_TYPE_COUNT || !handle || !header) return -1;
     if (flash_addr < FLASH_BASE || (flash_addr % FLASH_BLK_SIZE) != 0) return -1;
+    /* Upper bound — defense in depth for the bundle path, whose addresses come
+     * from an externally supplied partition table: the whole erase/write window
+     * [addr, addr + file_size) must stay inside physical flash (RESERVE2 ends
+     * exactly on the chip boundary). Subtraction form so uint32_t cannot wrap;
+     * the addr <= RESERVE2_END guard keeps the right side from underflowing. */
+    if (flash_addr > RESERVE2_END || header->file_size > (RESERVE2_END + 1U) - flash_addr) return -1;
 
     uint32_t base_offset = flash_addr - FLASH_BASE;
     size_t erase_blocks = (header->file_size + FLASH_BLK_SIZE - 1) / FLASH_BLK_SIZE;

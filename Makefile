@@ -67,7 +67,15 @@ FLASH_ADDR_WEB_END = 0x719FFFFF
 FLASH_ADDR_WIFI_FW_BASE = 0x71A00000
 FLASH_ADDR_WIFI_FW_END = 0x71CFFFFF
 FLASH_ADDR_LITTLEFS_BASE = 0x71D00000
+# Flash capacity (MB) of the NOR part on the board. Feeds -DBOARD_FLASH_SIZE
+# (mem_map.h keys off the same value) and picks the LittleFS erase endpoint:
+# 128M parts carry a 96M filesystem, 64M parts 32M.
+BOARD_FLASH_SIZE ?= 64
+ifeq ($(BOARD_FLASH_SIZE),128)
+FLASH_ADDR_LITTLEFS_END = 0x77CFFFFF
+else
 FLASH_ADDR_LITTLEFS_END = 0x73CFFFFF
+endif
 
 
 # Parallel build (auto-detect CPU cores)
@@ -111,7 +119,7 @@ OPT = -g3
 COMMON_CFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections -fstack-usage -std=gnu11
 COMMON_ASFLAGS = $(MCU_FLAGS) $(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 COMMON_LDFLAGS = $(MCU_FLAGS) -specs=nano.specs -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--print-memory-usage -u _printf_float
-COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=32 -DBOARD_FLASH_SIZE=64 -DOTA_DEVICE_MODEL=$(DEVICE_MODEL)
+COMMON_DEFS = -DSTM32N657xx -DUSE_FULL_LL_DRIVER -DUSE_DCACHE -DPWR_USE_3V3 -DBOARD_PSRAM_SIZE=32 -DBOARD_FLASH_SIZE=$(BOARD_FLASH_SIZE) -DOTA_DEVICE_MODEL=$(DEVICE_MODEL)
 
 # Export to sub-Makefiles
 export CC AS CP SZ READELF HEX BIN MCU_FLAGS OPT
@@ -239,7 +247,7 @@ define pkg_project
 pkg-$(1): $(2)
 	@echo "Creating package for $(1)..."
 	@$$(RM) $$(BUILD_DIR)/$(3)_v*_pkg.bin
-	@$$(PACKER) $$(BUILD_DIR)/$(3).bin -o $$(BUILD_DIR)/$(3)_v$(7)_pkg.bin -t $(4) -n $(5) -v $(6)  $(if $(8),-s $(8)) -d $(9) -m $(DEVICE_MODEL)
+	@$$(PACKER) $$(BUILD_DIR)/$(3).bin -o $$(BUILD_DIR)/$(3)_v$(7)_pkg.bin -t $(4) -n $(5) -v $(6)  $(if $(8),-s $(8)) -d $(9) -m $(DEVICE_MODEL) --board-flash $(BOARD_FLASH_SIZE)
 	@echo "$(1) package created: $(3)_v$(7)_pkg.bin"
 endef
 
@@ -278,6 +286,7 @@ pkg-bundle: pkg
 	@echo "========================================="
 	@python $(PKG_SCRIPT_DIR)/ota_bundle_packer.py $(BUILD_DIR) \
 	    -o $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin \
+	    --board-flash $(BOARD_FLASH_SIZE) \
 	    $(BUNDLE_EXTRA_FLAGS) -m $(DEVICE_MODEL)
 	@python $(PKG_SCRIPT_DIR)/verify_ota_package.py $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin > /dev/null
 	@echo "Bundle created: $(BUILD_DIR)/ne302_Full_v$(APP_VERSION_STR)_bundle.bin"
@@ -383,6 +392,7 @@ $(eval $(call erase_partition,app1,$(FLASH_ADDR_APP1_BASE),$(FLASH_ADDR_APP1_END
 $(eval $(call erase_partition,app2,$(FLASH_ADDR_APP2_BASE),$(FLASH_ADDR_APP2_END)))
 $(eval $(call erase_partition,ai-1,$(FLASH_ADDR_AI_1_BASE),$(FLASH_ADDR_AI_1_END)))
 $(eval $(call erase_partition,ai-2,$(FLASH_ADDR_AI_2_BASE),$(FLASH_ADDR_AI_2_END)))
+$(eval $(call erase_partition,web,$(FLASH_ADDR_WEB_BASE),$(FLASH_ADDR_WEB_END)))
 $(eval $(call erase_partition,wifi,$(FLASH_ADDR_WIFI_FW_BASE),$(FLASH_ADDR_WIFI_FW_END)))
 $(eval $(call erase_partition,littlefs,$(FLASH_ADDR_LITTLEFS_BASE),$(FLASH_ADDR_LITTLEFS_END)))
 
@@ -391,7 +401,7 @@ erase-all:
 	@echo "========================================="
 	@echo "Erasing all partitions (except FSBL)..."
 	@echo "========================================="
-	@$(MAKE) erase-nvs erase-ota erase-app1 erase-app2 erase-ai-default erase-ai-1 erase-ai-2 erase-ai-3 erase-littlefs
+	@$(MAKE) erase-nvs erase-ota erase-app1 erase-app2 erase-ai-1 erase-ai-2 erase-web erase-wifi erase-littlefs
 	@echo "========================================="
 	@echo "All partitions erased!"
 	@echo "========================================="
@@ -483,15 +493,15 @@ info:
 	@echo "  Model:         $(FLASH_ADDR_MODEL)"
 	@echo ""
 	@echo "Flash Partitions:"
-	@echo "  NVS:           $(FLASH_ADDR_NVS) (64KB)"
-	@echo "  OTA:           $(FLASH_ADDR_OTA) (8KB)"
+	@echo "  NVS:           $(FLASH_ADDR_NVS_BASE) (64KB)"
+	@echo "  OTA:           $(FLASH_ADDR_OTA_BASE) (8KB)"
 	@echo "  APP1:          $(FLASH_ADDR_APP1) (4MB)"
 	@echo "  APP2:          $(FLASH_ADDR_APP2) (4MB)"
 	@echo "  AI_1:          $(FLASH_ADDR_AI_1) (8MB)"
 	@echo "  AI_2:          $(FLASH_ADDR_AI_2) (8MB)"
 	@echo "  WEB:           $(FLASH_ADDR_WEB) (1MB)"
 	@echo "  WiFi FW:       $(FLASH_ADDR_WIFI) (3MB)"
-	@echo "  LittleFS:      $(FLASH_ADDR_LITTLEFS) (32MB)"
+	@echo "  LittleFS:      $(FLASH_ADDR_LITTLEFS_BASE)-$(FLASH_ADDR_LITTLEFS_END) (BOARD_FLASH_SIZE=$(BOARD_FLASH_SIZE)M)"
 	@echo "========================================="
 	@$(CC) --version | head -n 1 2>/dev/null || echo "Toolchain not found"
 	@echo "========================================="
@@ -510,7 +520,7 @@ help:
 	@echo "Package:  make pkg[-fsbl|-app|-web|-model|-wifi]"
 	@echo "Pack HEX: make pack-hex  # Pack all firmware (Main, Main+WiFi, WakeCore) to HEX files"
 	@echo "          make pack-hex-wakecore  # Pack WakeCore to separate HEX file only"
-	@echo "Erase:    make erase-[nvs|ota|app1|app2|ai-default|ai-1|ai-2|ai-3|littlefs]"
+	@echo "Erase:    make erase-[nvs|ota|app1|app2|ai-1|ai-2|web|wifi|littlefs]"
 	@echo "          make erase-all  # Erase all partitions (except FSBL)"
 	@echo "          make erase-chip           # Erase entire chip (WARNING!)"
 	@echo "Clean:    make clean[-fsbl|-app|-web|-model]"

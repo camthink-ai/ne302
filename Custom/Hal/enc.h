@@ -78,12 +78,8 @@ typedef struct {
     uint8_t *in_buffer;
     enc_out_frame_t out_frame;
     int is_intra_force;
-    int first_frame_done;    /* set once any encode has succeeded since ENC_H264_Init */
-    int startup_failures;    /* consecutive failures before that first success */
-    int qp_floor_step;       /* cold-start escape step; 0 = normal quality */
-    int qp_orig_min;         /* rate-control bounds snapshotted at the first */
-    int qp_orig_max;         /*   escalation, restored on the first success */
-    int qp_orig_hdr;
+    int startup_failures;    /* consecutive output-buffer overflows since the last success */
+    int qp_floor;            /* QP floor in force; 0 = configured quality */
 } enc_t;
 
 int enc_register(void);

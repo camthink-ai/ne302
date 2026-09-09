@@ -29,10 +29,10 @@
 | WiFi FW        | 0x71A00000        | 0x71CFFFFF        | 3M         |
 #if defined(BOARD_FLASH_SIZE) && BOARD_FLASH_SIZE == 128
 | LittleFS       | 0x71D00000        | 0x77CFFFFF        | 96M        |
-| Reserve2       | 0x77D00000        | 0x780FFFFF        | 4M         |
+| Reserve2       | 0x77D00000        | 0x77FFFFFF        | 3M         |
 #else // 64M flash
 | LittleFS       | 0x71D00000        | 0x73CFFFFF        | 32M        |
-| Reserve2       | 0x73D00000        | 0x740FFFFF        | 4M         |
+| Reserve2       | 0x73D00000        | 0x73FFFFFF        | 3M         |
 #endif
 */
 
@@ -66,6 +66,10 @@
 #endif
 
 // =================== Flash Partitions ===================
+// RESERVE2 is the tail partition and must be sized so the map ends exactly on
+// the physical chip boundary (0x78000000 for 128M parts, 0x74000000 for 64M):
+// RESERVE2_END is the flash bound the OTA bundle precheck enforces, and the
+// erase/write path below it does no bounds checking of its own.
 #define FLASH_BASE      0x70000000U
 #define FSBL_BASE       0x70000000U
 #define FSBL_END        0x7007FFFFU
@@ -105,15 +109,15 @@
 #define LITTLEFS_END    0x77CFFFFFU
 #define LITTLEFS_SIZE   (0x77D00000U - 0x71D00000U)   // 96M
 #define RESERVE2_BASE   0x77D00000U
-#define RESERVE2_END    0x780FFFFFU
-#define RESERVE2_SIZE   (0x78100000U - 0x77D00000U)   // 4M
+#define RESERVE2_END    0x77FFFFFFU
+#define RESERVE2_SIZE   (0x78000000U - 0x77D00000U)   // 3M
 #else
 #define LITTLEFS_BASE   0x71D00000U
 #define LITTLEFS_END    0x73CFFFFFU
 #define LITTLEFS_SIZE   (0x73D00000U - 0x71D00000U)   // 32M
 #define RESERVE2_BASE   0x73D00000U
-#define RESERVE2_END    0x740FFFFFU
-#define RESERVE2_SIZE   (0x74100000U - 0x73D00000U)   // 4M
+#define RESERVE2_END    0x73FFFFFFU
+#define RESERVE2_SIZE   (0x74000000U - 0x73D00000U)   // 3M
 #endif
 
 #endif // __MEMORY_MAP_H__
