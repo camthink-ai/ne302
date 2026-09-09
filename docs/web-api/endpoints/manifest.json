@@ -1,6 +1,6 @@
 {
   "base_path": "/api/v1",
-  "total_endpoints": 174,
+  "total_endpoints": 175,
   "modules": {
     "ai_management": {
       "source": "Custom/Services/Web/api/api_ai_management_module.c",
@@ -604,7 +604,7 @@
     },
     "network": {
       "source": "Custom/Services/Web/api/api_network_module.c",
-      "source_sha256": "a49b82c5bc85adc6",
+      "source_sha256": "dff7e407c007611b",
       "routes": [
         {
           "method": "GET",
@@ -616,6 +616,12 @@
           "method": "GET",
           "path": "/api/v1/system/network/wifi/sta",
           "handler": "network_wifi_sta_handler",
+          "require_auth": true
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/system/network/wifi/info",
+          "handler": "network_wifi_info_handler",
           "require_auth": true
         },
         {

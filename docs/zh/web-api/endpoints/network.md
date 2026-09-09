@@ -10,12 +10,13 @@ WiFi / 蜂窝 / PoE 网络配置与状态
 
 源文件: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_network_module.c)
 
-共 **47** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
+共 **48** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 
 | 方法 | 路径 | 鉴权 | 处理函数 |
 |------|------|:----:|----------|
 | `GET` | `/api/v1/system/network/status` | ✅ | `network_status_handler` |
 | `GET` | `/api/v1/system/network/wifi/sta` | ✅ | `network_wifi_sta_handler` |
+| `GET` | `/api/v1/system/network/wifi/info` | ✅ | `network_wifi_info_handler` |
 | `GET` | `/api/v1/system/network/wifi/ap` | ✅ | `network_wifi_ap_handler` |
 | `POST` | `/api/v1/system/network/wifi/config` | ✅ | `network_wifi_config_handler` |
 | `POST` | `/api/v1/system/network/wifi/scan` | ✅ | `network_scan_refresh_handler` |

@@ -10,12 +10,13 @@ WiFi / cellular / PoE configuration and status
 
 Source: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_network_module.c)
 
-**47** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
+**48** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 
 | Method | Path | Auth | Handler |
 |--------|------|:----:|---------|
 | `GET` | `/api/v1/system/network/status` | ✅ | `network_status_handler` |
 | `GET` | `/api/v1/system/network/wifi/sta` | ✅ | `network_wifi_sta_handler` |
+| `GET` | `/api/v1/system/network/wifi/info` | ✅ | `network_wifi_info_handler` |
 | `GET` | `/api/v1/system/network/wifi/ap` | ✅ | `network_wifi_ap_handler` |
 | `POST` | `/api/v1/system/network/wifi/config` | ✅ | `network_wifi_config_handler` |
 | `POST` | `/api/v1/system/network/wifi/scan` | ✅ | `network_scan_refresh_handler` |
