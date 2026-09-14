@@ -777,7 +777,13 @@ int rtc_get_next_wakeup_time(int sched_id, uint64_t *next_wakeup)
     
     // Snapshot current time before taking the lock (rtc_get_timeStamp only
     // reads hardware RTC, no manager lock -> no recursion).
-    uint64_t now = rtc_get_timeStamp();
+    /* next_trigger lives on the LOCAL scale (get_time() + timezone*3600 -
+     * see scheduler_manager.c): compare like with like. A UTC 'now' makes
+     * every trigger look timezone-hours into the future, so the strictly-
+     * future guard below would pass triggers stranded in the past by any
+     * forward clock step shorter than the offset. */
+    uint64_t now = rtc_get_timeStamp() +
+                   (uint64_t)(g_rtc.sched_manager.timezone * 3600);
 
     // Find minimum next_trigger for the specified scheduler. Only accept
     // triggers strictly in the future: a trigger at/before now (e.g. a job

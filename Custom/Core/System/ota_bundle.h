@@ -141,6 +141,12 @@ int ota_bundle_entries_sane(const ota_bundle_header_t *hdr);
  * differ. Informational only — feeds layout_changed/layout_diff. */
 int ota_bundle_layout_matches_device(const ota_bundle_header_t *hdr);
 
+/* Layout-change safety: returns the first BURNED partition that the bundle
+ * table moves or resizes (or omits) while carrying no firmware entry for it
+ * (-1 when every such partition is covered). Burning such a bundle would
+ * leave the device booting from blank or partially overwritten flash. */
+int ota_bundle_moved_burn_part_missing_fw(const ota_bundle_header_t *hdr);
+
 /* Structural validity: part ids known and unique, sizes > 0, no overlap,
  * inside flash bounds, and the FSBL part present-and-equal to this firmware's
  * table (silicon boot address — the only immovable partition).

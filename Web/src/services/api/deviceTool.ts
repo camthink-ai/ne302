@@ -79,6 +79,9 @@ export interface PirConfigReq {
     weekdays: number[];
     interval_mode: 'normal' | 'scheduled';
     start_time: string;
+    end_time?: string; // Scheduled mode daily window end "HH:MM"; 00:00 = ends at midnight (full day is start T with end T-1min); absent = old firmware, falls back to a full-day display
+    anchor?: string; // Normal interval mode daily grid anchor "HH:MM" (time-of-day; device stamps current time when unset)
+    next_capture_at?: number; // Read-only: next capture node, unix seconds
   };
   remote_trigger?: {
     enable: boolean;

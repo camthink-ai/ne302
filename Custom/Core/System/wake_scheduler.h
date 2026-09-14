@@ -61,20 +61,46 @@ uint64_t wake_scheduler_next_event(uint64_t now_unix_sec,
 uint64_t wake_scheduler_next_flush(uint64_t now_unix_sec);
 
 /**
+ * @brief Next capture node at or after now (same time scale as
+ *        rtc_get_timeStamp). Both interval modes share the daily lattice:
+ *        normal mode uses timer_trigger.anchor_time (sec-of-day; rolling
+ *        window [anchor, anchor+24h) — nodes flow past midnight and the
+ *        restart is at the anchor instant, not 00:00), SCHEDULED uses the
+ *        closed [start_time, end_time] daily window; ABSOLUTE uses its
+ *        config nodes. 0 = capture schedule inactive. Serves the
+ *        next_capture_at readout (GET work-mode status); sleep arming goes
+ *        through wake_scheduler_next_event instead.
+ */
+uint64_t wake_scheduler_next_capture(uint64_t now_unix_sec);
+
+/**
  * @brief Collect the distinct (by duty) events in [from, to] — at most ONE
- *        event per duty, the latest one not yet marked handled. Consumers
- *        only need "is this duty due" plus a timestamp to mark; returning
- *        every lattice point would starve the second duty in small caller
- *        buffers (1-min capture intervals filled the buffer with capture
- *        events alone and the flush event was dropped).
+ *        event per duty. Consumers only need "is this duty due" plus a
+ *        timestamp to mark; returning every lattice point would starve the
+ *        second duty in small caller buffers (1-min capture intervals filled
+ *        the buffer with capture events alone and the flush event was
+ *        dropped).
+ *        Selection prefers the LATEST node that has already ARRIVED
+ *        (node <= now_unix_sec) and only falls back to the latest still-
+ *        future node in the window when nothing arrived is pending: claiming
+ *        a future node while an arrived one waits marks it handled at this
+ *        wake, so its own (already-armed) alarm then wakes, judges everything
+ *        handled and sleeps without capturing — the last node of every
+ *        absolute burst spaced inside the tolerance window was swallowed.
+ *        The fallback keeps the early-wake semantics: a U0/RTC wake landing
+ *        up to WAKE_TOLERANCE_SEC ahead of the node still fires it
+ *        immediately instead of sleeping out the remainder.
  *        Skips events whose due_unix_sec <= last_handled_at[duty].
+ * @param now_unix_sec  current wall-clock time (arrival cutoff, NOT the
+ *                     window bounds — callers pass [now-60, now+60])
  * @param from_unix_sec  inclusive start
  * @param to_unix_sec    inclusive end
  * @param out_events     caller-provided buffer
  * @param max_events     buffer capacity
  * @return number of events written (0..max_events)
  */
-int wake_scheduler_due_events(uint64_t from_unix_sec,
+int wake_scheduler_due_events(uint64_t now_unix_sec,
+                              uint64_t from_unix_sec,
                               uint64_t to_unix_sec,
                               wake_event_t *out_events,
                               int max_events);
@@ -83,11 +109,23 @@ int wake_scheduler_due_events(uint64_t from_unix_sec,
  * @brief Persist that a duty was handled at the given absolute time.
  *        Subsequent due_events lookups will treat any event with
  *        due_unix_sec <= at_unix_sec as already-handled.
- * @note The NVS write is deferred — callers must follow the final mark of a
- *       processing cycle with wake_scheduler_flush_state() (before any long
- *       drain/sleep) so the state survives a power cut.
+ * @note RAM-only until the next wake_scheduler_flush_state(): the mark takes
+ *       effect (dedup) immediately in-process; callers flush right after
+ *       processing so the state survives a power cut.
  */
 void wake_scheduler_mark_handled(wake_duty_t duty, uint64_t at_unix_sec);
+
+/**
+ * @brief Query whether the duty's node at `at_unix_sec` is already marked
+ *        handled (due <= handled marker). Used by the RTC job-chain
+ *        callbacks: a U0 wake inside the ±WAKE_TOLERANCE_SEC window may have
+ *        taken the node EARLY; if the device then stays awake past the node
+ *        the chain job fires anyway — this query suppresses that duplicate.
+ *        A marker sitting ahead of the queried node (backward clock step) is
+ *        healed (cleared) rather than trusted, so a poison marker cannot
+ *        silently suppress captures.
+ */
+aicam_bool_t wake_scheduler_is_handled(wake_duty_t duty, uint64_t at_unix_sec);
 
 /**
  * @brief Write the deferred mark_handled state to NVS, if dirty.
@@ -95,14 +133,6 @@ void wake_scheduler_mark_handled(wake_duty_t duty, uint64_t at_unix_sec);
  *        NVS append.
  */
 void wake_scheduler_flush_state(void);
-
-/**
- * @brief Clear last_handled_at state after the RTC was stepped to a new
- *        clock scale. Always clears the in-RAM state; persists to NVS only
- *        when the old markers sit AHEAD of the new clock (backward step) —
- *        forward steps leave them harmlessly in the past, so no flash write.
- */
-void wake_scheduler_reset_state(void);
 
 /**
  * @brief Hint that the configuration changed and any cached next_event should

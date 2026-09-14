@@ -44,6 +44,9 @@ type TriggerConfigType = {
     weekdays: number[];
     interval_mode: 'normal' | 'scheduled';
     start_time: string;
+    end_time?: string; // Scheduled mode daily window end "HH:MM"; 00:00 = ends at midnight (full day is start T with end T-1min); absent = old firmware, falls back to a full-day display
+    anchor?: string; // Normal interval mode daily grid anchor "HH:MM" (device stamps current time-of-day when unset)
+    next_capture_at?: number; // Read-only, computed by the device
   };
   remote_trigger: {
     enable: boolean;
@@ -54,6 +57,18 @@ export type { TriggerConfigType as TriggerConfig };
 
 type TriggerConfigProps = {
   childeRef: React.RefObject<HTMLDivElement>;
+};
+
+// "HH:MM" string for time-of-day pickers
+const toHHMM = (d: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+// seconds-of-day from an "HH:MM" string
+const hhmmToSec = (s: string) => {
+  const [h, m] = s.split(':').map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60;
 };
 
 function PIRSkeleton() {
@@ -72,12 +87,28 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
   const { configTriggerConfigReq, getTriggerConfigReq } = deviceTool;
   const [intervalCaptureTime, setIntervalCaptureTime] = useState(10);
   const [intervalCaptureTimeUnit, setIntervalCaptureTimeUnit] = useState('hour');
+  // Raw text while editing the interval field; null = not editing (show the
+  // committed value). Parse + clamp happen once on blur — clamping inside
+  // onChange rewrites the field mid-typing (clear → forced "1", then typing
+  // "30" shows "130"), making values unreachable.
+  const [intervalDraft, setIntervalDraft] = useState<string | null>(null);
   const [scheduledStartTime, setScheduledStartTime] = useState('08:00');
+  const [scheduledEndTime, setScheduledEndTime] = useState('23:59');
+  // Daily grid anchor "HH:MM" for normal interval mode — a time-of-day, no
+  // date: the lattice restarts at this time every day. Defaults to the
+  // current time when the device hasn't stamped one yet.
+  const [anchorInput, setAnchorInput] = useState(() => toHHMM(new Date()));
   const [savePirTriggerLoading, setSavePirTriggerLoading] = useState(false);
   const [PIRLoading, setPIRLoading] = useState(false);
   const [savedNextCaptureAt, setSavedNextCaptureAt] = useState<number | null>(
     null
   );
+  // 1s tick so the next-capture preview tracks the current time
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(v => v + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const WeekUnitMap = new Map([
     [0, i18n._('common.everyday').toString()],
     [1, i18n._('common.monday').toString()],
@@ -161,34 +192,41 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
         setScheduledStartTime(st);
       }
     }
+
+    // Initialize end_time (device always emits it; '23:59' fallback is only
+    // for old firmware that omitted the field when it was 0)
+    setScheduledEndTime(triggerConfig.timer_trigger.end_time || '23:59');
+
+    // Initialize the anchor "HH:MM" from the device; when never stamped,
+    // prefill with the current time (matches the device's stamp-on-apply)
+    const { anchor } = triggerConfig.timer_trigger;
+    setAnchorInput(anchor && anchor.includes(':') ? anchor : toHHMM(new Date()));
   };
   useEffect(() => {
     initIntervalCaptureTime();
-  }, [triggerConfig.timer_trigger?.interval_sec]);
+    // Re-sync on the whole timer_trigger object, not just interval_sec: a
+    // refreshed config that keeps the same interval but changes
+    // start/end/anchor must still re-populate the inputs
+  }, [triggerConfig.timer_trigger]);
+
+  // Interval is a daily-lattice step — integers only (decimals are rounded at
+  // commit, never mid-typing), and it must stay under 24h (hour ≤ 23,
+  // minute ≤ 1439)
+  const intervalMax = intervalCaptureTimeUnit === 'hour' ? 23 : 1439;
+  const clampInterval = (value: number) => {
+    const rounded = Math.round(Number.isNaN(value) ? 1 : value);
+    return Math.max(1, Math.min(intervalMax, rounded));
+  };
 
   const handleIntervalCaptureTimeChange = (e: Event) => {
-    const target = e.target as HTMLInputElement;
-    const inputValue = target.value;
-    // Handle empty string
-    if (inputValue === '') {
-      setIntervalCaptureTime(1);
-      return;
-    }
-    const value = Number(inputValue);
-    // Limit minimum value to 1, cannot be negative or 0
-    if (Number.isNaN(value)) {
-      setIntervalCaptureTime(1);
-    } else {
-      const clampedValue = Math.max(1, value);
-      setIntervalCaptureTime(clampedValue);
-      // If value is clamped, immediately update input display
-      if (value !== clampedValue) {
-        target.value = clampedValue.toString();
-      }
-    }
+    // Keep any intermediate text (including "") as the draft; parse + clamp
+    // once on blur
+    setIntervalDraft((e.target as HTMLInputElement).value);
   };
   const handleIntervalCaptureTimeUnitChange = (value: string) => {
     setIntervalCaptureTimeUnit(value);
+    // Re-clamp for the new unit (e.g. 120 minutes -> 23 hours)
+    setIntervalCaptureTime(prev => Math.max(1, Math.min(value === 'hour' ? 23 : 1439, prev)));
   };
   const handleAddIntervalCapture = () => {
     if (!triggerConfig.timer_trigger) return;
@@ -233,18 +271,52 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
     const formateTime = intervalCaptureTimeUnit === 'hour'
       ? intervalCaptureTime * 60 * 60
       : intervalCaptureTime * 60;
+    if (formateTime < 60 || formateTime >= 86400) {
+      // Daily-lattice step must be a strict sub-day amount
+      toast.error(i18n._('sys.device_tool.interval_limit_error'));
+      return;
+    }
+    const isScheduled =      triggerConfig.timer_trigger.interval_mode === 'scheduled';
+    if (isScheduled) {
+      const startSec = hhmmToSec(scheduledStartTime);
+      const endSec = hhmmToSec(scheduledEndTime || '23:59');
+      // Equal start/end is reserved for the normal-mode lattice's internal
+      // representation; a scheduled full day is any start T with end T-1min
+      // (00:00-23:59 is just the midnight-anchored case)
+      if (endSec === startSec) {
+        toast.error(i18n._('sys.device_tool.end_eq_start_error'));
+        return;
+      }
+      // Inclusive window: closed [start, end] — span + 1 so a node landing
+      // exactly on the end fires
+      const windowSec =        (endSec > startSec
+          ? endSec - startSec
+          : endSec + 86400 - startSec) + 1;
+      if (windowSec <= formateTime) {
+        toast.error(i18n._('sys.device_tool.window_le_interval_error'));
+        return;
+      }
+    }
     try {
+      const tt = {
+        ...triggerConfig.timer_trigger,
+        interval_sec: formateTime,
+        interval_mode: triggerConfig.timer_trigger.interval_mode || 'normal',
+        start_time: isScheduled ? scheduledStartTime : '00:00',
+      };
+      if (isScheduled) {
+        // Daily window end, closed [start, end]: 00:00 = ends at midnight;
+        // must differ from start (a full day is any start T with end T-1min,
+        // guarded below)
+        tt.end_time = scheduledEndTime;
+      }
+      if (!isScheduled) {
+        // Daily grid anchor "HH:MM" (a time-of-day, no date component)
+        tt.anchor = anchorInput;
+      }
       const newConfig = {
         ...triggerConfig,
-        timer_trigger: {
-          ...triggerConfig.timer_trigger,
-          interval_sec: formateTime,
-          interval_mode: triggerConfig.timer_trigger.interval_mode || 'normal',
-          start_time:
-            triggerConfig.timer_trigger.interval_mode === 'scheduled'
-              ? scheduledStartTime
-              : '00:00',
-        },
+        timer_trigger: tt,
       };
       await setTriggerConfigApi(newConfig);
       toast.success(i18n._('common.configSuccess'));
@@ -344,6 +416,49 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
     setTriggerConfigApi(newConfig);
   };
 
+  // Live preview of the next capture node from the PENDING (edited) config
+  // and the current time — a client-side port of the device's daily-lattice
+  // math (shared by both interval modes: nodes start + k*interval inside
+  // [start, start+window), the lattice restarts at start every day), so it
+  // updates as the user edits the anchor/interval/window and as time passes,
+  // instead of freezing at the last save. Falls back to the device-reported
+  // value when inputs are not yet known.
+  const computeNextCapturePreview = (): number | null => {
+    const tt = triggerConfig.timer_trigger;
+    if (!tt?.enable || tt.capture_mode !== 'interval') return savedNextCaptureAt;
+    const intervalSec =      intervalCaptureTimeUnit === 'hour'
+        ? intervalCaptureTime * 3600
+        : intervalCaptureTime * 60;
+    if (!intervalSec || intervalSec < 1) return savedNextCaptureAt;
+
+    const isScheduled = tt.interval_mode === 'scheduled';
+    const startSec = isScheduled
+      ? hhmmToSec(scheduledStartTime)
+      : hhmmToSec(anchorInput || tt.anchor || '00:00');
+    // Mirror the device's interval_capture_window: normal mode is always a
+    // full-day lattice, expressed as end == start
+    const endSec = isScheduled
+      ? hhmmToSec(scheduledEndTime || '23:59')
+      : startSec;
+
+    const d = new Date();
+    const nowSec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+    // Window: non-full-day is closed [start, end] (span + 1); equal = full day
+    const windowSec =      endSec === startSec
+        ? 86400
+        : (endSec > startSec
+            ? endSec - startSec
+            : endSec + 86400 - startSec) + 1;
+    const cyc = (nowSec + 86400 - startSec) % 86400;
+    const nxt = cyc - (cyc % intervalSec) + intervalSec;
+    // nxt >= windowSec -> window exhausted -> node is the next window start
+    const nodeSec = (startSec + (nxt >= windowSec ? 0 : nxt)) % 86400;
+    const dayOffset = nodeSec <= nowSec ? 1 : 0;
+    const midnight = new Date(d);
+    midnight.setHours(0, 0, 0, 0);
+    return Math.floor(midnight.getTime() / 1000) + dayOffset * 86400 + nodeSec;
+  };
+
   const intervalCapture = () => (
     <div className="">
       {/* Interval type selector */}
@@ -394,18 +509,23 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
           <Input
             type="number"
             min={1}
-            max={999}
+            max={intervalMax}
             className="w-20"
-            value={intervalCaptureTime}
+            value={intervalDraft ?? intervalCaptureTime}
             onChange={handleIntervalCaptureTimeChange}
             onBlur={e => {
-              const value = Number((e.target as HTMLInputElement).value);
-              const clampedValue = Math.max(
-                1,
-                Math.min(999, Number.isNaN(value) ? 1 : value)
+              const clampedValue = clampInterval(
+                Number((e.target as HTMLInputElement).value)
               );
               setIntervalCaptureTime(clampedValue);
-              (e.target as HTMLInputElement).value = clampedValue.toString();
+              setIntervalDraft(null);
+            }}
+            onKeyDown={e => {
+              // Enter commits (blurs) like clicking away
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                (e.target as HTMLInputElement).blur();
+              }
             }}
           />
           <Select
@@ -423,26 +543,64 @@ export default function TriggerConfig({ childeRef }: TriggerConfigProps) {
         </div>
       </div>
 
-      {/* Start time — only for scheduled mode */}
+      {/* Start / end time — only for scheduled mode */}
       {triggerConfig.timer_trigger?.interval_mode === 'scheduled' && (
-        <div className="flex justify-between items-center gap-2 mt-2">
-          <Label className="text-sm text-text-primary">
-            {i18n._('sys.device_tool.start_time')}
-          </Label>
-          <TimePicker
-            value={scheduledStartTime}
-            onChange={(value: string) => setScheduledStartTime(value)}
-            className="w-32"
-          />
-        </div>
+        <>
+          <div className="flex justify-between items-center gap-2 mt-2">
+            <Label className="text-sm text-text-primary">
+              {i18n._('sys.device_tool.start_time')}
+            </Label>
+            <TimePicker
+              value={scheduledStartTime}
+              onChange={(value: string) => setScheduledStartTime(value)}
+              className="w-32"
+            />
+          </div>
+          <div className="flex justify-between items-center gap-2 mt-2">
+            <Label className="text-sm text-text-primary">
+              {i18n._('sys.device_tool.end_time')}
+            </Label>
+            <TimePicker
+              value={scheduledEndTime}
+              onChange={(value: string) => setScheduledEndTime(value)}
+              className="w-32"
+            />
+          </div>
+          <p className="text-xs text-text-secondary mt-1 text-right">
+            {i18n._('sys.device_tool.end_time_note')}
+          </p>
+        </>
       )}
 
-      {/* Next capture info — only shown after config is saved to server */}
-      {savedNextCaptureAt && triggerConfig.timer_trigger?.enable && (
+      {/* Grid anchor — only for normal interval mode */}
+      {triggerConfig.timer_trigger?.interval_mode !== 'scheduled' && (
+        <>
+          <div className="flex justify-between items-center gap-2 mt-2">
+            <Label className="text-sm text-text-primary">
+              {i18n._('sys.device_tool.anchor')}
+            </Label>
+            <TimePicker
+              value={anchorInput}
+              onChange={(value: string) => setAnchorInput(value)}
+              className="w-32"
+            />
+          </div>
+          <p className="text-xs text-text-secondary mt-1 text-right">
+            {i18n._('sys.device_tool.anchor_note')}
+          </p>
+        </>
+      )}
+
+      {/* Next capture — live preview from the pending config + current time;
+          falls back to the device-reported value until an anchor exists */}
+      {(computeNextCapturePreview() ?? savedNextCaptureAt) != null
+        && triggerConfig.timer_trigger?.enable && (
         <div className="mt-2 p-2 bg-orange-50 border border-orange-100 rounded-md text-xs text-orange-700 flex justify-between">
           <span>{i18n._('sys.device_tool.next_capture')}</span>
           <span className="font-medium">
-            {new Date(savedNextCaptureAt * 1000).toLocaleString()}
+            {new Date(
+              (computeNextCapturePreview() ?? savedNextCaptureAt)! * 1000
+            ).toLocaleString()}
           </span>
         </div>
       )}

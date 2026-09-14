@@ -81,6 +81,22 @@ typedef struct {
      uint8_t weekdays[10]; // 0: all days, 1: Monday, 2: Tuesday, 3: Wednesday, 4: Thursday, 5: Friday, 6: Saturday, 7: Sunday
      aicam_timer_interval_mode_t interval_mode; // 0=normal (immediate), 1=scheduled (from start_time)
      uint32_t start_time;                       // Seconds since midnight, only for scheduled mode
+     uint32_t end_time;                         // Seconds since midnight, scheduled mode daily window end.
+                                                // Window is CLOSED [start, end]. May be < start_time (wraps
+                                                // past midnight; 00:00 with start > 0 ends at midnight).
+                                                // Only normal mode stores end == start (its full-day
+                                                // representation); the scheduled API rejects an equal pair.
+                                                // Legacy NVS without this key is migrated (one-shot) at
+                                                // load to a full-day window (end = start - 60s).
+     uint32_t anchor_time;                      // Normal interval mode: daily grid anchor, seconds since
+                                                // midnight. The rolling window [anchor, anchor+24h)
+                                                // crosses midnight — nodes keep flowing past 00:00
+                                                // (anchor 11:00 with a 5h interval -> 11:00 16:00 21:00
+                                                // 02:00 07:00, all one window); a new window opens at
+                                                // the NEXT anchor instant, never at midnight. 0 = not
+                                                // yet stamped (apply stamps
+                                                // it with the current time-of-day). Identical math to
+                                                // scheduled mode with a full-day window.
  } timer_trigger_config_t;
 
  typedef struct {

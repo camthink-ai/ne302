@@ -306,19 +306,26 @@ static aicam_result_t records_get(http_handler_context_t *ctx)
     /* Range filter + sort + pagination are all handled inside
      * upload_coordinator (which traverses per-date subdirs efficiently).
      * The API layer just allocates the page buffer and serializes. */
-    record_info_t *recs = (record_info_t *)buffer_calloc(limit, sizeof(record_info_t));
+    /* Fetch one record past the page so a full page no longer fabricates a
+     * next one: with total % limit == 0 the old estimate (offset + limit + 1)
+     * enabled "Next" on the final page and opened an empty page with an
+     * inconsistent range (e.g. 21-20 / 20). The full-count traverse
+     * (upload_coordinator_count_records) stays skipped - it's O(all records)
+     * and causes web timeouts with thousands of files. total remains an
+     * estimate, just never over by one: exact on the last page (offset + n),
+     * minimal (offset + n, where the probe record makes n = limit + 1) when
+     * more records follow. */
+    uint32_t fetch = limit + 1;
+    record_info_t *recs = (record_info_t *)buffer_calloc(fetch, sizeof(record_info_t));
     if (!recs) return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "OOM");
 
-    int n = upload_coordinator_list_records(st, offset, limit,
+    int n = upload_coordinator_list_records(st, offset, fetch,
                                             from_ts, to_ts, sort_desc,
-                                            recs, (int)limit);
-    /* Skip the full-count traverse (upload_coordinator_count_records) - it's
-     * O(all records) and causes web timeouts with thousands of files. Instead,
-     * estimate total from the page result: if the page is full (n == limit),
-     * there's at least one more → total = offset + n + 1 (enables "Next"). If
-     * not full, total = offset + n (exact, last page). This gives correct
-     * pagination without traversing the entire directory tree. */
-    uint32_t total = offset + (uint32_t)n + ((uint32_t)n >= limit ? 1 : 0);
+                                            recs, (int)fetch);
+    uint32_t total = offset + (uint32_t)n;
+    if ((uint32_t)n > limit) {
+        n = (int)limit;         /* trim the probe - it belongs to page + 1 */
+    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "state", state_str(st));

@@ -323,7 +323,7 @@ export default function HalowNetworkPage() {
 
     const handleConnect = async (data: HalowData) => {
         if (!data) return;
-        if (!isValidatePassword(halowPassword, 8, 64) && data.security !== 'open') {
+        if (!isValidatePassword(halowPassword, 8, 63) && data.security !== 'open') {
             setIsErrorPassword(true);
             return;
         }
@@ -499,7 +499,7 @@ export default function HalowNetworkPage() {
     };
 
     useEffect(() => {
-        if (!isValidatePassword(halowPassword, 8, 64) && isErrorPassword) {
+        if (!isValidatePassword(halowPassword, 8, 63) && isErrorPassword) {
             setIsErrorPassword(true);
         } else {
             setIsErrorPassword(false);

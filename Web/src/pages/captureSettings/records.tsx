@@ -136,15 +136,15 @@ to: appliedTo,
       const res: any = await fileManagement.preview(fsType, path, true);
       const blob = res instanceof Blob ? res : res?.data;
       if (blob instanceof Blob) {
-        /* Backend returns a JSON {too_large:true} error (as a blob, since we
-         * requested responseType blob) when the image exceeds the preview
-         * limit — detect it instead of rendering a broken image. Primary is
-         * pre-checked by size, but inference size isn't tracked, so catch it
-         * here. */
+        /* Backend returns a JSON error (as a blob, since we requested
+         * responseType blob) when the image exceeds the preview limit — the
+         * standard wrapper nests it as {success:true,data:{too_large:true}},
+         * so unwrap `data` before checking. Primary is pre-checked by size,
+         * but inference size isn't tracked, so catch it here. */
         if (blob.type && blob.type.includes('json')) {
           try {
             const j = JSON.parse(await blob.text());
-            if (j && j.too_large) {
+            if (j && (j.data?.too_large || j.too_large)) {
               toast.error(i18n._('sys.capture_settings.preview_too_large') ?? 'Exceeds preview size');
               return;
             }

@@ -575,10 +575,15 @@ class MsMediaSource {
         } catch (e) {
             const errName = (e as Error)?.name || '';
             if (errName === 'QuotaExceededError') {
-                // Reclaim space by trimming the buffered window and let the next
-                // updateend retry, instead of nuking the whole pipeline.
+                // Reclaim space by trimming the buffered window and retry the
+                // SAME batch on the next updateend. The batch may hold the
+                // init segment or a keyframe - dropping it would leave every
+                // following frame undecodable until the next keyframe (a
+                // visible stream gap), so push it back to the head of the
+                // queue for the post-trim retry.
                 console.warn('MSE quota exceeded; trimming buffered window');
                 logStreamError('VIDEO', 'quota', errName, 'buffer full; trimmed');
+                this.frameBuffer = batch.concat(this.frameBuffer);
                 this.trimBuffered(this.QUOTA_RECOVERY_WINDOW);
                 return;
             }
@@ -659,6 +664,17 @@ class MsMediaSource {
         video.addEventListener('stalled', this.boundOnVideoStall);
     }
 
+    /**
+     * Switch between live preview (false) and recorded playback (true).
+     * Drives live-edge seeking, buffer-window size and the playback-specific
+     * startup path in updateSourceBuffer()/handleSourceOpen().
+     *
+     * NOT WIRED UP YET: recorded playback is not implemented - H264Player's
+     * setPlayMode (the only intended caller) is itself dead code today, so
+     * this stays false and every stream is treated as a live preview. When
+     * playback lands, H264Player must forward its mode here (see the
+     * setPlayMode note in h264Player.ts).
+     */
     setPlayMode(playback: boolean): void {
         this.isPlayback = playback;
     }

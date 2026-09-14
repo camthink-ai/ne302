@@ -938,6 +938,20 @@ export default class H264Player {
         this.videoPlayer?.updateSourceBuffer();
     }
 
+    /**
+     * Switch between live preview (false) and recorded playback (true).
+     *
+     * NOT WIRED UP YET: no caller and no playback UI exists - both H264Player
+     * consumers (deviceTool player, graphics tuning) are live-preview only, so
+     * this whole path is currently dead code and `isPlayback` stays false.
+     *
+     * When recorded playback is implemented, this method must ALSO propagate
+     * the mode to the MsMediaSource (`this.videoPlayer?.setPlayMode(opt)`,
+     * plus after every `new MsMediaSource(...)` reconstruction) - the media
+     * source keeps its own `isPlayback` flag that drives live-edge seeking,
+     * buffer-window trimming and the playback-specific startup path, and
+     * leaving it false makes recorded streams get treated as live previews.
+     */
     setPlayMode(opt: boolean): void {
         this.isPlayback = opt;
     }

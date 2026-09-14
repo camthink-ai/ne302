@@ -20,7 +20,6 @@
 #include "cat1.h"
 #include "ms_modem.h"
 #include "drtc.h"
-#include "wake_scheduler.h"
 #include "iperf_test.h"
 #include "ms_mqtt_client_test.h"
 #include "ms_network_test.h"
@@ -92,15 +91,14 @@ static const char *netif_encryption_str[] = {"default", "no_encryption", "wep", 
 void sntp_set_system_time(uint32_t sec)
 {
     /* rtc_set_timeStamp() guards sub-2s steps and re-arms the RTC alarm when
-     * the clock actually moves (see rtc_setup_by_timestamp). On a real step,
-     * drop wake_scheduler's last-handled-at markers — they are on the old
-     * clock scale. reset_state only writes NVS when the step was backwards
-     * (markers ahead of the new clock); forward steps are RAM-only. */
+     * the clock actually moves (see rtc_setup_by_timestamp). The wake
+     * scheduler's last-handled markers are NOT reset here: after a backward
+     * step they sit ahead of the clock and would poison the dedup lookups —
+     * due_events() detects that case itself and clears the marker, so no
+     * explicit reset hook is needed on the step path. */
     LOG_SIMPLE("NTP: %d s (delta %d s)\r\n", sec,
                (int)((int64_t)sec - (int64_t)(uint32_t)rtc_get_timeStamp()));
-    if (rtc_set_timeStamp(sec)) {
-        wake_scheduler_reset_state();
-    }
+    (void)rtc_set_timeStamp(sec);
 }
 
 void sntp_get_system_time(uint32_t *sec, uint32_t *us)

@@ -30,6 +30,11 @@ aicam_result_t web_api_register_ota_module(void);
  */
 void ota_upload_stream_processor(struct mg_connection *c, int ev, void *ev_data);
 
+/* First field of ota_upload_ctx_t: the event loop routes detached
+ * streaming connections by this tag (see web_server.c) so concurrent file
+ * and OTA uploads cannot cross-dispatch into each other's context. */
+#define OTA_UPLOAD_CTX_MAGIC 0x4F544150u  /* 'OTAP' */
+
 /**
  * @brief OTA pre-check handler - POST /api/v1/system/ota/precheck
  * @param ctx HTTP request context

@@ -500,10 +500,19 @@ aicam_result_t api_response_error(http_handler_context_t* ctx,
         }
         // use POLL or READ event to drive data write
         // most Mongoose versions will trigger callbacks after POLL or each IO
-        if (ota_is_upload_in_progress()) {
-            ota_upload_stream_processor(c, ev, ev_data);
-        } else {
-            file_upload_stream_processor(c, ev, ev_data);
+        /* Route by the connection's OWN context tag, not by the global
+         * OTA flag: a file upload and an OTA upload running concurrently
+         * (separate tabs/clients) would otherwise feed the file connection's
+         * context to the OTA processor - misinterpreted context, unconsumed
+         * body and a file handle leaked on close. Both context structs carry
+         * their magic as the first field. */
+        {
+            uint32_t stream_magic = *(const uint32_t *)c->fn_data;
+            if (stream_magic == OTA_UPLOAD_CTX_MAGIC) {
+                ota_upload_stream_processor(c, ev, ev_data);
+            } else {
+                file_upload_stream_processor(c, ev, ev_data);
+            }
         }
         return;
     }

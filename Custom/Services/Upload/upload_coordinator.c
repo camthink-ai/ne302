@@ -965,7 +965,17 @@ static aicam_result_t move_record(FS_Type_t fs, const char *id,
         return AICAM_ERROR;
     }
 
-    (void)manifest_append(fs, id, (uint8_t)to, ts, size);
+    if (manifest_append(fs, id, (uint8_t)to, ts, size) != AICAM_OK) {
+        /* The .json already carries the new state but the manifest still
+         * classifies the record under the old one (append failed - typically
+         * a full filesystem). Same convergence window as a power cut between
+         * the rename and the append: the next pass re-visits the record and
+         * retries the transition. Acknowledging success here would let a full
+         * disk re-publish an already-delivered record forever while every
+         * transition reports successful. */
+        LOG_SVC_ERROR("upload: manifest append failed id=%s state=%d", id, (int)to);
+        return AICAM_ERROR;
+    }
     g_count_cache_dirty = true;
     if (to == RECORD_STATE_SENT) LOG_SVC_INFO("upload ok: %s", id);
     return AICAM_OK;
@@ -1110,7 +1120,7 @@ typedef struct {
  * visited (passing offset/limit filter). */
 typedef aicam_result_t (*record_visitor_t)(FS_Type_t fs, const char *id, void *user);
 
-#define MAX_DATE_FILES 128
+#define DATE_ENUM_INITIAL_CAP 128   /* date array grows past this on demand */
 #define IDX_MAX_ENTRIES 65536   /* sanity cap: 2 MB manifest */
 
 /* FNV-1a hash over a record id (NUL-padded, ≤20 bytes). */
@@ -1228,20 +1238,24 @@ static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *o
 
     /* Dedup keeping the latest entry per id. Open-addressing hash id→index;
      * since entries are append-ordered, setting slot=i on each visit leaves
-     * the last occurrence index in the slot. */
-    #define IDX_HASH_SIZE 4096
-    int32_t *hslot = (int32_t *)buffer_calloc(IDX_HASH_SIZE, sizeof(int32_t));
+     * the last occurrence index in the slot. Table sized to the entry count
+     * (next power of two strictly above n_read) so a free slot always exists
+     * and probing terminates: a fixed-size table spins forever here once a
+     * day manifest carries more unique ids than it has slots. */
+    int tsize = 256;
+    while (tsize <= n_read) tsize <<= 1;
+    int32_t *hslot = (int32_t *)buffer_calloc((size_t)tsize, sizeof(int32_t));
     if (!hslot) { buffer_free(ent); return NULL; }
-    for (int i = 0; i < IDX_HASH_SIZE; i++) hslot[i] = -1;
+    for (int i = 0; i < tsize; i++) hslot[i] = -1;
     for (int i = 0; i < n_read; i++) {
-        uint32_t h = id_hash(ent[i].id) & (IDX_HASH_SIZE - 1);
+        uint32_t h = id_hash(ent[i].id) & (uint32_t)(tsize - 1);
         for (;;) {
             int s = hslot[h];
             if (s < 0) { hslot[h] = i; break; }                /* new id */
             if (strncmp(ent[s].id, ent[i].id, sizeof(ent[i].id)) == 0) {
                 hslot[h] = i; break;                            /* update latest */
             }
-            h = (h + 1) & (IDX_HASH_SIZE - 1);
+            h = (h + 1) & (uint32_t)(tsize - 1);
         }
     }
     /* Collect the latest entry per id into a SEPARATE array. In-place
@@ -1249,19 +1263,18 @@ static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *o
      * index that an earlier compaction step already overwrote, resurrecting a
      * stale (e.g. pre-tombstone) entry for that id. Copying out avoids that. */
     int n_uniq = 0;
-    for (int s = 0; s < IDX_HASH_SIZE; s++) if (hslot[s] >= 0) n_uniq++;
+    for (int s = 0; s < tsize; s++) if (hslot[s] >= 0) n_uniq++;
     cap_idx_entry_t *uniq = (cap_idx_entry_t *)buffer_calloc(
         (size_t)(n_uniq ? n_uniq : 1), IDX_ENTRY_SIZE);
     if (!uniq) { buffer_free(hslot); buffer_free(ent); return NULL; }
     int u = 0;
-    for (int s = 0; s < IDX_HASH_SIZE; s++) {
+    for (int s = 0; s < tsize; s++) {
         int i = hslot[s];
         if (i < 0) continue;
         uniq[u++] = ent[i];
     }
     buffer_free(hslot);
     buffer_free(ent);   /* raw array no longer needed */
-    #undef IDX_HASH_SIZE
 
     /* Drop tombstones (DELETED) - they are not current records. */
     int n_live = 0;
@@ -1283,47 +1296,81 @@ static cap_idx_entry_t *manifest_load_day(FS_Type_t fs, const char *date, int *o
     return uniq;
 }
 
-/* Enumerate date manifest files in /captures/index/, filtered to
- * [from_date, to_date] (lexicographic = chronological for YYYY-MM-DD).
- * Fills caller-allocated `dates` ([][12]); returns count. sort_desc reverses. */
-static int enumerate_date_files(FS_Type_t fs, char (*dates)[12], int max,
-                                const char *from_date, const char *to_date,
-                                aicam_bool_t sort_desc)
+/* Comparator: sort date strings ("YYYY-MM-DD") ascending. */
+static int date_str_cmp(const void *a, const void *b)
 {
-    int n = 0;
-    void *dd = disk_file_opendir(fs, CAPTURES_DIR_INDEX);
-    if (dd) {
-        dir_entry_t e;
-        while (n < max && disk_file_readdir(fs, dd, (char *)&e) > 0) {
-            const char *name = e.name;
-            if (name[0] == '.') continue;
-            size_t nlen = strlen(name);
+    return strcmp((const char *)a, (const char *)b);
+}
+
+/* Enumerate date names in `dir` - either /captures/index/ ("YYYY-MM-DD.idx"
+ * manifests, idx_names = TRUE) or /captures/meta/ (per-date subdirs,
+ * idx_names = FALSE) - filtered to [from_date, to_date] (lexicographic =
+ * chronological for YYYY-MM-DD). The result array grows on the heap: a fixed
+ * cap silently dropped every date past it from counts, listing, cleanup and
+ * flush, and keep-forever SD retention does run past 128 days. Returns the
+ * date count (-1 on opendir failure) and sets *out_dates to a buffer_calloc'd
+ * []{12} (NULL for count 0; caller frees via buffer_free). OOM keeps the
+ * partial list - truncation is logged, never silent, and reported via
+ * *out_truncated (when non-NULL) so callers that must not act on an
+ * incomplete date set (rebuild_index) can bail before mutating anything.
+ * sort_desc reverses. */
+static int enumerate_date_files(FS_Type_t fs, const char *dir,
+                                aicam_bool_t idx_names,
+                                char (**out_dates)[12],
+                                const char *from_date, const char *to_date,
+                                aicam_bool_t sort_desc,
+                                aicam_bool_t *out_truncated)
+{
+    if (!out_dates) return -1;
+    if (out_truncated) *out_truncated = AICAM_FALSE;
+    int n = 0, cap = 0;
+    char (*dates)[12] = NULL;
+    *out_dates = NULL;
+
+    void *dd = disk_file_opendir(fs, dir);
+    if (!dd) return -1;
+
+    dir_entry_t e;
+    while (disk_file_readdir(fs, dd, (char *)&e) > 0) {
+        const char *name = e.name;
+        if (name[0] == '.') continue;
+        size_t nlen = strlen(name);
+        if (idx_names) {
             if (nlen != 14) continue;               /* "YYYY-MM-DD.idx" */
             if (strcmp(name + 10, ".idx") != 0) continue;
-            if (name[4] != '-' || name[7] != '-') continue;
-            int ok = 1;
-            for (int i = 0; i < 10; i++) {
-                if (i == 4 || i == 7) continue;
-                if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
+        } else {
+            if (nlen != 10) continue;               /* "YYYY-MM-DD" */
+        }
+        if (name[4] != '-' || name[7] != '-') continue;
+        int ok = 1;
+        for (int i = 0; i < 10; i++) {
+            if (i == 4 || i == 7) continue;
+            if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
+        }
+        if (!ok) continue;
+        char dn[12];
+        memcpy(dn, name, 10); dn[10] = 0;
+        if (from_date && strcmp(dn, from_date) < 0) continue;
+        if (to_date && strcmp(dn, to_date) > 0) continue;
+        if (n == cap) {
+            int ncap = cap ? cap * 2 : DATE_ENUM_INITIAL_CAP;
+            char (*grow)[12] = (char (*)[12])buffer_calloc((size_t)ncap,
+                                                           sizeof(*dates));
+            if (!grow) {
+                LOG_SVC_ERROR("upload: date enum OOM at %d dates - list truncated", n);
+                if (out_truncated) *out_truncated = AICAM_TRUE;
+                break;
             }
-            if (!ok) continue;
-            char dn[12];
-            memcpy(dn, name, 10); dn[10] = 0;
-            if (from_date && strcmp(dn, from_date) < 0) continue;
-            if (to_date && strcmp(dn, to_date) > 0) continue;
-            memcpy(dates[n], dn, 11);
-            n++;
+            if (n) memcpy(grow, dates, (size_t)n * sizeof(*dates));
+            if (dates) buffer_free(dates);
+            dates = grow;
+            cap = ncap;
         }
-        disk_file_closedir(fs, dd);
+        memcpy(dates[n], dn, 11);
+        n++;
     }
-    for (int i = 1; i < n; i++) {                    /* insertion sort asc */
-        char tmp[12]; memcpy(tmp, dates[i], 12);
-        int j = i - 1;
-        while (j >= 0 && strcmp(dates[j], tmp) > 0) {
-            memcpy(dates[j+1], dates[j], 12); j--;
-        }
-        memcpy(dates[j+1], tmp, 12);
-    }
+    disk_file_closedir(fs, dd);
+    if (n > 1) qsort(dates, (size_t)n, sizeof(*dates), date_str_cmp);
     if (sort_desc) {
         for (int i = 0; i < n/2; i++) {
             char tmp[12]; memcpy(tmp, dates[i], 12);
@@ -1331,6 +1378,7 @@ static int enumerate_date_files(FS_Type_t fs, char (*dates)[12], int max,
             memcpy(dates[n-1-i], tmp, 12);
         }
     }
+    *out_dates = dates;
     return n;
 }
 
@@ -1353,10 +1401,11 @@ static int iterate_records(FS_Type_t fs, record_state_t filter_state,
     if (to_ts == UINT64_MAX) snprintf(to_date, sizeof(to_date), "9999-99-99");
     else date_str_from_ts(to_ts, to_date, sizeof(to_date));
 
-    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
-    if (!dates) return 0;
-    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
-                                      from_date, to_date, sort_desc);
+    char (*dates)[12] = NULL;
+    int ndates = enumerate_date_files(fs, CAPTURES_DIR_INDEX, AICAM_TRUE,
+                                      &dates, from_date, to_date, sort_desc,
+                                      NULL);
+    if (ndates < 0) ndates = 0;   /* opendir failure: no dates to visit */
 
     uint32_t collected = 0, emitted = 0;
     int total = 0;
@@ -1389,7 +1438,7 @@ static int iterate_records(FS_Type_t fs, record_state_t filter_state,
         }
         buffer_free(ent);
     }
-    buffer_free(dates);
+    if (dates) buffer_free(dates);
     return fn ? (int)emitted : total;
 }
 
@@ -1451,10 +1500,11 @@ static void manifest_counts_all(FS_Type_t fs, uint32_t counts[4])
 {
     counts[0] = counts[1] = counts[2] = counts[3] = 0;
     if (fs == FS_MAX) return;
-    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
-    if (!dates) return;
-    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
-                                      "0000-00-00", "9999-99-99", AICAM_FALSE);
+    char (*dates)[12] = NULL;
+    int ndates = enumerate_date_files(fs, CAPTURES_DIR_INDEX, AICAM_TRUE,
+                                      &dates, "0000-00-00", "9999-99-99",
+                                      AICAM_FALSE, NULL);
+    if (ndates < 0) ndates = 0;   /* opendir failure: counts stay zero */
     for (int di = 0; di < ndates; di++) {
         int nent = 0;
         cap_idx_entry_t *ent = manifest_load_day(fs, dates[di], &nent);
@@ -1465,7 +1515,7 @@ static void manifest_counts_all(FS_Type_t fs, uint32_t counts[4])
         }
         buffer_free(ent);
     }
-    buffer_free(dates);
+    if (dates) buffer_free(dates);
 }
 
 /* Repair: rebuild /captures/index/<date>.idx from the metadata .json files
@@ -1476,27 +1526,26 @@ static void manifest_counts_all(FS_Type_t fs, uint32_t counts[4])
  * each day's .idx first for cleanliness. */
 static aicam_result_t rebuild_index(FS_Type_t fs)
 {
-    char dates[MAX_DATE_FILES][12];
-    int ndates = 0;
-    void *dd = disk_file_opendir(fs, CAPTURES_DIR_META);
-    if (!dd) return AICAM_ERROR;
-    dir_entry_t e;
-    while (ndates < MAX_DATE_FILES && disk_file_readdir(fs, dd, (char *)&e) > 0) {
-        const char *name = e.name;
-        if (name[0] == '.') continue;
-        size_t nlen = strlen(name);
-        if (nlen != 10) continue;
-        if (name[4] != '-' || name[7] != '-') continue;
-        int ok = 1;
-        for (int i = 0; i < 10; i++) {
-            if (i == 4 || i == 7) continue;
-            if (name[i] < '0' || name[i] > '9') { ok = 0; break; }
-        }
-        if (!ok) continue;
-        memcpy(dates[ndates], name, 11);
-        ndates++;
+    char (*dates)[12] = NULL;
+    aicam_bool_t truncated = AICAM_FALSE;
+    int ndates = enumerate_date_files(fs, CAPTURES_DIR_META, AICAM_FALSE,
+                                      &dates, NULL, NULL, AICAM_FALSE,
+                                      &truncated);
+    if (ndates < 0) {
+        if (dates) buffer_free(dates);
+        return AICAM_ERROR;
     }
-    disk_file_closedir(fs, dd);
+    if (truncated) {
+        /* The date list is incomplete (OOM mid-enumeration). Rebuilding now
+         * would write .idx files for the dates we did see, and since
+         * rebuild_index_if_needed only fires when the index dir holds zero
+         * .idx files, the unseen dates' records would stay invisible to
+         * flush/list/cleanup forever - with no later trigger to fix it.
+         * Bail before writing anything; the next boot retries. */
+        LOG_SVC_ERROR("upload: rebuild skipped - date enum truncated (%d seen)", ndates);
+        if (dates) buffer_free(dates);
+        return AICAM_ERROR;
+    }
 
     for (int d = 0; d < ndates; d++) {
         char ipath[96];
@@ -1546,6 +1595,7 @@ static aicam_result_t rebuild_index(FS_Type_t fs)
         }
         disk_file_closedir(fs, hd);
     }
+    if (dates) buffer_free(dates);
     g_count_cache_dirty = true;
     return AICAM_OK;
 }
@@ -1869,11 +1919,10 @@ static size_t orphan_parse_file_name(const char *name, char *id, size_t id_cap)
 static uint64_t orphan_sweep_pass(FS_Type_t fs)
 {
     uint64_t freed = 0;
-    char (*dates)[12] = (char (*)[12])buffer_calloc(MAX_DATE_FILES, 12);
-    if (!dates) return 0;
-    int ndates = enumerate_date_files(fs, dates, MAX_DATE_FILES,
-                                      NULL, NULL, AICAM_TRUE);
-    if (ndates <= 0) { buffer_free(dates); return 0; }
+    char (*dates)[12] = NULL;
+    int ndates = enumerate_date_files(fs, CAPTURES_DIR_INDEX, AICAM_TRUE,
+                                      &dates, NULL, NULL, AICAM_TRUE, NULL);
+    if (ndates <= 0) { if (dates) buffer_free(dates); return 0; }
 
     if (!g_orphan_cursor.valid) {
         snprintf(g_orphan_cursor.date, sizeof(g_orphan_cursor.date), "%s", dates[0]);
@@ -1953,7 +2002,7 @@ static uint64_t orphan_sweep_pass(FS_Type_t fs)
         snprintf(g_orphan_cursor.date, sizeof(g_orphan_cursor.date), "%s", dates[next]);
         g_orphan_cursor.hour = 23;
     }
-    buffer_free(dates);
+    if (dates) buffer_free(dates);
     return freed;
 }
 
@@ -3046,6 +3095,7 @@ aicam_bool_t upload_coordinator_needs_network(void)
         uint64_t now = now_unix();
         wake_event_t evs[WAKE_DUTY_MAX];
         int n = wake_scheduler_due_events(
+            now,
             now > WAKE_TOLERANCE_SEC ? now - WAKE_TOLERANCE_SEC : 0,
             now + WAKE_TOLERANCE_SEC,
             evs, WAKE_DUTY_MAX);
