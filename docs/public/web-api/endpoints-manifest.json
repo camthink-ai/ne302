@@ -1,10 +1,10 @@
 {
   "base_path": "/api/v1",
-  "total_endpoints": 175,
+  "total_endpoints": 176,
   "modules": {
     "ai_management": {
       "source": "Custom/Services/Web/api/api_ai_management_module.c",
-      "source_sha256": "7a01183c3b14be2e",
+      "source_sha256": "835b997bd3f82087",
       "routes": [
         {
           "method": "GET",
@@ -64,7 +64,7 @@
     },
     "capture": {
       "source": "Custom/Services/Web/api/api_capture_module.c",
-      "source_sha256": "b37d7d15e961f82b",
+      "source_sha256": "bfd8a1abd02bdc85",
       "routes": [
         {
           "method": "GET",
@@ -112,7 +112,7 @@
     },
     "device": {
       "source": "Custom/Services/Web/api/api_device_module.c",
-      "source_sha256": "54974317edf2faaf",
+      "source_sha256": "05aa33f3be601a4c",
       "routes": [
         {
           "method": "GET",
@@ -262,7 +262,7 @@
     },
     "file": {
       "source": "Custom/Services/Web/api/api_file_module.c",
-      "source_sha256": "0f74c66a8ddf9983",
+      "source_sha256": "cd241dabfb4616aa",
       "routes": [
         {
           "method": "GET",
@@ -316,7 +316,7 @@
     },
     "isp": {
       "source": "Custom/Services/Web/api/api_isp_module.c",
-      "source_sha256": "bafa92c9942d4967",
+      "source_sha256": "5ab0cd9d1ba41c8d",
       "routes": [
         {
           "method": "GET",
@@ -604,7 +604,7 @@
     },
     "network": {
       "source": "Custom/Services/Web/api/api_network_module.c",
-      "source_sha256": "dff7e407c007611b",
+      "source_sha256": "ed28303daab361d5",
       "routes": [
         {
           "method": "GET",
@@ -670,6 +670,12 @@
           "method": "GET",
           "path": "/api/v1/system/network/halow/sta",
           "handler": "network_halow_sta_handler",
+          "require_auth": true
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/system/network/halow/info",
+          "handler": "network_halow_info_handler",
           "require_auth": true
         },
         {
@@ -898,7 +904,7 @@
     },
     "ota": {
       "source": "Custom/Services/Web/api/api_ota_module.c",
-      "source_sha256": "d4f586c620ea3bca",
+      "source_sha256": "2d47844ce5071f15",
       "routes": [
         {
           "method": "POST",
@@ -1084,7 +1090,7 @@
     },
     "work_mode": {
       "source": "Custom/Services/Web/api/api_work_mode_module.c",
-      "source_sha256": "07a27dfc599ce4d1",
+      "source_sha256": "b04024e72809568d",
       "routes": [
         {
           "method": "GET",

@@ -10,7 +10,7 @@ WiFi / cellular / PoE configuration and status
 
 Source: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_network_module.c)
 
-**48** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
+**49** endpoints. The ✅ marker in the Auth column means the request must carry [credentials](../authentication.md).
 
 | Method | Path | Auth | Handler |
 |--------|------|:----:|---------|
@@ -25,6 +25,7 @@ Source: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camt
 | `GET` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_get_handler` |
 | `PUT` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_set_handler` |
 | `GET` | `/api/v1/system/network/halow/sta` | ✅ | `network_halow_sta_handler` |
+| `GET` | `/api/v1/system/network/halow/info` | ✅ | `network_halow_info_handler` |
 | `GET` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_get_handler` |
 | `PUT` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_set_handler` |
 | `POST` | `/api/v1/system/network/halow/scan` | ✅ | `network_halow_scan_handler` |

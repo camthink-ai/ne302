@@ -10,7 +10,7 @@ WiFi / 蜂窝 / PoE 网络配置与状态
 
 源文件: [`Custom/Services/Web/api/api_network_module.c`](https://github.com/camthink-ai/ne302/blob/main/Custom/Services/Web/api/api_network_module.c)
 
-共 **48** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
+共 **49** 个端点。鉴权列 ✅ 表示需要携带[认证凭据](../authentication.md)。
 
 | 方法 | 路径 | 鉴权 | 处理函数 |
 |------|------|:----:|----------|
@@ -25,6 +25,7 @@ WiFi / 蜂窝 / PoE 网络配置与状态
 | `GET` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_get_handler` |
 | `PUT` | `/api/v1/system/network/wifi/region` | ✅ | `network_wifi_region_set_handler` |
 | `GET` | `/api/v1/system/network/halow/sta` | ✅ | `network_halow_sta_handler` |
+| `GET` | `/api/v1/system/network/halow/info` | ✅ | `network_halow_info_handler` |
 | `GET` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_get_handler` |
 | `PUT` | `/api/v1/system/network/halow/region` | ✅ | `network_halow_region_set_handler` |
 | `POST` | `/api/v1/system/network/halow/scan` | ✅ | `network_halow_scan_handler` |

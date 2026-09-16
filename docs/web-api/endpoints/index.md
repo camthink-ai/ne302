@@ -6,14 +6,14 @@ title: API Endpoint Reference
 
 # API Endpoint Reference
 
-All **175** endpoints grouped by module. Data is extracted directly from
+All **176** endpoints grouped by module. Data is extracted directly from
 the route registration tables in the firmware source, so it always matches the
 code. Click a module to see methods, paths and auth requirements.
 
 | Module | Description | Endpoints |
 |--------|-------------|----------:|
 | [Authentication](./auth.md) | Device login and password management | 2 |
-| [Network Management](./network.md) | WiFi / cellular / PoE configuration and status | 48 |
+| [Network Management](./network.md) | WiFi / cellular / PoE configuration and status | 49 |
 | [Device Management](./device.md) | Device info, time, logs and maintenance | 24 |
 | [Work Mode](./work_mode.md) | Device work mode and linkage policies | 9 |
 | [Capture & Upload](./capture.md) | Capture tasks, upload queue and records | 7 |
