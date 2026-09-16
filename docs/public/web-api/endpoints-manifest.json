@@ -112,7 +112,7 @@
     },
     "device": {
       "source": "Custom/Services/Web/api/api_device_module.c",
-      "source_sha256": "05aa33f3be601a4c",
+      "source_sha256": "df2ff114aa1597f4",
       "routes": [
         {
           "method": "GET",
