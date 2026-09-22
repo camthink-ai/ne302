@@ -31,6 +31,10 @@
  * this (ms) — covers the model being disabled or erroring mid-run. */
 #define PC_FACE_STALE_MS 1200U
 
+/* Keep the last face boxes for this long (ms) when a face batch comes back
+ * empty, so single-frame detection dropouts do not blink the mosaic. */
+#define PC_FACE_HOLD_MS 400U
+
 typedef struct {
     aicam_bool_t active;             // Slot in use
     uint32_t id;                     // Track id (for debugging/telemetry)
@@ -65,6 +69,7 @@ typedef struct {
     pc_face_track_t faces[PC_MAX_FACES];
     uint32_t face_count;
     uint32_t last_face_tick;              /* Tick of the last face result */
+    uint32_t face_empty_since;            /* Tick since batches are empty (0 = not) */
     /* Draw state (camera thread only, no lock needed once set) */
     device_t *draw_dev;
     DRAW_Font_t font16;
@@ -384,35 +389,59 @@ void people_counting_on_face_result(const nn_result_t *result, uint32_t frame_id
 
     g_pc.last_face_tick = now;
 
-    /* No valid faces this frame (person left, or model degraded to noise):
-     * clear the snapshot so the overlay does not keep drawing the last
-     * known face forever. */
-    if (!result || !result->is_valid || result->type != PP_TYPE_MPE) {
-        g_pc.face_count = 0;
-        g_pc.stats.last_face_detections = 0;
+    /* Collect faces from either face-model output flavor: YOLO-face style
+     * PP_TYPE_OD (od_detect_t) or blazeface PP_TYPE_MPE (mpe_detect_t). */
+    float nx[PC_MAX_FACES], ny[PC_MAX_FACES], nw[PC_MAX_FACES], nh[PC_MAX_FACES];
+    uint32_t count = 0;
+    if (result && result->is_valid &&
+        (result->type == PP_TYPE_OD || result->type == PP_TYPE_MPE)) {
+        uint32_t nb = (result->type == PP_TYPE_OD) ? result->od.nb_detect
+                                                   : result->mpe.nb_detect;
+        if (nb > PC_MAX_FACES) {
+            nb = PC_MAX_FACES;
+        }
+        for (uint32_t i = 0; i < nb; i++) {
+            float x, y, w, h;
+            if (result->type == PP_TYPE_OD) {
+                const od_detect_t *d = &result->od.detects[i];
+                x = d->x;
+                y = d->y;
+                w = d->width;
+                h = d->height;
+            } else {
+                const mpe_detect_t *d = &result->mpe.detects[i];
+                x = d->x;
+                y = d->y;
+                w = d->width;
+                h = d->height;
+            }
+            if (w <= 0.0f || h <= 0.0f) {
+                continue;
+            }
+            nx[count] = x;
+            ny[count] = y;
+            nw[count] = w;
+            nh[count] = h;
+            count++;
+        }
+    }
+
+    /* Empty batch: hold the last faces briefly (anti-blink), then clear. */
+    if (count == 0) {
+        if (g_pc.face_count > 0) {
+            if (g_pc.face_empty_since == 0) {
+                g_pc.face_empty_since = now;
+            }
+            if ((now - g_pc.face_empty_since) > PC_FACE_HOLD_MS) {
+                g_pc.face_count = 0;
+                g_pc.stats.last_face_detections = 0;
+                g_pc.face_empty_since = 0;
+            }
+        }
         osMutexRelease(g_pc.mutex);
         return;
     }
-
-    /* Collect the incoming faces, then match them to the previous tracks so
-     * each carries a velocity for latency-compensated drawing. */
-    float nx[PC_MAX_FACES], ny[PC_MAX_FACES], nw[PC_MAX_FACES], nh[PC_MAX_FACES];
-    uint32_t nb = result->mpe.nb_detect;
-    if (nb > PC_MAX_FACES) {
-        nb = PC_MAX_FACES;
-    }
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < nb; i++) {
-        const mpe_detect_t *d = &result->mpe.detects[i];
-        if (d->width <= 0.0f || d->height <= 0.0f) {
-            continue;
-        }
-        nx[count] = d->x;
-        ny[count] = d->y;
-        nw[count] = d->width;
-        nh[count] = d->height;
-        count++;
-    }
+    g_pc.face_empty_since = 0;
 
     pc_face_track_t updated[PC_MAX_FACES];
     uint32_t updated_count = 0;
@@ -944,54 +973,4 @@ void people_counting_set_face_model_loaded(aicam_bool_t loaded)
     }
 }
 
-void people_counting_motion_compensate(float cx, float cy, float *dx, float *dy)
-{
-    if (dx) {
-        *dx = 0.0f;
-    }
-    if (dy) {
-        *dy = 0.0f;
-    }
-    if (!g_pc.initialized || !dx || !dy) {
-        return;
-    }
-
-    if (osMutexAcquire(g_pc.mutex, 10) != osOK) {
-        return;
-    }
-
-    uint32_t now = osKernelGetTickCount();
-    int best = -1;
-    float best_d2 = 0.3f * 0.3f;
-    for (int t = 0; t < PC_MAX_TRACKS; t++) {
-        const pc_track_t *track = &g_pc.tracks[t];
-        if (!track->active) {
-            continue;
-        }
-        float ddx = cx - track->cx;
-        float ddy = cy - track->cy;
-        float d2 = ddx * ddx + ddy * ddy;
-        if (d2 < best_d2) {
-            best_d2 = d2;
-            best = t;
-        }
-    }
-    if (best >= 0) {
-        const pc_track_t *track = &g_pc.tracks[best];
-        uint32_t dt = now - track->last_tick;
-        if (track->last_tick != 0 && dt > 500) {
-            dt = 500; /* cap the extrapolation horizon */
-        }
-        float sx = track->vx * (float)dt;
-        float sy = track->vy * (float)dt;
-        if (sx > 0.12f) sx = 0.12f;
-        if (sx < -0.12f) sx = -0.12f;
-        if (sy > 0.12f) sy = 0.12f;
-        if (sy < -0.12f) sy = -0.12f;
-        *dx = sx;
-        *dy = sy;
-    }
-
-    osMutexRelease(g_pc.mutex);
-}
 

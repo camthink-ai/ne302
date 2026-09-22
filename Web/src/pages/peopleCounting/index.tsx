@@ -9,6 +9,7 @@ import SvgIcon from '@/components/svg-icon';
 import H264Player from '@/lib/MSE/h264Player';
 import Loading from '@/components/loading';
 import deviceTool from '@/services/api/deviceTool';
+import systemApis from '@/services/api/system';
 import peopleCounting, { type PeopleCountingConfig, type PeopleCountingStats } from '@/services/api/peopleCounting';
 import request from '@/services/request';
 import { getWebSocketUrl } from '@/utils';
@@ -26,6 +27,7 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 export default function PeopleCounting() {
   const { i18n } = useLingui();
   const { startVideoStreamReq, stopVideoStreamReq, toggleAiReq } = deviceTool;
+  const { preCheckReq, uploadOTAFileReq, reloadModelReq } = systemApis;
 
   /* ---------- video stream ---------- */
   const playerRef = useRef<HTMLVideoElement>(null);
@@ -276,6 +278,47 @@ export default function PeopleCounting() {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
       /* pointer already released */
+    }
+  };
+
+  /* ---------- model upload ---------- */
+  const personFileRef = useRef<HTMLInputElement>(null);
+  const faceFileRef = useRef<HTMLInputElement>(null);
+  const [personUpload, setPersonUpload] = useState({ loading: false, pct: 0 });
+  const [faceUpload, setFaceUpload] = useState({ loading: false, pct: 0 });
+
+  const handleModelUpload = async (file: File, kind: 'person' | 'face') => {
+    const isFace = kind === 'face';
+    const setUpload = isFace ? setFaceUpload : setPersonUpload;
+    try {
+      setUpload({ loading: true, pct: 0 });
+      await stopVideoStreamReq();
+      const preview = file.slice(0, 2048);
+      await preCheckReq(preview, isFace ? 'ai_face' : 'ai');
+      await uploadOTAFileReq(file, isFace ? 'ai_face' : 'ai', {
+        onUploadProgress: (e: { loaded: number; total?: number }) => {
+          if (e.total) {
+            setUpload({ loading: true, pct: Math.round((e.loaded / e.total) * 100) });
+          }
+        },
+      });
+      if (isFace) {
+        await peopleCounting.reloadFaceModelReq();
+      } else {
+        await reloadModelReq();
+      }
+      toast.success(i18n._('sys.people_counting.model_upload_ok'));
+    } catch (error) {
+      console.error(error);
+      toast.error(i18n._('sys.people_counting.model_upload_failed'));
+    } finally {
+      setUpload({ loading: false, pct: 0 });
+      try {
+        await new Promise(resolve => { setTimeout(resolve, 1000); });
+        await startVideoStreamReq();
+      } catch (restartError) {
+        console.error('preview restart after model upload', restartError);
+      }
     }
   };
 
@@ -552,6 +595,69 @@ export default function PeopleCounting() {
             </div>
           </div>
         )}
+      </div>
+
+      <Separator />
+
+      {/* model upload */}
+      <div className="flex flex-col gap-2">
+        <Label>{i18n._('sys.people_counting.model_section')}</Label>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="border border-gray-200 border-solid p-4 rounded-md bg-white flex flex-col gap-2">
+            <Label>{i18n._('sys.people_counting.upload_person')}</Label>
+            <span className="text-xs text-gray-400">{i18n._('sys.people_counting.person_hint')}</span>
+            <input
+              ref={personFileRef}
+              type="file"
+              accept=".bin"
+              className="hidden"
+              onChange={async ev => {
+                const inputEl = ev.target as HTMLInputElement;
+                const file = inputEl.files?.[0];
+                inputEl.value = '';
+                if (file) await handleModelUpload(file, 'person');
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={personUpload.loading || faceUpload.loading}
+              onClick={() => personFileRef.current?.click()}
+            >
+              {personUpload.loading
+                ? `${i18n._('sys.people_counting.uploading')} ${personUpload.pct}%`
+                : i18n._('common.upload')}
+            </Button>
+          </div>
+          <div className="border border-gray-200 border-solid p-4 rounded-md bg-white flex flex-col gap-2">
+            <Label>{i18n._('sys.people_counting.upload_face')}</Label>
+            <span className="text-xs text-gray-400">{i18n._('sys.people_counting.face_hint')}</span>
+            <input
+              ref={faceFileRef}
+              type="file"
+              accept=".bin"
+              className="hidden"
+              onChange={async ev => {
+                const inputEl = ev.target as HTMLInputElement;
+                const file = inputEl.files?.[0];
+                inputEl.value = '';
+                if (file) await handleModelUpload(file, 'face');
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={personUpload.loading || faceUpload.loading}
+              onClick={() => faceFileRef.current?.click()}
+            >
+              {faceUpload.loading
+                ? `${i18n._('sys.people_counting.uploading')} ${faceUpload.pct}%`
+                : i18n._('common.upload')}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

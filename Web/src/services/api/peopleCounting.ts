@@ -43,6 +43,7 @@ const peopleCounting = {
   setCountingConfigReq: (data: Partial<PeopleCountingConfig>) => request.post('/api/v1/counting/config', data),
   getCountingStatsReq: () => request.get('/api/v1/counting/stats'),
   resetCountingReq: () => request.post('/api/v1/counting/reset'),
+  reloadFaceModelReq: () => request.post('/api/v1/counting/face-model/reload'),
 };
 
 export default peopleCounting;

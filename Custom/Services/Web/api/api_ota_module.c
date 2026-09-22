@@ -171,6 +171,10 @@ static FirmwareType parse_firmware_type(const char* type_str) {
     } else if (strcmp(type_str, "ai_default") == 0) {
         return FIRMWARE_AI_1;
     } else if (strcmp(type_str, "ai") == 0) {
+        /* Person (primary) model: always AI_1, never touches ai_1_active */
+        return FIRMWARE_AI_1;
+    } else if (strcmp(type_str, "ai_face") == 0) {
+        /* Face (secondary) model: AI_2 */
         return FIRMWARE_AI_2;
     } else if (strcmp(type_str, "wifi") == 0) {
         return FIRMWARE_WIFI;
@@ -393,7 +397,11 @@ static int process_ota_header(ota_upload_ctx_t *ctx) {
     }
 
     LOG_SVC_INFO("Firmware type from header: %d, param: %d", fw_type_from_header, ctx->fw_type_param);
-    if (fw_type_from_header != ctx->fw_type_param) {
+    /* AI model packages burn to the slot chosen by the request param
+     * (AI_1 = person / AI_2 = face), so either slot param is valid. */
+    if (fw_type_from_header != ctx->fw_type_param &&
+        !(header->fw_type == OTA_FW_TYPE_AI_MODEL &&
+          (ctx->fw_type_param == FIRMWARE_AI_1 || ctx->fw_type_param == FIRMWARE_AI_2))) {
         LOG_SVC_ERROR("Firmware type mismatch: header=%d, param=%d", fw_type_from_header, ctx->fw_type_param);
         return -1;
     }
@@ -569,7 +577,11 @@ static aicam_result_t ota_precheck_header(const uint8_t *header_data, size_t dat
         default: fw_type_from_header = FIRMWARE_APP; break;
     }
     
-    if (fw_type_from_header != fw_type_param) {
+    /* AI model packages burn to the slot chosen by the request param
+     * (AI_1 = person / AI_2 = face), so either slot param is valid. */
+    if (fw_type_from_header != fw_type_param &&
+        !(header->fw_type == OTA_FW_TYPE_AI_MODEL &&
+          (fw_type_param == FIRMWARE_AI_1 || fw_type_param == FIRMWARE_AI_2))) {
         LOG_SVC_ERROR("Pre-check failed: Firmware type mismatch (header=%d, param=%d)", 
                      fw_type_from_header, fw_type_param);
         return AICAM_ERROR_INVALID_PARAM;

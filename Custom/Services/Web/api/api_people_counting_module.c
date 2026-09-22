@@ -320,6 +320,31 @@ static aicam_result_t counting_stats_handler(http_handler_context_t *ctx)
 }
 
 /**
+ * @brief POST /api/v1/counting/face-model/reload
+ */
+static aicam_result_t counting_face_model_reload_handler(http_handler_context_t *ctx)
+{
+    if (!ctx) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (!web_api_verify_method(ctx, "POST")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Method Not Allowed");
+    }
+
+    aicam_result_t result = ai_service_reload_face_model();
+    if (result != AICAM_OK) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to reload face model");
+    }
+
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddBoolToObject(data, "loaded",
+                          ai_service_face_model_is_loaded() == AICAM_TRUE);
+    char *json_string = cJSON_Print(data);
+    cJSON_Delete(data);
+    return api_response_success(ctx, json_string, "Face model reloaded");
+}
+
+/**
  * @brief POST /api/v1/counting/reset
  */
 static aicam_result_t counting_reset_handler(http_handler_context_t *ctx)
@@ -372,6 +397,13 @@ static const api_route_t counting_routes[] = {
         .path = API_PATH_PREFIX "/counting/reset",
         .method = "POST",
         .handler = counting_reset_handler,
+        .require_auth = AICAM_FALSE,
+        .user_data = NULL
+    },
+    {
+        .path = API_PATH_PREFIX "/counting/face-model/reload",
+        .method = "POST",
+        .handler = counting_face_model_reload_handler,
         .require_auth = AICAM_FALSE,
         .user_data = NULL
     }

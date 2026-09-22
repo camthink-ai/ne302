@@ -716,13 +716,6 @@ static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer,
 
     aicam_result_t ai_ret = ai_service_get_nn_result(&nn_result, frame_id);
 
-    /* Feed person-anchored face ROIs to the secondary model mailbox while
-     * this PIPE1 buffer is locked (the only thread-legal PIPE1 window). */
-    if (g_ai_service.ai_node) {
-        video_ai_node_push_face_rois(g_ai_service.ai_node, frame_buffer, width, height,
-                                     (ai_ret == AICAM_OK) ? &nn_result : NULL);
-    }
-
     if (ai_ret == AICAM_OK && (nn_result.od.nb_detect > 0 || nn_result.mpe.nb_detect > 0)) {
 
         // Initialize AI draw service if not already done
@@ -1400,6 +1393,23 @@ aicam_result_t ai_service_load_face_model(void)
                                            g_face_conf_threshold_pct,
                                            g_face_nms_threshold_pct);
     return AICAM_OK;
+}
+
+aicam_result_t ai_service_reload_face_model(void)
+{
+    if (!g_ai_service.ai_node) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    if (video_ai_node_secondary_is_loaded(g_ai_service.ai_node) == AICAM_TRUE) {
+        /* Quiesce the AI node thread, then free the instance: the thread
+         * re-reads the handle every cycle, so after the disable + delay it
+         * can no longer be inside a secondary inference. */
+        video_ai_node_set_secondary_enabled(g_ai_service.ai_node, AICAM_FALSE);
+        osDelay(300);
+        video_ai_node_unload_secondary_model(g_ai_service.ai_node);
+        people_counting_set_face_model_loaded(AICAM_FALSE);
+    }
+    return ai_service_load_face_model();
 }
 
 aicam_result_t ai_service_set_face_thresholds(uint32_t confidence_pct, uint32_t nms_pct)

@@ -38,7 +38,10 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
                                             video_frame_t **output_frame);
 static aicam_result_t video_ai_init_draw_service(video_ai_node_data_t *data);
 static aicam_result_t video_ai_deinit_draw_service(video_ai_node_data_t *data);
-static void video_ai_run_secondary_model(video_ai_node_data_t *data, uint32_t frame_id);
+static void video_ai_run_secondary_model(video_ai_node_data_t *data,
+                                         const uint8_t *pipe2_buffer,
+                                         uint32_t pipe2_size,
+                                         uint32_t frame_id);
 
 
 /* ==================== API Implementation ==================== */
@@ -544,39 +547,11 @@ aicam_result_t video_ai_node_load_secondary_model(video_node_t *node, uintptr_t 
         return AICAM_ERROR_INVALID_DATA;
     }
 
-    /* ROI buffer block: one model-input-sized RGB888 buffer per ROI */
-    uint32_t roi_stride = input_buffer_size;
-    uint32_t scratch_size = roi_stride * VIDEO_AI_FACE_ROI_MAX;
-    uint8_t *scratch = hal_mem_alloc_large(scratch_size);
-    if (!scratch) {
-        LOG_CORE_ERROR("Failed to allocate secondary ROI buffers (%u bytes)", scratch_size);
-        nn_instance_unload_model(handle);
-        nn_instance_destroy(handle);
-        return AICAM_ERROR_NO_MEMORY;
-    }
-    osMutexId_t roi_mutex = osMutexNew(NULL);
-    if (!roi_mutex) {
-        LOG_CORE_ERROR("Failed to create secondary ROI mutex");
-        hal_mem_free(scratch);
-        nn_instance_unload_model(handle);
-        nn_instance_destroy(handle);
-        return AICAM_ERROR;
-    }
-
     data->secondary_handle = handle;
-    data->secondary_scratch = scratch;
-    data->secondary_scratch_size = scratch_size;
-    data->secondary_roi_stride = roi_stride;
-    data->roi_mutex = roi_mutex;
-    data->roi_seq = 0;
-    data->roi_consumed_seq = 0;
-    data->roi_wanted = AICAM_TRUE;
-    data->roi_count = 0;
-    memset(data->roi_meta, 0, sizeof(data->roi_meta));
     memcpy(&data->secondary_model_info, &info, sizeof(nn_model_info_t));
     data->secondary_enabled = AICAM_TRUE;
 
-    LOG_CORE_INFO("Secondary model loaded: %s %ux%ux%u from %p (PIPE1 ROI mailbox mode)",
+    LOG_CORE_INFO("Secondary model loaded: %s %ux%ux%u from %p (direct serial mode)",
                   info.name, info.input_width, info.input_height, info.input_channels,
                   model_ptr);
     return AICAM_OK;
@@ -602,16 +577,6 @@ aicam_result_t video_ai_node_unload_secondary_model(video_node_t *node)
     nn_handle_t handle = data->secondary_handle;
     data->secondary_enabled = AICAM_FALSE;
     data->secondary_handle = NULL; /* detach before freeing resources */
-    if (data->secondary_scratch) {
-        hal_mem_free(data->secondary_scratch);
-        data->secondary_scratch = NULL;
-        data->secondary_scratch_size = 0;
-        data->secondary_roi_stride = 0;
-    }
-    if (data->roi_mutex) {
-        osMutexDelete(data->roi_mutex);
-        data->roi_mutex = NULL;
-    }
     memset(&data->secondary_model_info, 0, sizeof(nn_model_info_t));
     if (handle) {
         nn_instance_unload_model(handle);
@@ -760,260 +725,66 @@ static aicam_result_t video_ai_stop_device(video_ai_node_data_t *data) {
 }
 
 /**
- * @brief Bilinear-resampled copy of an RGB565 sub-image into an RGB888 buffer
- * @details Used on the camera thread to lift person head ROIs out of the
- *          locked PIPE1 framebuffer. Cost is O(dst) regardless of ROI size —
- *          the previous area-average version was O(src) and cost ~5 ms per
- *          large ROI, visibly dropping the encoded stream fps. (DMA2D could
- *          do the crop + RGB565->RGB888 via M2M+PFC but has no scaler, so
- *          the resample stays on the CPU.)
+ * @brief Run the face (secondary) model directly on the pipe2 frame
+ * @details Direct serial mode: the face model shares the primary model's
+ *          input geometry (e.g. 256x256x3 uint8 == pipe2), so the same
+ *          buffer is fed to both models back to back — no crop, no rescale,
+ *          no format conversion. Boxes come out in pipe2-normalized
+ *          coordinates, which are the full-frame normalized ones. Runs
+ *          every AI cycle, independent of the person detection.
  */
-static void video_ai_copy_roi_rgb565_to_rgb888(const uint16_t *src, uint32_t src_stride,
-                                               uint32_t roi_x, uint32_t roi_y,
-                                               uint32_t roi_w, uint32_t roi_h,
-                                               uint8_t *dst, uint32_t dst_w, uint32_t dst_h)
-{
-    static const uint32_t shift[3] = {11, 5, 0};
-    static const uint32_t mask[3] = {0x1Fu, 0x3Fu, 0x1Fu};
-    static const uint32_t expand[3] = {255u / 31u, 255u / 63u, 255u / 31u};
-
-    for (uint32_t dy = 0; dy < dst_h; dy++) {
-        float fy = ((float)dy + 0.5f) * (float)roi_h / (float)dst_h - 0.5f;
-        if (fy < 0.0f) fy = 0.0f;
-        if (fy > (float)roi_h - 1.0f) fy = (float)roi_h - 1.0f;
-        uint32_t y0 = (uint32_t)fy;
-        uint32_t y1 = (y0 + 1 < roi_h) ? y0 + 1 : y0;
-        float wy = fy - (float)y0;
-        const uint16_t *row0 = src + (size_t)(roi_y + y0) * src_stride + roi_x;
-        const uint16_t *row1 = src + (size_t)(roi_y + y1) * src_stride + roi_x;
-        uint8_t *out = dst + (size_t)dy * dst_w * 3;
-
-        for (uint32_t dx = 0; dx < dst_w; dx++) {
-            float fx = ((float)dx + 0.5f) * (float)roi_w / (float)dst_w - 0.5f;
-            if (fx < 0.0f) fx = 0.0f;
-            if (fx > (float)roi_w - 1.0f) fx = (float)roi_w - 1.0f;
-            uint32_t x0 = (uint32_t)fx;
-            uint32_t x1 = (x0 + 1 < roi_w) ? x0 + 1 : x0;
-            float wx = fx - (float)x0;
-
-            uint32_t p00 = row0[x0], p01 = row0[x1];
-            uint32_t p10 = row1[x0], p11 = row1[x1];
-            /* Bilinear per 5/6-bit channel, expanded to 8-bit */
-            for (uint32_t c = 0; c < 3; c++) {
-                float v00 = (float)((p00 >> shift[c]) & mask[c]);
-                float v01 = (float)((p01 >> shift[c]) & mask[c]);
-                float v10 = (float)((p10 >> shift[c]) & mask[c]);
-                float v11 = (float)((p11 >> shift[c]) & mask[c]);
-                float top = v00 + (v01 - v00) * wx;
-                float bot = v10 + (v11 - v10) * wx;
-                float v = (top + (bot - top) * wy) * (float)expand[c] + 0.5f;
-                *out++ = (uint8_t)v;
-            }
-        }
-    }
-}
-
-/**
- * @brief Publish person-anchored face ROIs copied from a PIPE1 frame
- * @details Camera-thread side of the ROI mailbox; see video_ai_node.h. For
- *          each person detection the head region (screen-square in PIPE1
- *          pixels, clamped to the frame) is copied + converted into one
- *          model-input buffer. A NULL/empty person_result publishes an
- *          empty set so the consumer clears stale faces.
- */
-aicam_result_t video_ai_node_push_face_rois(video_node_t *node, const uint8_t *fb,
-                                            uint32_t fb_width, uint32_t fb_height,
-                                            const nn_result_t *person_result)
-{
-    if (!node || !fb || fb_width == 0 || fb_height == 0) {
-        return AICAM_ERROR_INVALID_PARAM;
-    }
-
-    video_ai_node_data_t *data = (video_ai_node_data_t*)video_node_get_private_data(node);
-    if (!data || !data->secondary_handle || !data->secondary_scratch || !data->roi_mutex) {
-        return AICAM_OK; /* secondary model not loaded: nothing to feed */
-    }
-    if (!data->roi_wanted) {
-        return AICAM_OK; /* consumer has not finished the previous batch */
-    }
-
-    const nn_model_info_t *info = &data->secondary_model_info;
-    uint32_t dw = info->input_width;
-    uint32_t dh = info->input_height;
-
-    uint32_t count = 0;
-    float meta[VIDEO_AI_FACE_ROI_MAX][4];
-
-    if (person_result && person_result->is_valid && person_result->type == PP_TYPE_OD) {
-        uint32_t nb = person_result->od.nb_detect;
-        for (uint32_t i = 0; i < nb && count < VIDEO_AI_FACE_ROI_MAX; i++) {
-            const od_detect_t *p = &person_result->od.detects[i];
-            if (p->width <= 0.0f || p->height <= 0.0f) {
-                continue;
-            }
-
-            /* Head ROI: square in PIPE1 pixels, a bit wider than the person
-             * box, anchored at its top edge where the face is. The square is
-             * clamped to the frame (staying square) so close persons whose
-             * head square would overflow still get an inference. */
-            float side = p->width * (float)fb_width * 1.15f;
-            if (side > (float)fb_height) side = (float)fb_height;
-            if (side > (float)fb_width) side = (float)fb_width;
-            if (side < 16.0f) {
-                continue; /* too small to plausibly contain a face */
-            }
-            /* Motion compensation: the person box is 1+ inference cycles old
-             * while this PIPE1 frame is current — shift the crop to where
-             * the person is now using the tracker's velocity estimate. */
-            float mdx = 0.0f, mdy = 0.0f;
-            people_counting_motion_compensate(p->x + p->width * 0.5f,
-                                              p->y + p->height * 0.5f,
-                                              &mdx, &mdy);
-            float cx = (p->x + p->width * 0.5f) * (float)fb_width + mdx * (float)fb_width;
-            float x0 = cx - side * 0.5f;
-            float y0 = (p->y + mdy) * (float)fb_height - side * 0.05f;
-            if (x0 < 0.0f) x0 = 0.0f;
-            if (y0 < 0.0f) y0 = 0.0f;
-            if (x0 + side > (float)fb_width) x0 = (float)fb_width - side;
-            if (y0 + side > (float)fb_height) y0 = (float)fb_height - side;
-
-            uint32_t rx = (uint32_t)x0;
-            uint32_t ry = (uint32_t)y0;
-            uint32_t rs = (uint32_t)side;
-            if (rs < 8 || rx + rs > fb_width || ry + rs > fb_height) {
-                continue;
-            }
-
-            video_ai_copy_roi_rgb565_to_rgb888((const uint16_t *)fb, fb_width,
-                                               rx, ry, rs, rs,
-                                               data->secondary_scratch +
-                                                   (size_t)count * data->secondary_roi_stride,
-                                               dw, dh);
-            meta[count][0] = (float)rx / (float)fb_width;
-            meta[count][1] = (float)ry / (float)fb_height;
-            meta[count][2] = (float)rs / (float)fb_width;
-            meta[count][3] = (float)rs / (float)fb_height;
-            count++;
-        }
-    }
-
-    if (osMutexAcquire(data->roi_mutex, 20) == osOK) {
-        memcpy(data->roi_meta, meta, sizeof(meta));
-        data->roi_count = count;
-        data->roi_seq++;
-        data->roi_wanted = AICAM_FALSE;
-        osMutexRelease(data->roi_mutex);
-    }
-    return AICAM_OK;
-}
-
-/**
- * @brief Run the face (secondary) model on the PIPE1 ROI mailbox
- * @details AI-node-thread side of the mailbox: the camera draw callback
- *          copies person head ROIs from the locked PIPE1 buffer at full
- *          resolution. Each ROI is inferred and face boxes are mapped from
- *          ROI-local normalized coordinates back to full-frame normalized
- *          ones. One merged result goes to the callback; an empty/invalid
- *          result (no persons, or the draw callback stopped) clears
- *          consumer state.
- */
-#define SECONDARY_MAX_FACES 8
-
-static void video_ai_run_secondary_model(video_ai_node_data_t *data, uint32_t frame_id)
+static void video_ai_run_secondary_model(video_ai_node_data_t *data,
+                                         const uint8_t *pipe2_buffer,
+                                         uint32_t pipe2_size,
+                                         uint32_t frame_id)
 {
     const nn_model_info_t *info = &data->secondary_model_info;
-    if (!data->secondary_scratch || !data->roi_mutex || !data->secondary_handle) {
+    if (!data->secondary_handle || info->input_width == 0 || info->input_height == 0) {
         return;
     }
-    if (info->input_width == 0 || info->input_height == 0 || info->input_channels != 3) {
-        return;
-    }
-
-    /* Take the latest mailbox batch. Nothing new -> return and keep the
-     * current faces; an EMPTY fresh batch falls through and publishes an
-     * empty result so consumers clear stale faces. */
-    float meta[VIDEO_AI_FACE_ROI_MAX][4];
-    uint32_t roi_count = 0;
-    aicam_bool_t fresh_batch = AICAM_FALSE;
-    if (osMutexAcquire(data->roi_mutex, 20) == osOK) {
-        if (data->roi_seq != data->roi_consumed_seq) {
-            fresh_batch = AICAM_TRUE;
-            roi_count = data->roi_count;
-            memcpy(meta, data->roi_meta, sizeof(meta));
-            data->roi_consumed_seq = data->roi_seq;
+    if (info->input_channels != 3) {
+        static uint32_t ch_warn = 0;
+        if ((++ch_warn % 1000) == 1) {
+            LOG_CORE_WARN("Secondary model channels=%u, need RGB888", info->input_channels);
         }
-        osMutexRelease(data->roi_mutex);
-    }
-    if (!fresh_batch) {
         return;
     }
 
-    /* Merged face output (AI node thread only; mpe_detect_t is large) */
-    static mpe_detect_t merged[SECONDARY_MAX_FACES];
-    uint32_t merged_count = 0;
-    uint32_t total_time_ms = 0;
-
-    for (uint32_t r = 0; r < roi_count; r++) {
-        uint8_t *input = data->secondary_scratch + (size_t)r * data->secondary_roi_stride;
-
-        nn_result_t result;
-        memset(&result, 0, sizeof(nn_result_t));
-        uint32_t start_tick = osKernelGetTickCount();
-        if (nn_instance_inference_frame(data->secondary_handle, input,
-                                        data->secondary_roi_stride, &result) == 0) {
-            data->secondary_inference_count++;
-            data->secondary_error_count = 0;
-            total_time_ms += osKernelGetTickCount() - start_tick;
-
-            if (result.is_valid && result.type == PP_TYPE_MPE) {
-                uint32_t faces = result.mpe.nb_detect;
-                for (uint32_t f = 0; f < faces && merged_count < SECONDARY_MAX_FACES; f++) {
-                    const mpe_detect_t *d = &result.mpe.detects[f];
-                    mpe_detect_t *out = &merged[merged_count++];
-                    memset(out, 0, sizeof(mpe_detect_t));
-                    /* ROI-local normalized -> full-frame normalized */
-                    out->x = meta[r][0] + d->x * meta[r][2];
-                    out->y = meta[r][1] + d->y * meta[r][3];
-                    out->width = d->width * meta[r][2];
-                    out->height = d->height * meta[r][3];
-                    out->conf = d->conf;
-                    out->class_name = d->class_name;
-                    if (out->x < 0.0f) out->x = 0.0f;
-                    if (out->y < 0.0f) out->y = 0.0f;
-                    if (out->x > 1.0f) out->x = 1.0f;
-                    if (out->y > 1.0f) out->y = 1.0f;
-                    if (out->width > 1.0f - out->x) out->width = 1.0f - out->x;
-                    if (out->height > 1.0f - out->y) out->height = 1.0f - out->y;
-                }
-            }
-        } else {
-            /* Fail fast instead of letting the driver error spam every frame */
-            if (++data->secondary_error_count >= 3) {
-                data->secondary_enabled = AICAM_FALSE;
-                LOG_CORE_ERROR("Secondary inference failed %lu times, disabled until model reload",
-                               (unsigned long)data->secondary_error_count);
-                return;
-            }
+    /* The buffer must match the model input exactly (it does while the
+     * primary model defines the pipe2 geometry). A mismatch means the
+     * primary model changed input size — keep the last faces and skip. */
+    uint32_t expected = info->input_width * info->input_height * 3;
+    if (pipe2_size != expected) {
+        static uint32_t size_warn = 0;
+        if ((++size_warn % 1000) == 1) {
+            LOG_CORE_WARN("Secondary input %ux%u (%lu B) != pipe2 size %lu B — skipping",
+                          info->input_width, info->input_height,
+                          (unsigned long)expected, (unsigned long)pipe2_size);
         }
+        return;
     }
 
-    /* Ask the camera thread for a fresh ROI batch — after inference, so the
-     * buffers are never overwritten mid-run */
-    data->roi_wanted = AICAM_TRUE;
-
-    /* Single merged delivery; invalid when no faces so consumers clear state */
-    nn_result_t out;
-    memset(&out, 0, sizeof(nn_result_t));
-    out.type = PP_TYPE_MPE;
-    out.is_valid = (merged_count > 0) ? 1 : 0;
-    out.mpe.detects = merged;
-    out.mpe.nb_detect = (uint8_t)merged_count;
-    if (data->secondary_callback) {
-        data->secondary_callback(&out, frame_id, total_time_ms,
-                                 data->secondary_callback_user_data);
+    nn_result_t result;
+    memset(&result, 0, sizeof(nn_result_t));
+    uint32_t start_tick = osKernelGetTickCount();
+    if (nn_instance_inference_frame(data->secondary_handle, (uint8_t *)pipe2_buffer,
+                                    pipe2_size, &result) == 0) {
+        data->secondary_inference_count++;
+        data->secondary_error_count = 0;
+        if (data->secondary_callback) {
+            data->secondary_callback(&result, frame_id,
+                                     osKernelGetTickCount() - start_tick,
+                                     data->secondary_callback_user_data);
+        }
+    } else {
+        /* Fail fast instead of letting the driver error spam every frame */
+        if (++data->secondary_error_count >= 3) {
+            data->secondary_enabled = AICAM_FALSE;
+            LOG_CORE_ERROR("Secondary inference failed %lu times, disabled until model reload",
+                           (unsigned long)data->secondary_error_count);
+        }
     }
 }
-#undef SECONDARY_MAX_FACES
 
 static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
                                              video_frame_t **output_frame)
@@ -1139,11 +910,12 @@ static aicam_result_t video_ai_process_frame(video_ai_node_data_t *data,
     // Anchor pacing to the attempt so inference errors keep the configured cadence
     data->last_inference_tick = infer_start_tick;
 
-    // Secondary model (face detection) on PIPE1 ROIs published by the
-    // camera draw callback; NPU access is serialized with the primary model
-    // through the global NPU mutex inside nn.c.
+    // Secondary model (face detection) fed directly from the same pipe2
+    // buffer; NPU access is serialized with the primary model through the
+    // global NPU mutex inside nn.c.
     if (data->secondary_handle && data->secondary_enabled) {
-        video_ai_run_secondary_model(data, frame_id);
+        video_ai_run_secondary_model(data, input_frame_buffer,
+                                     camera_buffer_with_frame_id.size, frame_id);
     }
 
     // return pipe2 buffer
@@ -1332,21 +1104,11 @@ static aicam_result_t video_ai_node_deinit_callback(video_node_t *node) {
     data->is_initialized = AICAM_FALSE;
     data->is_running = AICAM_FALSE;
 
-    /* Release the secondary model (instance + ROI mailbox) */
+    /* Release the secondary model instance */
     if (data->secondary_handle) {
         nn_handle_t handle = data->secondary_handle;
         data->secondary_handle = NULL;
         data->secondary_enabled = AICAM_FALSE;
-        if (data->secondary_scratch) {
-            hal_mem_free(data->secondary_scratch);
-            data->secondary_scratch = NULL;
-            data->secondary_scratch_size = 0;
-            data->secondary_roi_stride = 0;
-        }
-        if (data->roi_mutex) {
-            osMutexDelete(data->roi_mutex);
-            data->roi_mutex = NULL;
-        }
         nn_instance_unload_model(handle);
         nn_instance_destroy(handle);
         memset(&data->secondary_model_info, 0, sizeof(nn_model_info_t));

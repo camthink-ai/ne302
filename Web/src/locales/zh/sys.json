@@ -873,7 +873,15 @@
       "face_conf": "人脸置信度阈值(%)",
       "face_conf_hint": "1-99, 越高越严格",
       "face_nms": "人脸NMS阈值(%)",
-      "face_nms_hint": "1-99, 越低去重越狠"
+      "face_nms_hint": "1-99, 越低去重越狠",
+      "model_section": "模型管理",
+      "upload_person": "人体检测模型",
+      "person_hint": "烧写至 0x70900000 (AI_1),上传后自动重载",
+      "upload_face": "人脸检测模型",
+      "face_hint": "烧写至 0x71100000 (AI_2),上传后自动重载;输入需为 256x256",
+      "model_upload_ok": "模型上传成功,已重载",
+      "model_upload_failed": "模型上传失败",
+      "uploading": "上传中"
     }
   },
   "common": {

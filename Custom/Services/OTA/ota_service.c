@@ -601,11 +601,6 @@ int ota_upgrade_from_file(int fw_type, const char *filename, const ota_validatio
     }
 
 
-    // update json config
-    if(fw_type == FIRMWARE_AI_2) {
-        json_config_set_ai_1_active(AICAM_TRUE);
-    }
-    
     LOG_SVC_INFO("Upgrade from file completed successfully: %s", filename);
     return 0;
 }
@@ -820,11 +815,6 @@ int ota_upgrade_from_memory(int fw_type, const void *firmware_data, size_t firmw
         return -1;
     }
 
-    // Step 11: Update json config if needed
-    if (fw_type == FIRMWARE_AI_2) {
-        json_config_set_ai_1_active(AICAM_TRUE);
-    }
-    
     LOG_SVC_INFO("Upgrade from memory completed successfully, size: %u bytes", firmware_size);
     return 0;
 }

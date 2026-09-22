@@ -357,6 +357,16 @@ aicam_bool_t ai_service_face_model_is_loaded(void);
  */
 aicam_result_t ai_service_set_face_thresholds(uint32_t confidence_pct, uint32_t nms_pct);
 
+/**
+ * @brief Reload the face detection model from flash (no reboot)
+ * @details Unloads the current secondary instance (after quiescing the AI
+ *          node thread) and loads from the non-active AI partition again,
+ *          re-applying thresholds and the result callback. Used after a
+ *          face model upload.
+ * @return aicam_result_t
+ */
+aicam_result_t ai_service_reload_face_model(void);
+
 /* ==================== Result Consumer Registration ==================== */
 
 /**

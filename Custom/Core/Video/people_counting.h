@@ -97,19 +97,6 @@ aicam_result_t people_counting_reset_stats(void);
  */
 void people_counting_set_face_model_loaded(aicam_bool_t loaded);
 
-/**
- * @brief Query the motion-compensation shift for a person at (cx, cy)
- * @details Uses the nearest active person track's velocity to estimate how
- *          far that person moved since the last tracker update; used to
- *          shift face ROI crops to the person's current position. Outputs
- *          are normalized full-frame deltas, clamped to +/-0.12.
- * @param cx Person center X (normalized 0..1)
- * @param cy Person center Y (normalized 0..1)
- * @param dx Output X shift (normalized), may be NULL-safe with dy
- * @param dy Output Y shift (normalized)
- */
-void people_counting_motion_compensate(float cx, float cy, float *dx, float *dy);
-
 
 
 /**

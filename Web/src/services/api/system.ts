@@ -35,7 +35,7 @@ interface ExportFirmwareReq {
   firmware_type: string;
   filename: string;
 }
-export type FirmwareType = 'app' | 'web' | 'ai' | 'fsbl' | 'wifi';
+export type FirmwareType = 'app' | 'web' | 'ai' | 'ai_face' | 'fsbl' | 'wifi';
 
 /** One firmware sub-package inside an OTA bundle, as planned by the device.
  *  Every entry burns unless the user skips it — skipping is offered for

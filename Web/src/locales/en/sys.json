@@ -875,7 +875,15 @@
       "face_conf": "Face Confidence (%)",
       "face_conf_hint": "1-99, higher = stricter",
       "face_nms": "Face NMS IoU (%)",
-      "face_nms_hint": "1-99, lower = stricter dedup"
+      "face_nms_hint": "1-99, lower = stricter dedup",
+      "model_section": "Model Management",
+      "upload_person": "Person Detection Model",
+      "person_hint": "Burns to 0x70900000 (AI_1), auto reloads after upload",
+      "upload_face": "Face Detection Model",
+      "face_hint": "Burns to 0x71100000 (AI_2), auto reloads; input must be 256x256",
+      "model_upload_ok": "Model uploaded and reloaded",
+      "model_upload_failed": "Model upload failed",
+      "uploading": "Uploading"
     }
   },
   "common": {
