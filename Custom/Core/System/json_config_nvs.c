@@ -83,6 +83,92 @@ aicam_result_t json_config_save_ai_debug_config_to_nvs(const ai_debug_config_t *
     return result;
 }
 
+// save people counting demo configuration to NVS
+aicam_result_t json_config_save_people_counting_to_nvs(const people_counting_config_t *config)
+{
+    if (!config)
+    {
+        LOG_CORE_ERROR("Invalid people counting configuration");
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    aicam_result_t result = AICAM_OK;
+
+    result = json_config_nvs_write_bool(NVS_KEY_PC_ENABLED, config->enabled);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc enabled to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_PC_SHOW_LINE, config->show_line);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc show_line to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_PC_SHOW_OSD, config->show_osd);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc show_osd to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_PC_FACE_MOSAIC, config->face_mosaic);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc face_mosaic to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_LINE_X1, config->line_x1);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc line_x1 to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_LINE_Y1, config->line_y1);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc line_y1 to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_LINE_X2, config->line_x2);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc line_x2 to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_LINE_Y2, config->line_y2);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc line_y2 to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_LINE_THICK, config->line_thickness);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc line_thickness to NVS");
+
+    result = json_config_nvs_write_bool(NVS_KEY_PC_INVERT_DIR, config->invert_direction);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc invert_direction to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_IOU_THRESHOLD, config->track_iou_threshold);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc track_iou_threshold to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_MAX_MISSED, config->track_max_missed);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc track_max_missed to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_CROSS_DEBOUNCE, config->cross_debounce);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc cross_debounce to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_MIN_BOX_AREA, config->min_box_area);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc min_box_area to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_MOSAIC_BLOCK, config->mosaic_block);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc mosaic_block to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_MOSAIC_EXPAND, config->mosaic_expand);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc mosaic_expand to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_FACE_CONF, config->face_conf_threshold);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc face_conf_threshold to NVS");
+
+    result = json_config_nvs_write_uint32(NVS_KEY_PC_FACE_NMS, config->face_nms_threshold);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save pc face_nms_threshold to NVS");
+
+    LOG_CORE_INFO("People counting configuration saved to NVS successfully");
+    return result;
+}
+
 // save work mode configuration to NVS
 aicam_result_t json_config_save_work_mode_config_to_nvs(const work_mode_config_t *config)
 {
@@ -1574,6 +1660,11 @@ aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config)
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save ai debug configuration to NVS");
 
+    // Save people counting configuration
+    result = json_config_save_people_counting_to_nvs(&config->people_counting);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save people counting configuration to NVS");
+
     // Save work mode configuration
     result = json_config_save_work_mode_config_to_nvs(&config->work_mode_config);
     if (result != AICAM_OK)
@@ -1754,6 +1845,115 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->ai_debug.inference_interval_ms = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_INFER_INTERVAL, config->ai_debug.inference_interval_ms);
+
+    // Load people counting demo configuration (write defaults back when missing)
+    result = json_config_nvs_read_bool(NVS_KEY_PC_ENABLED, &temp_bool);
+    if (result == AICAM_OK)
+        config->people_counting.enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_PC_ENABLED, config->people_counting.enabled);
+
+    result = json_config_nvs_read_bool(NVS_KEY_PC_SHOW_LINE, &temp_bool);
+    if (result == AICAM_OK)
+        config->people_counting.show_line = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_PC_SHOW_LINE, config->people_counting.show_line);
+
+    result = json_config_nvs_read_bool(NVS_KEY_PC_SHOW_OSD, &temp_bool);
+    if (result == AICAM_OK)
+        config->people_counting.show_osd = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_PC_SHOW_OSD, config->people_counting.show_osd);
+
+    result = json_config_nvs_read_bool(NVS_KEY_PC_FACE_MOSAIC, &temp_bool);
+    if (result == AICAM_OK)
+        config->people_counting.face_mosaic = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_PC_FACE_MOSAIC, config->people_counting.face_mosaic);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_LINE_X1, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= PC_COORD_MAX)
+        config->people_counting.line_x1 = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_LINE_X1, config->people_counting.line_x1);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_LINE_Y1, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= PC_COORD_MAX)
+        config->people_counting.line_y1 = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_LINE_Y1, config->people_counting.line_y1);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_LINE_X2, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= PC_COORD_MAX)
+        config->people_counting.line_x2 = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_LINE_X2, config->people_counting.line_x2);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_LINE_Y2, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= PC_COORD_MAX)
+        config->people_counting.line_y2 = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_LINE_Y2, config->people_counting.line_y2);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_LINE_THICK, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 16)
+        config->people_counting.line_thickness = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_LINE_THICK, config->people_counting.line_thickness);
+
+    result = json_config_nvs_read_bool(NVS_KEY_PC_INVERT_DIR, &temp_bool);
+    if (result == AICAM_OK)
+        config->people_counting.invert_direction = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_PC_INVERT_DIR, config->people_counting.invert_direction);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_IOU_THRESHOLD, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->people_counting.track_iou_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_IOU_THRESHOLD, config->people_counting.track_iou_threshold);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_MAX_MISSED, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 50)
+        config->people_counting.track_max_missed = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_MAX_MISSED, config->people_counting.track_max_missed);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_CROSS_DEBOUNCE, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 10)
+        config->people_counting.cross_debounce = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_CROSS_DEBOUNCE, config->people_counting.cross_debounce);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_MIN_BOX_AREA, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= 1000000u)
+        config->people_counting.min_box_area = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_MIN_BOX_AREA, config->people_counting.min_box_area);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_MOSAIC_BLOCK, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 4 && temp_uint32 <= 64)
+        config->people_counting.mosaic_block = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_MOSAIC_BLOCK, config->people_counting.mosaic_block);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_MOSAIC_EXPAND, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= 100)
+        config->people_counting.mosaic_expand = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_MOSAIC_EXPAND, config->people_counting.mosaic_expand);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_FACE_CONF, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->people_counting.face_conf_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_FACE_CONF, config->people_counting.face_conf_threshold);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_PC_FACE_NMS, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->people_counting.face_nms_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_PC_FACE_NMS, config->people_counting.face_nms_threshold);
 
     // Load power mode configuration
     result = json_config_nvs_read_uint32(NVS_KEY_POWER_CURRENT_MODE, &temp_uint32);

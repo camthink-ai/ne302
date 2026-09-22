@@ -63,6 +63,26 @@
  #define NVS_KEY_NMS_THRESHOLD       "nms_thresh"
  #define NVS_KEY_OVERLAY_RESULTS     "overlay_results"
  #define NVS_KEY_INFER_INTERVAL      "ai_infer_iv"
+
+ // People counting demo configuration key names
+ #define NVS_KEY_PC_ENABLED          "pc_enabled"
+ #define NVS_KEY_PC_SHOW_LINE        "pc_show_line"
+ #define NVS_KEY_PC_SHOW_OSD         "pc_show_osd"
+ #define NVS_KEY_PC_FACE_MOSAIC      "pc_face_mos"
+ #define NVS_KEY_PC_LINE_X1          "pc_line_x1"
+ #define NVS_KEY_PC_LINE_Y1          "pc_line_y1"
+ #define NVS_KEY_PC_LINE_X2          "pc_line_x2"
+ #define NVS_KEY_PC_LINE_Y2          "pc_line_y2"
+ #define NVS_KEY_PC_LINE_THICK       "pc_line_thk"
+ #define NVS_KEY_PC_INVERT_DIR       "pc_inv_dir"
+ #define NVS_KEY_PC_IOU_THRESHOLD    "pc_iou_thr"
+ #define NVS_KEY_PC_MAX_MISSED       "pc_max_miss"
+ #define NVS_KEY_PC_CROSS_DEBOUNCE   "pc_debounce"
+ #define NVS_KEY_PC_MIN_BOX_AREA     "pc_min_area"
+ #define NVS_KEY_PC_MOSAIC_BLOCK     "pc_mos_blk"
+ #define NVS_KEY_PC_MOSAIC_EXPAND    "pc_mos_exp"
+ #define NVS_KEY_PC_FACE_CONF        "pc_face_conf"
+ #define NVS_KEY_PC_FACE_NMS         "pc_face_nms"
  
  // Power mode configuration key names
  #define NVS_KEY_POWER_CURRENT_MODE  "power_cur_mode"
@@ -395,6 +415,7 @@
  /* --- From json_config_nvs.c --- */
  aicam_result_t json_config_save_log_config_to_nvs(const log_config_t *config);
  aicam_result_t json_config_save_ai_debug_config_to_nvs(const ai_debug_config_t *config);
+ aicam_result_t json_config_save_people_counting_to_nvs(const people_counting_config_t *config);
  aicam_result_t json_config_save_work_mode_config_to_nvs(const work_mode_config_t *config);
  aicam_result_t json_config_save_power_mode_config_to_nvs(const power_mode_config_t *config);
 aicam_result_t json_config_save_device_info_config_to_nvs(const device_info_config_t *config);

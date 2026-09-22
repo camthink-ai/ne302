@@ -5,6 +5,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 
 const navigationItems = [
   { path: '/device-tool', key: 'sys.menu.device_tool' },
+  { path: '/people-counting', key: 'sys.menu.people_counting' },
   { path: '/model-verification', key: 'sys.menu.model_verification' },
   { path: '/application-management', key: 'sys.menu.application_management' },
   { path: '/hardware-management', key: 'sys.menu.hardware_management' },

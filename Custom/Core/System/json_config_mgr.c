@@ -42,6 +42,27 @@
          .overlay_results = AICAM_TRUE,
          .inference_interval_ms = 0
      },
+
+     .people_counting = {
+         .enabled = AICAM_TRUE,
+         .show_line = AICAM_TRUE,
+         .show_osd = AICAM_TRUE,
+         .face_mosaic = AICAM_TRUE,
+         .line_x1 = 600,
+         .line_y1 = 200,
+         .line_x2 = 600,
+         .line_y2 = 800,
+         .line_thickness = 3,
+         .invert_direction = AICAM_FALSE,
+         .track_iou_threshold = 30,
+         .track_max_missed = 10,
+         .cross_debounce = 2,
+         .min_box_area = 2000,
+         .mosaic_block = 16,
+         .mosaic_expand = 20,
+         .face_conf_threshold = 50,
+         .face_nms_threshold = 30
+     },
      
      .power_mode_config = {
          .current_mode = POWER_MODE_LOW_POWER,
@@ -894,6 +915,43 @@
  uint32_t json_config_get_inference_interval_ms(void)
  {
      return g_json_config_ctx.current_config.ai_debug.inference_interval_ms;
+ }
+
+ /*=================== People Counting Configuration API Implementation ====================*/
+
+ aicam_result_t json_config_get_people_counting_config(people_counting_config_t *config)
+ {
+     if (!config)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
+     if (!g_json_config_ctx.initialized)
+     {
+         return AICAM_ERROR_NOT_INITIALIZED;
+     }
+
+     *config = g_json_config_ctx.current_config.people_counting;
+     return AICAM_OK;
+ }
+
+ aicam_result_t json_config_set_people_counting_config(const people_counting_config_t *config)
+ {
+     if (!config)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
+     if (!g_json_config_ctx.initialized)
+     {
+         return AICAM_ERROR_NOT_INITIALIZED;
+     }
+
+     memcpy(&g_json_config_ctx.current_config.people_counting, config,
+            sizeof(people_counting_config_t));
+
+     json_config_save_people_counting_to_nvs(&g_json_config_ctx.current_config.people_counting);
+     return AICAM_OK;
  }
 
  /*=================== Work Mode Configuration API Implementation ====================*/

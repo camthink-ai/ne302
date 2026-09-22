@@ -15,6 +15,7 @@
  #include "ms_mqtt_client.h"
  #include "netif_manager.h"
 #include "isp_services.h"
+#include "people_counting_config.h"
  
  #ifdef __cplusplus
  extern "C" {
@@ -704,6 +705,7 @@ typedef struct {
     auth_mgr_config_t auth_mgr;
     webhook_config_t webhook_config;
     capture_upload_config_t capture_upload; /* Capture/upload mode, storage, retry, schedule */
+    people_counting_config_t people_counting; /* People counting demo (line/tracking/mosaic) */
     // RTMP config is now in work_mode_config.video_stream_mode
  } aicam_global_config_t;
  
@@ -1020,6 +1022,22 @@ aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms);
  * @return Interval in milliseconds (0 = process every frame)
  */
 uint32_t json_config_get_inference_interval_ms(void);
+
+/* ==================== People Counting Configuration API ==================== */
+
+/**
+ * @brief Get the people counting demo configuration
+ * @param config Output configuration structure
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_get_people_counting_config(people_counting_config_t *config);
+
+/**
+ * @brief Set the people counting demo configuration (persisted to NVS)
+ * @param config New configuration (fields must be pre-validated by caller)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_people_counting_config(const people_counting_config_t *config);
 
 
 /**

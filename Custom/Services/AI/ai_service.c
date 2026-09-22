@@ -25,6 +25,7 @@
 #include "drtc.h"
 #include "common_utils.h"
 #include "cbor_enc.h"
+#include "people_counting.h"
 
 /* ==================== AI Service Context ==================== */
 
@@ -60,6 +61,11 @@ typedef struct {
 } ai_service_context_t;
 
 static ai_service_context_t g_ai_service = {0};
+
+/* Desired face-model postprocess thresholds (percent); stored here because
+ * the model loads lazily — values are re-applied on every successful load. */
+static uint32_t g_face_conf_threshold_pct = 50;
+static uint32_t g_face_nms_threshold_pct = 30;
 
 /* ==================== Continuous AI Telemetry Context ==================== */
 
@@ -104,6 +110,78 @@ static struct {
 
 static uint8_t ai_telemetry_task_stack[1024 * 4] ALIGN_32 IN_PSRAM;
 
+/* ==================== Result Consumer Dispatcher ==================== */
+
+/**
+ * @brief The AI node exposes a single result callback slot, so the service
+ *        installs one dispatcher and fans results out to registered consumers
+ *        (telemetry unit, people counting demo). Slots are written while the
+ *        pipeline is stopped and read on the AI node thread.
+ */
+#define AI_RESULT_CONSUMER_MAX 2
+
+typedef struct {
+    video_ai_result_callback_t fn;
+    void *user_data;
+} ai_result_consumer_t;
+
+static ai_result_consumer_t g_ai_result_consumers[AI_RESULT_CONSUMER_MAX] = {0};
+
+static void ai_service_result_dispatcher(const nn_result_t *result, uint32_t frame_id,
+                                         uint32_t inference_time_ms, void *user_data)
+{
+    (void)user_data;
+    for (uint32_t i = 0; i < AI_RESULT_CONSUMER_MAX; i++) {
+        if (g_ai_result_consumers[i].fn) {
+            g_ai_result_consumers[i].fn(result, frame_id, inference_time_ms,
+                                        g_ai_result_consumers[i].user_data);
+        }
+    }
+}
+
+static aicam_result_t ai_service_install_result_dispatcher(void)
+{
+    if (!g_ai_service.ai_node) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    /* Idempotent: the node callback stays installed; slots are managed below */
+    return video_ai_node_set_result_callback(g_ai_service.ai_node,
+                                             ai_service_result_dispatcher, NULL);
+}
+
+aicam_result_t ai_service_register_result_consumer(video_ai_result_callback_t fn, void *user_data)
+{
+    if (!fn) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    for (uint32_t i = 0; i < AI_RESULT_CONSUMER_MAX; i++) {
+        if (g_ai_result_consumers[i].fn == fn) {
+            g_ai_result_consumers[i].user_data = user_data;
+            return AICAM_OK;
+        }
+    }
+    for (uint32_t i = 0; i < AI_RESULT_CONSUMER_MAX; i++) {
+        if (!g_ai_result_consumers[i].fn) {
+            g_ai_result_consumers[i].fn = fn;
+            g_ai_result_consumers[i].user_data = user_data;
+            return AICAM_OK;
+        }
+    }
+    return AICAM_ERROR_NO_MEMORY;
+}
+
+aicam_result_t ai_service_unregister_result_consumer(video_ai_result_callback_t fn)
+{
+    for (uint32_t i = 0; i < AI_RESULT_CONSUMER_MAX; i++) {
+        if (g_ai_result_consumers[i].fn == fn) {
+            g_ai_result_consumers[i].fn = NULL;
+            g_ai_result_consumers[i].user_data = NULL;
+            return AICAM_OK;
+        }
+    }
+    return AICAM_OK;
+}
+
 /* ==================== Internal Function Declarations ==================== */
 
 static void ai_telemetry_result_callback(const nn_result_t *result, uint32_t frame_id,
@@ -131,6 +209,11 @@ static aicam_result_t ai_create_camera_pipeline_nodes(const ai_service_config_t 
 static aicam_result_t ai_create_ai_pipeline_nodes(const ai_service_config_t *config);
 static aicam_result_t ai_connect_camera_pipeline_nodes(void);
 static aicam_result_t ai_connect_ai_pipeline_nodes(void);
+
+static aicam_result_t ai_service_setup_people_counting(void);
+/* Public (declared in ai_service.h) but referenced by the static setup
+ * helper above its definition. */
+aicam_result_t ai_service_load_face_model(void);
 
 static aicam_result_t ai_reload_model_restart_pipeline(void);
 
@@ -349,6 +432,17 @@ aicam_result_t ai_pipeline_init(ai_service_config_t *config)
         g_ai_service.camera_pipeline = NULL;
         g_ai_service.ai_pipeline = NULL;
         return result;
+    }
+
+    /* Fan inference results out to service consumers (telemetry, people
+     * counting) through a single dispatcher, then bring up the demo. */
+    result = ai_service_install_result_dispatcher();
+    if (result != AICAM_OK) {
+        LOG_SVC_WARN("Failed to install result dispatcher: %d", result);
+    }
+    result = ai_service_setup_people_counting();
+    if (result != AICAM_OK) {
+        LOG_SVC_WARN("People counting demo unavailable: %d", result);
     }
     
     // Connect camera pipeline nodes
@@ -605,9 +699,9 @@ aicam_result_t ai_service_get_model_info(nn_model_info_t *model_info)
 
 /* ==================== Internal Functions ==================== */
 
-static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer, 
-                                             uint32_t width, 
-                                             uint32_t height, 
+static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer,
+                                             uint32_t width,
+                                             uint32_t height,
                                              uint32_t frame_id,
                                              void *user_data)
 {
@@ -615,21 +709,29 @@ static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer,
         LOG_SVC_ERROR("Invalid frame buffer for AI drawing");
         return AICAM_ERROR_INVALID_PARAM;
     }
-    
+
     // Get latest NN result from AI service
     nn_result_t nn_result;
     memset(&nn_result, 0, sizeof(nn_result_t));
-    
+
     aicam_result_t ai_ret = ai_service_get_nn_result(&nn_result, frame_id);
+
+    /* Feed person-anchored face ROIs to the secondary model mailbox while
+     * this PIPE1 buffer is locked (the only thread-legal PIPE1 window). */
+    if (g_ai_service.ai_node) {
+        video_ai_node_push_face_rois(g_ai_service.ai_node, frame_buffer, width, height,
+                                     (ai_ret == AICAM_OK) ? &nn_result : NULL);
+    }
+
     if (ai_ret == AICAM_OK && (nn_result.od.nb_detect > 0 || nn_result.mpe.nb_detect > 0)) {
-        
+
         // Initialize AI draw service if not already done
         if (!ai_draw_is_initialized()) {
             ai_draw_config_t draw_config;
             ai_draw_get_default_config(&draw_config);
             draw_config.image_width = width;
             draw_config.image_height = height;
-            
+
             aicam_result_t draw_init_ret = ai_draw_service_init(&draw_config);
             if (draw_init_ret != AICAM_OK) {
                 LOG_SVC_WARN("Failed to initialize AI draw service: %d", draw_init_ret);
@@ -638,21 +740,22 @@ static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer,
                 LOG_SVC_INFO("AI draw service initialized for camera callback");
             }
         }
-        
+
         // Draw AI results on the frame buffer
         if (ai_draw_is_initialized()) {
             aicam_result_t draw_ret = ai_draw_results(frame_buffer, width, height, &nn_result);
-            if (draw_ret == AICAM_OK) {
-                return AICAM_OK;
-            } else {
+            if (draw_ret != AICAM_OK) {
                 LOG_SVC_WARN("Failed to draw AI results on camera frame: %d", draw_ret);
-                return draw_ret;
             }
         }
     } else if (ai_ret != AICAM_OK && ai_ret != AICAM_ERROR_NOT_INITIALIZED) {
         LOG_SVC_WARN("Failed to get NN result for camera drawing: %d", ai_ret);
     }
-    
+
+    // People counting demo overlay: face mosaic + counting line + count OSD.
+    // Runs even without person boxes so the line/OSD stay visible.
+    people_counting_draw_overlay(frame_buffer, width, height);
+
     // No detections or AI not ready - this is normal
     return AICAM_OK;
 }
@@ -719,6 +822,46 @@ static void ai_ai_pipeline_event_callback(video_pipeline_t *pipeline,
             LOG_SVC_DEBUG("AI Pipeline event: Unknown event %d from pipeline", event_type);
             break;
     }
+}
+
+/**
+ * @brief Bring up the people counting demo on the AI pipeline
+ * @details Initializes the counting module from the persisted configuration,
+ *          registers the person-result consumer and loads the face detection
+ *          model from the AI partition that is NOT active for the primary
+ *          model (person -> active slot, face -> other slot).
+ */
+static aicam_result_t ai_service_setup_people_counting(void)
+{
+    if (!g_ai_service.ai_node) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+
+    if (people_counting_init() != AICAM_OK) {
+        LOG_SVC_ERROR("Failed to initialize people counting module");
+        return AICAM_ERROR;
+    }
+
+    people_counting_config_t pc_config;
+    if (json_config_get_people_counting_config(&pc_config) == AICAM_OK) {
+        people_counting_set_config(&pc_config);
+    } else {
+        people_counting_get_default_config(&pc_config);
+    }
+
+    /* Person detections feed the tracker through the result dispatcher */
+    ai_service_register_result_consumer(people_counting_on_person_result, NULL);
+
+    if (pc_config.enabled) {
+        /* Store persisted face thresholds first so the lazy model load
+         * picks them up */
+        ai_service_set_face_thresholds(pc_config.face_conf_threshold,
+                                       pc_config.face_nms_threshold);
+        ai_service_load_face_model();
+    }
+
+    LOG_SVC_INFO("People counting demo set up (enabled=%d)", pc_config.enabled);
+    return AICAM_OK;
 }
 
 static aicam_result_t ai_create_camera_pipeline_nodes(const ai_service_config_t *config)
@@ -1211,10 +1354,87 @@ aicam_result_t ai_unload_model(void)
         LOG_SVC_ERROR("Failed to unload AI model: %d", result);
         return result;
     }
-    
+
     LOG_SVC_INFO("AI model unloaded successfully");
-    
+
     return AICAM_OK;
+}
+
+/* ==================== People Counting Demo Functions ==================== */
+
+aicam_result_t ai_service_load_face_model(void)
+{
+    /* Gate on the node handle only: this is also called from
+     * ai_service_setup_people_counting() inside ai_pipeline_init(), before
+     * the ai_pipeline_initialized flag is set. */
+    if (!g_ai_service.ai_node) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    if (video_ai_node_secondary_is_loaded(g_ai_service.ai_node) == AICAM_TRUE) {
+        /* Also re-enable inference: the node fail-fast-disables the
+         * secondary model after repeated inference errors, and the
+         * /counting/stats retry path comes through here to revive it. */
+        video_ai_node_set_secondary_enabled(g_ai_service.ai_node, AICAM_TRUE);
+        return AICAM_OK;
+    }
+
+    /* Face model lives in the AI partition that is NOT active for the
+     * primary (person) model: person -> active slot, face -> other slot. */
+    uintptr_t face_addr = json_config_get_ai_1_active()
+                              ? AI_1_BASE + 1024
+                              : AI_2_BASE + 1024;
+    LOG_SVC_INFO("Loading face model from %p", face_addr);
+    aicam_result_t result = video_ai_node_load_secondary_model(g_ai_service.ai_node, face_addr);
+    people_counting_set_face_model_loaded(result == AICAM_OK ? AICAM_TRUE : AICAM_FALSE);
+    if (result != AICAM_OK) {
+        LOG_SVC_WARN("Face model not available at %p (result=%d); mosaic disabled until flashed",
+                     face_addr, result);
+        return result;
+    }
+
+    video_ai_node_set_secondary_result_callback(g_ai_service.ai_node,
+                                                people_counting_on_face_result, NULL);
+    /* Post-load: pp init resets thresholds to the model JSON defaults, so
+     * re-apply the user-configured values every load. */
+    video_ai_node_set_secondary_thresholds(g_ai_service.ai_node,
+                                           g_face_conf_threshold_pct,
+                                           g_face_nms_threshold_pct);
+    return AICAM_OK;
+}
+
+aicam_result_t ai_service_set_face_thresholds(uint32_t confidence_pct, uint32_t nms_pct)
+{
+    if (confidence_pct < 1 || confidence_pct > 99 ||
+        nms_pct < 1 || nms_pct > 99) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    g_face_conf_threshold_pct = confidence_pct;
+    g_face_nms_threshold_pct = nms_pct;
+    if (g_ai_service.ai_node &&
+        video_ai_node_secondary_is_loaded(g_ai_service.ai_node) == AICAM_TRUE) {
+        video_ai_node_set_secondary_thresholds(g_ai_service.ai_node,
+                                               confidence_pct, nms_pct);
+    }
+    return AICAM_OK;
+}
+
+aicam_result_t ai_service_get_face_model_info(nn_model_info_t *model_info)
+{
+    if (!model_info) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (!g_ai_service.ai_pipeline_initialized || !g_ai_service.ai_node) {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    return video_ai_node_get_secondary_model_info(g_ai_service.ai_node, model_info);
+}
+
+aicam_bool_t ai_service_face_model_is_loaded(void)
+{
+    if (!g_ai_service.ai_pipeline_initialized || !g_ai_service.ai_node) {
+        return AICAM_FALSE;
+    }
+    return video_ai_node_secondary_is_loaded(g_ai_service.ai_node);
 }
 
 aicam_result_t ai_get_model_info(nn_model_info_t *model_info)
@@ -1788,8 +2008,7 @@ static aicam_result_t ai_telemetry_init(void)
         return AICAM_ERROR_NO_MEMORY;
     }
 
-    aicam_result_t result = video_ai_node_set_result_callback(g_ai_service.ai_node,
-                                                              ai_telemetry_result_callback, NULL);
+    aicam_result_t result = ai_service_register_result_consumer(ai_telemetry_result_callback, NULL);
     if (result != AICAM_OK) {
         LOG_SVC_ERROR("Failed to register telemetry result callback: %d", result);
         ai_telemetry_deinit();
@@ -1817,7 +2036,7 @@ static aicam_bool_t ai_telemetry_stop_task(void)
     g_ai_telemetry.initialized = AICAM_FALSE;
 
     if (g_ai_service.ai_node) {
-        video_ai_node_set_result_callback(g_ai_service.ai_node, NULL, NULL);
+        ai_service_unregister_result_consumer(ai_telemetry_result_callback);
     }
 
     if (g_ai_telemetry.task_handle) {

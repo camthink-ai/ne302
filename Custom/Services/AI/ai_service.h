@@ -323,6 +323,57 @@ aicam_result_t ai_service_get_model_info(nn_model_info_t *model_info);
  */
 aicam_result_t ai_reload_model(void);
 
+/* ==================== People Counting Demo Functions ==================== */
+
+/**
+ * @brief Load the face detection (secondary) model on demand
+ * @details Loads from the AI partition that is not active for the primary
+ *          model. Safe to call at runtime: the AI node only picks the
+ *          secondary handle up after it is fully loaded.
+ * @return aicam_result_t AICAM_OK when loaded (or already loaded)
+ */
+aicam_result_t ai_service_load_face_model(void);
+
+/**
+ * @brief Get the face detection (secondary) model information
+ * @param model_info Model info structure to fill (zeroed when not loaded)
+ * @return aicam_result_t AICAM_OK when loaded
+ */
+aicam_result_t ai_service_get_face_model_info(nn_model_info_t *model_info);
+
+/**
+ * @brief Check whether the face detection model is loaded
+ * @return aicam_bool_t
+ */
+aicam_bool_t ai_service_face_model_is_loaded(void);
+
+/**
+ * @brief Set the face detection model postprocess thresholds
+ * @details Stored even when the model is not yet loaded and re-applied on
+ *          every successful (re)load.
+ * @param confidence_pct Confidence threshold x100 (1-99)
+ * @param nms_pct NMS/IoU threshold x100 (1-99)
+ * @return aicam_result_t
+ */
+aicam_result_t ai_service_set_face_thresholds(uint32_t confidence_pct, uint32_t nms_pct);
+
+/* ==================== Result Consumer Registration ==================== */
+
+/**
+ * @brief Register an inference result consumer (fan-out via dispatcher)
+ * @param fn Callback matching video_ai_result_callback_t
+ * @param user_data Opaque pointer passed to the callback
+ * @return aicam_result_t
+ */
+aicam_result_t ai_service_register_result_consumer(video_ai_result_callback_t fn, void *user_data);
+
+/**
+ * @brief Unregister an inference result consumer
+ * @param fn Previously registered callback
+ * @return aicam_result_t
+ */
+aicam_result_t ai_service_unregister_result_consumer(video_ai_result_callback_t fn);
+
 /* ==================== AI Statistics Functions ==================== */
 
 /**

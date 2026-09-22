@@ -20,6 +20,9 @@ extern "C" {
 
 #define NN_RESULT_CACHE_SIZE 5
 
+/* Max person-anchored face ROIs copied per camera frame */
+#define VIDEO_AI_FACE_ROI_MAX 4
+
 /* ==================== AI Node Configuration ==================== */
 
 /**
@@ -92,11 +95,36 @@ typedef struct {
     aicam_bool_t is_initialized;          // Initialization status
     aicam_bool_t is_running;              // Running status
     aicam_bool_t draw_service_initialized; // Drawing service initialization status
-    
+
+    /* Secondary model (e.g. face detection) running on a downscaled copy of
+     * the pipe2 frame. Loaded explicitly via
+     * video_ai_node_load_secondary_model(); inference is serialized with the
+     * primary model through the global NPU mutex inside nn.c. */
+    nn_handle_t secondary_handle;         // Secondary NN instance (NULL if unloaded)
+    nn_model_info_t secondary_model_info; // Secondary model information
+    uint8_t *secondary_scratch;           // Face ROI buffer block (ROI_MAX entries)
+    uint32_t secondary_scratch_size;      // Total ROI block size in bytes
+    uint32_t secondary_roi_stride;        // Per-ROI buffer size in bytes
+    aicam_bool_t secondary_enabled;       // Runtime gate for secondary inference
+    video_ai_result_callback_t secondary_callback; // Secondary result callback
+    void *secondary_callback_user_data;   // Opaque pointer for secondary_callback
+    uint32_t secondary_inference_count;   // Secondary inference counter (stats)
+    uint32_t secondary_error_count;       // Secondary inference errors (stats)
+
+    /* Face ROI mailbox: the camera draw callback (sole legal PIPE1 holder)
+     * copies person head ROIs while the buffer is locked; the AI node
+     * thread consumes them for secondary inference. */
+    osMutexId_t roi_mutex;                          // Guards count/meta/seq
+    volatile uint32_t roi_seq;                      // Bumped on every publish
+    uint32_t roi_consumed_seq;                      // Last sequence consumed
+    volatile aicam_bool_t roi_wanted;               // Consumer wants new ROIs
+    uint32_t roi_count;                             // ROIs in the mailbox
+    float roi_meta[VIDEO_AI_FACE_ROI_MAX][4];       // x, y, w, h (full-frame normalized)
+
     // NN result cache (circular queue with 3 buffers)
     nn_result_with_frame_id_t nn_result_cache[NN_RESULT_CACHE_SIZE];
     uint32_t write_index;                   // Write index for circular queue
-    uint32_t read_index;                    // Read index for circular queue  
+    uint32_t read_index;                    // Read index for circular queue
     uint32_t cache_count;                   // Number of items in cache (0-NN_RESULT_CACHE_SIZE)
     aicam_bool_t cache_initialized;
     osMutexId_t cache_mutex;
@@ -226,6 +254,91 @@ aicam_result_t video_ai_node_get_best_nn_result(video_node_t *node, nn_result_t 
 aicam_result_t video_ai_node_set_result_callback(video_node_t *node,
                                                  video_ai_result_callback_t callback,
                                                  void *user_data);
+
+/* ==================== Secondary Model API ==================== */
+
+/**
+ * @brief Load a secondary model (e.g. face detection) on this AI node
+ * @details The secondary model runs on a downscaled copy of the pipe2 frame
+ *          right after each primary inference. The handle/scratch are owned
+ *          by the node and released on unload/deinit.
+ * @param node AI node handle
+ * @param model_ptr Model package address in flash
+ * @return Operation result
+ */
+aicam_result_t video_ai_node_load_secondary_model(video_node_t *node, uintptr_t model_ptr);
+
+/**
+ * @brief Unload the secondary model and release its resources
+ * @param node AI node handle
+ * @return Operation result
+ */
+aicam_result_t video_ai_node_unload_secondary_model(video_node_t *node);
+
+/**
+ * @brief Check whether a secondary model is loaded
+ * @param node AI node handle
+ * @return AICAM_TRUE when loaded
+ */
+aicam_bool_t video_ai_node_secondary_is_loaded(video_node_t *node);
+
+/**
+ * @brief Enable/disable secondary model inference at runtime
+ * @param node AI node handle
+ * @param enabled AICAM_TRUE to run the secondary model
+ * @return Operation result
+ */
+aicam_result_t video_ai_node_set_secondary_enabled(video_node_t *node, aicam_bool_t enabled);
+
+/**
+ * @brief Set the secondary model postprocess thresholds at runtime
+ * @param node AI node handle
+ * @param confidence_pct Confidence threshold x100 (1-99)
+ * @param nms_pct NMS/IoU threshold x100 (1-99)
+ * @return Operation result (AICAM_ERROR_NOT_INITIALIZED when no model loaded)
+ */
+aicam_result_t video_ai_node_set_secondary_thresholds(video_node_t *node,
+                                                      uint32_t confidence_pct,
+                                                      uint32_t nms_pct);
+
+/**
+ * @brief Register the secondary model result callback
+ * @param node AI node handle
+ * @param callback Callback function (NULL to unregister)
+ * @param user_data Opaque pointer passed to the callback
+ * @return Operation result
+ */
+aicam_result_t video_ai_node_set_secondary_result_callback(video_node_t *node,
+                                                            video_ai_result_callback_t callback,
+                                                            void *user_data);
+
+/**
+ * @brief Get the secondary model information
+ * @param node AI node handle
+ * @param model_info Model info structure to fill (zeroed when not loaded)
+ * @return AICAM_OK when loaded, AICAM_ERROR_NOT_INITIALIZED otherwise
+ */
+aicam_result_t video_ai_node_get_secondary_model_info(video_node_t *node, nn_model_info_t *model_info);
+
+/**
+ * @brief Publish person-anchored face ROIs copied from a PIPE1 frame
+ * @details Called from the camera draw callback while the PIPE1 buffer is
+ *          locked. For each person detection the head region (screen-square,
+ *          clamped to the frame) is copied, converted RGB565 -> RGB888 and
+ *          area-averaged into the model input size. A NULL/empty
+ *          person_result publishes an empty set so the consumer clears
+ *          stale faces. Copies happen only when the AI node asked for new
+ *          ROIs (throttled to the secondary inference pace).
+ * @param node AI node handle
+ * @param fb PIPE1 frame buffer (RGB565)
+ * @param fb_width Frame width in pixels
+ * @param fb_height Frame height in pixels
+ * @param person_result Primary OD result for THIS frame (NULL when none)
+ * @return aicam_result_t
+ */
+aicam_result_t video_ai_node_push_face_rois(video_node_t *node, const uint8_t *fb,
+                                            uint32_t fb_width, uint32_t fb_height,
+                                            const nn_result_t *person_result);
 
 /* ==================== Control Commands ==================== */
 

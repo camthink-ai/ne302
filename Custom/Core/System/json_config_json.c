@@ -112,6 +112,31 @@ static void parse_ai_debug(cJSON *json, ai_debug_config_t *cfg)
     json_get_uint32(json, "inference_interval_ms", &cfg->inference_interval_ms);
 }
 
+static void parse_people_counting(cJSON *json, people_counting_config_t *cfg)
+{
+    if (!json) {
+        return;
+    }
+    json_get_bool(json, "enabled", &cfg->enabled);
+    json_get_bool(json, "show_line", &cfg->show_line);
+    json_get_bool(json, "show_osd", &cfg->show_osd);
+    json_get_bool(json, "face_mosaic", &cfg->face_mosaic);
+    json_get_uint32(json, "line_x1", &cfg->line_x1);
+    json_get_uint32(json, "line_y1", &cfg->line_y1);
+    json_get_uint32(json, "line_x2", &cfg->line_x2);
+    json_get_uint32(json, "line_y2", &cfg->line_y2);
+    json_get_uint32(json, "line_thickness", &cfg->line_thickness);
+    json_get_bool(json, "invert_direction", &cfg->invert_direction);
+    json_get_uint32(json, "track_iou_threshold", &cfg->track_iou_threshold);
+    json_get_uint32(json, "track_max_missed", &cfg->track_max_missed);
+    json_get_uint32(json, "cross_debounce", &cfg->cross_debounce);
+    json_get_uint32(json, "min_box_area", &cfg->min_box_area);
+    json_get_uint32(json, "mosaic_block", &cfg->mosaic_block);
+    json_get_uint32(json, "mosaic_expand", &cfg->mosaic_expand);
+    json_get_uint32(json, "face_conf_threshold", &cfg->face_conf_threshold);
+    json_get_uint32(json, "face_nms_threshold", &cfg->face_nms_threshold);
+}
+
 static void parse_power_mode(cJSON *json, power_mode_config_t *cfg)
 {
     /* current_mode IS persisted config: the switch API saves it to NVS and
@@ -892,6 +917,30 @@ static cJSON *serialize_ai_debug(const ai_debug_config_t *cfg)
     return json;
 }
 
+static cJSON *serialize_people_counting(const people_counting_config_t *cfg)
+{
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddBoolToObject(json, "enabled", cfg->enabled);
+    cJSON_AddBoolToObject(json, "show_line", cfg->show_line);
+    cJSON_AddBoolToObject(json, "show_osd", cfg->show_osd);
+    cJSON_AddBoolToObject(json, "face_mosaic", cfg->face_mosaic);
+    cJSON_AddNumberToObject(json, "line_x1", cfg->line_x1);
+    cJSON_AddNumberToObject(json, "line_y1", cfg->line_y1);
+    cJSON_AddNumberToObject(json, "line_x2", cfg->line_x2);
+    cJSON_AddNumberToObject(json, "line_y2", cfg->line_y2);
+    cJSON_AddNumberToObject(json, "line_thickness", cfg->line_thickness);
+    cJSON_AddBoolToObject(json, "invert_direction", cfg->invert_direction);
+    cJSON_AddNumberToObject(json, "track_iou_threshold", cfg->track_iou_threshold);
+    cJSON_AddNumberToObject(json, "track_max_missed", cfg->track_max_missed);
+    cJSON_AddNumberToObject(json, "cross_debounce", cfg->cross_debounce);
+    cJSON_AddNumberToObject(json, "min_box_area", cfg->min_box_area);
+    cJSON_AddNumberToObject(json, "mosaic_block", cfg->mosaic_block);
+    cJSON_AddNumberToObject(json, "mosaic_expand", cfg->mosaic_expand);
+    cJSON_AddNumberToObject(json, "face_conf_threshold", cfg->face_conf_threshold);
+    cJSON_AddNumberToObject(json, "face_nms_threshold", cfg->face_nms_threshold);
+    return json;
+}
+
 static cJSON *serialize_power_mode(const power_mode_config_t *cfg)
 {
     cJSON *json = cJSON_CreateObject();
@@ -1479,6 +1528,10 @@ aicam_result_t json_config_parse_json_object(const char *json_str, aicam_global_
     if (cJSON_IsObject(ai_cfg))
         parse_ai_debug(ai_cfg, &config->ai_debug);
 
+    cJSON *pc_cfg = cJSON_GetObjectItem(root, "people_counting");
+    if (cJSON_IsObject(pc_cfg))
+        parse_people_counting(pc_cfg, &config->people_counting);
+
     cJSON *pwr_cfg = cJSON_GetObjectItem(root, "power_mode_config");
     if (cJSON_IsObject(pwr_cfg))
         parse_power_mode(pwr_cfg, &config->power_mode_config);
@@ -1543,6 +1596,7 @@ aicam_result_t json_config_serialize_json_object(const aicam_global_config_t *co
     // Add nested objects
     cJSON_AddItemToObject(root, "log_config", serialize_log_config(&config->log_config));
     cJSON_AddItemToObject(root, "ai_debug", serialize_ai_debug(&config->ai_debug));
+    cJSON_AddItemToObject(root, "people_counting", serialize_people_counting(&config->people_counting));
     cJSON_AddItemToObject(root, "power_mode_config", serialize_power_mode(&config->power_mode_config));
     cJSON_AddItemToObject(root, "device_info", serialize_device_info(&config->device_info));
     cJSON_AddItemToObject(root, "device_service", serialize_device_service(&config->device_service));
