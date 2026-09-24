@@ -284,12 +284,13 @@ uint32_t u0_module_get_pir_value_ex(void)
 
 int u0_module_get_usbin_value(uint32_t *usbin_value)
 {
-    int ret = 0;
+    /* NE302 hardware cannot distinguish USB input from battery power, so the
+     * product decision is to always report USB-in: the UI shows the device as
+     * permanently powered ("external_power") instead of a meaningless battery
+     * percentage. */
+    *usbin_value = 1;
 
-    ret = ms_bridging_request_usbin_value(u0_handler, usbin_value);
-    if (ret != MS_BR_OK) return ret;
-
-    return ret;
+    return 0;
 }
 
 int u0_module_get_version(ms_bridging_version_t *version)

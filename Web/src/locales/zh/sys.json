@@ -22,7 +22,7 @@
       "device_name_illegal": "设备名称只能包含中文，英文，数字，下划线，中划线",
       "device_name_updated": "设备名称修改成功",
       "log": "系统日志",
-      "long_power_supply": "长供电"
+      "long_power_supply": "外接供电"
     },
     "menu": {
       "device_tool": "功能调试",

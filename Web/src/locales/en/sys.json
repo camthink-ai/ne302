@@ -22,7 +22,7 @@
       "device_name_illegal": "Device name can only contain Chinese, English, numbers, underscores, and hyphens",
       "device_name_updated": "Device name updated successfully",
       "log": "System Log",
-      "long_power_supply": "Long Power Supply"
+      "long_power_supply": "External Power"
     },
     "menu": {
       "device_tool": "Feature Debugging",

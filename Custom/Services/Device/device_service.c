@@ -618,7 +618,7 @@ static void update_battery_info(device_info_config_t *info)
     ret = u0_module_get_usbin_value(&usbin_status);
     if (ret == 0 && usbin_status == 1) {
         info->battery_percent = 0.0f;
-        snprintf(info->power_supply_type, sizeof(info->power_supply_type), "full-power");
+        snprintf(info->power_supply_type, sizeof(info->power_supply_type), "external_power");
         LOG_SVC_DEBUG("Power from USB is connected.");
         return;
     }
@@ -638,7 +638,7 @@ static void update_battery_info(device_info_config_t *info)
             
             if (info->battery_percent > 100.0f) {
                 info->battery_percent = 0.0f;
-                snprintf(info->power_supply_type, sizeof(info->power_supply_type), "full-power");
+                snprintf(info->power_supply_type, sizeof(info->power_supply_type), "external_power");
             }
             else
             {
