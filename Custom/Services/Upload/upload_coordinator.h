@@ -73,6 +73,18 @@ aicam_result_t upload_coordinator_enqueue_capture(
     aicam_capture_trigger_t trigger,
     wakeup_source_type_t wakeup_src);
 
+/**
+ * @brief Persist a capture into the record store WITHOUT entering the upload
+ *        pipeline (record state = LOCAL regardless of the global mode).
+ *        Used by the face demo to archive reported crops viewable in the
+ *        records page while the recognition report itself travels its own
+ *        channel - the capture upload must not re-send them.
+ */
+aicam_result_t upload_coordinator_enqueue_capture_local(
+    const uint8_t *jpeg_buffer, uint32_t jpeg_size,
+    const mqtt_image_metadata_t *meta_in,
+    aicam_capture_trigger_t trigger);
+
 /* ==================== Queue Operations ==================== */
 
 /**

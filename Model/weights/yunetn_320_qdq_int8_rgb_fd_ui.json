@@ -1,0 +1,187 @@
+{
+  "version": "1.0.0",
+  "model_info": {
+    "name": "YuNet Face Detection Model (ONNX QDQ Int8, RGB input)",
+    "version": "1.0.0",
+    "description": "YuNet 320x320 face detection with 5 landmarks (ATON NPU int8, ONNX QDQ). Input channel order converted BGR->RGB for the NE302 PIPE2 RGB888 camera path via Script/yunet_bgr_to_rgb.py (exact first-conv weight-slice swap, outputs bit-identical).",
+    "type": "FACE_DETECTION",
+    "framework": "ONNX",
+    "author": "STMicroelectronics model zoo (stm32ai-modelzoo face_detection/yunet)",
+    "source": "https://github.com/STMicroelectronics/stm32ai-modelzoo/tree/main/face_detection/yunet"
+  },
+  "input_spec": {
+    "width": 320,
+    "height": 320,
+    "channels": 3,
+    "data_type": "uint8",
+    "color_format": "RGB888",
+    "normalization": {
+      "enabled": false,
+      "scale": 1.0,
+      "offset": 0.0
+    }
+  },
+  "output_spec": {
+    "num_outputs": 12,
+    "outputs": [
+      {
+        "name": "cls_8",
+        "batch": 1,
+        "height": 1,
+        "width": 1600,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.00329275173,
+        "zero_point": -128
+      },
+      {
+        "name": "cls_16",
+        "batch": 1,
+        "height": 1,
+        "width": 400,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.00321229897,
+        "zero_point": -128
+      },
+      {
+        "name": "cls_32",
+        "batch": 1,
+        "height": 1,
+        "width": 100,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.00270706438,
+        "zero_point": -128
+      },
+      {
+        "name": "obj_8",
+        "batch": 1,
+        "height": 1,
+        "width": 1600,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.00379675743,
+        "zero_point": -128
+      },
+      {
+        "name": "obj_16",
+        "batch": 1,
+        "height": 1,
+        "width": 400,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.00387159525,
+        "zero_point": -128
+      },
+      {
+        "name": "obj_32",
+        "batch": 1,
+        "height": 1,
+        "width": 100,
+        "channels": 1,
+        "data_type": "int8",
+        "scale": 0.000669988804,
+        "zero_point": -128
+      },
+      {
+        "name": "bbx_8",
+        "batch": 1,
+        "height": 1,
+        "width": 1600,
+        "channels": 4,
+        "data_type": "int8",
+        "scale": 0.0114006745,
+        "zero_point": -61
+      },
+      {
+        "name": "bbx_16",
+        "batch": 1,
+        "height": 1,
+        "width": 400,
+        "channels": 4,
+        "data_type": "int8",
+        "scale": 0.0110225687,
+        "zero_point": -46
+      },
+      {
+        "name": "bbx_32",
+        "batch": 1,
+        "height": 1,
+        "width": 100,
+        "channels": 4,
+        "data_type": "int8",
+        "scale": 0.0125323208,
+        "zero_point": -16
+      },
+      {
+        "name": "kps_8",
+        "batch": 1,
+        "height": 1,
+        "width": 1600,
+        "channels": 10,
+        "data_type": "int8",
+        "scale": 0.0194182731,
+        "zero_point": -26
+      },
+      {
+        "name": "kps_16",
+        "batch": 1,
+        "height": 1,
+        "width": 400,
+        "channels": 10,
+        "data_type": "int8",
+        "scale": 0.0153518226,
+        "zero_point": -33
+      },
+      {
+        "name": "kps_32",
+        "batch": 1,
+        "height": 1,
+        "width": 100,
+        "channels": 10,
+        "data_type": "int8",
+        "scale": 0.0164166484,
+        "zero_point": -45
+      }
+    ]
+  },
+  "memory": {
+    "exec_memory_pool": 3221225472,
+    "exec_memory_size": 1136020,
+    "ext_memory_pool": 2415919104,
+    "ext_memory_size": 96593,
+    "alignment_requirement": 32
+  },
+  "postprocess_type": "pp_fd_yunet_ui",
+  "postprocess_params": {
+    "class_names": [
+      "face"
+    ],
+    "image_size": 320,
+    "nb_keypoints": 5,
+    "nb_detections_8": 1600,
+    "nb_detections_16": 400,
+    "nb_detections_32": 100,
+    "max_detections": 10,
+    "confidence_threshold": 0.5,
+    "iou_threshold": 0.5
+  },
+  "runtime": {
+    "execution": {
+      "mode": "SYNC",
+      "priority": 5,
+      "timeout_ms": 5000
+    },
+    "memory_management": {
+      "cache_policy": "WRITE_BACK",
+      "memory_pool_size": 2097152,
+      "garbage_collection": false
+    },
+    "debugging": {
+      "log_level": "INFO",
+      "performance_monitoring": true,
+      "memory_profiling": false
+    }
+  }
+}

@@ -102,6 +102,7 @@ C_SOURCES += ../Custom/Core/System/wake_scheduler.c
 
 # Custom - Core/Video
 C_SOURCES += ../Custom/Core/Video/ai_draw_service.c
+C_SOURCES += ../Custom/Core/Video/face_detection.c
 C_SOURCES += ../Custom/Core/Video/video_ai_node.c
 C_SOURCES += ../Custom/Core/Video/video_camera_node.c
 C_SOURCES += ../Custom/Core/Video/video_encoder_node.c
@@ -238,6 +239,7 @@ C_SOURCES += ../Custom/Services/Web/api/api_preview_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_work_mode_module.c
 C_SOURCES += ../Custom/Services/Web/api/api_business_error.c
 C_SOURCES += ../Custom/Services/Web/api/api_isp_module.c
+C_SOURCES += ../Custom/Services/Web/api/api_face_detection_module.c
 
 
 # Custom - Common/Inc

@@ -114,6 +114,7 @@ The following table lists all post-processing types defined in `app_postprocess.
 | Status | Postprocess Type | C Define | Description | Input | Output | Verification |
 |--------|-----------------|----------|-------------|-------|--------|-------------|
 | ✅ | `pp_fd_blazeface_ui` | `POSTPROCESS_FD_BLAZEFACE_UI` (113) | BlazeFace face detection with keypoints | uint8 | int8 | ✅ 1 face 89%, 6 keypoints (eyes/nose/mouth/ears), 5 connections |
+| | `pp_fd_yunet_ui` | — | YuNet face detection with 5 keypoints (ONNX QDQ int8, 320x320, **RGB input**) | uint8 | int8 | `yunetn_320_qdq_int8_rgb_fd_ui`（默认 `make flash-model` 模型，包构建已验证 stedgeai 4.0.1，BGR→RGB 转换见 `Script/yunet_bgr_to_rgb.py`；pp 已修复输出上限/锚点表缺失，上机待验） |
 
 ### Single Person Pose Estimation (SPE)
 

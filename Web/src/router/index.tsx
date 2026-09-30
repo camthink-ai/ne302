@@ -1,6 +1,7 @@
 import { createBrowserRouter, type RouteObject, Navigate } from "react-router-dom";
 import Login from "@/pages/login";
 import DeviceTool from "@/pages/deviceTool";
+import FaceDetection from "@/pages/faceDetection";
 import Layout from "@/layout";
 import Home from "@/pages/home";
 import NotFound from "@/pages/notFound";
@@ -25,6 +26,11 @@ const baseRoutes = [
   {
     path: "/device-tool",
     element: <DeviceTool />,
+  },
+
+  {
+    path: "/face-detection",
+    element: <FaceDetection />,
   },
 
   {

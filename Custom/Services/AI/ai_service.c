@@ -25,6 +25,7 @@
 #include "drtc.h"
 #include "common_utils.h"
 #include "cbor_enc.h"
+#include "face_detection.h"
 
 /* ==================== AI Service Context ==================== */
 
@@ -181,7 +182,11 @@ aicam_result_t ai_service_start(void)
     }
     
     LOG_SVC_INFO("Starting AI Service...");
-    
+
+    // Face detection demo: bring it up eagerly (queue + report worker) so
+    // its state is visible in the boot log instead of lazily on first use.
+    face_detection_init();
+
     // Initialize pipeline
     aicam_result_t result = ai_pipeline_init(&g_ai_service.config);
     if (result != AICAM_OK) {
@@ -614,6 +619,17 @@ static aicam_result_t ai_service_draw_callback(uint8_t *frame_buffer,
     if (!frame_buffer) {
         LOG_SVC_ERROR("Invalid frame buffer for AI drawing");
         return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    // Face detection demo: when enabled it owns the camera-frame overlay
+    // (mosaic, boxes, id/confidence/recognition labels) and the face-crop
+    // report path, replacing the generic AI result drawing.
+    {
+        face_detection_config_t fd_cfg;
+        if (face_detection_get_config(&fd_cfg) == AICAM_OK && fd_cfg.enabled) {
+            face_detection_draw_overlay(frame_buffer, width, height);
+            return AICAM_OK;
+        }
     }
     
     // Get latest NN result from AI service
@@ -1420,6 +1436,10 @@ static void ai_telemetry_result_callback(const nn_result_t *result, uint32_t fra
                                          uint32_t inference_time_ms, void *user_data)
 {
     (void)user_data;
+
+    // Face detection demo consumes every primary result (AI node thread),
+    // independent of the telemetry enable state
+    face_detection_on_result(result, frame_id, inference_time_ms, NULL);
 
     if (!g_ai_telemetry.initialized || !mqtt_service_get_telemetry_enabled()) {
         return;

@@ -713,6 +713,131 @@ static aicam_result_t webhook_do_push(const uint8_t *jpeg_data, uint32_t jpeg_si
     return AICAM_OK;
 }
 
+aicam_result_t webhook_service_push_json_image(const char *metadata_json,
+                                               const uint8_t *jpeg_data,
+                                               uint32_t jpeg_size,
+                                               char *response_buf,
+                                               uint32_t response_buf_size)
+{
+    if (!metadata_json || !jpeg_data || jpeg_size == 0) {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (response_buf && response_buf_size > 0) {
+        response_buf[0] = '\0';
+    }
+
+    webhook_config_t cfg;
+    if (json_config_get_webhook_config(&cfg) != AICAM_OK || !cfg.enable) {
+        LOG_SVC_DEBUG("Webhook: disabled, skipping face report push");
+        return AICAM_ERROR_UNAVAILABLE;
+    }
+    if (!cfg.url[0]) {
+        LOG_SVC_WARN("Webhook: no URL configured");
+        return AICAM_ERROR;
+    }
+
+    /* multipart/form-data: part "metadata" (JSON) + part "image" (JPEG) */
+    uint32_t meta_len = (uint32_t)strlen(metadata_json);
+    uint32_t body_size = 512 + meta_len + jpeg_size + 128;
+    uint8_t *body = (uint8_t *)buffer_calloc(1, body_size);
+    if (!body) {
+        LOG_SVC_ERROR("Webhook: failed to alloc body (%lu)", (unsigned long)body_size);
+        return AICAM_ERROR_NO_MEMORY;
+    }
+
+    int pos = 0;
+    pos += snprintf((char *)body + pos, body_size - pos,
+        "--%s\r\n"
+        "Content-Disposition: form-data; name=\"metadata\"\r\n"
+        "Content-Type: application/json\r\n\r\n",
+        WEBHOOK_BOUNDARY);
+    memcpy(body + pos, metadata_json, meta_len);
+    pos += meta_len;
+    pos += snprintf((char *)body + pos, body_size - pos, "\r\n");
+    pos += snprintf((char *)body + pos, body_size - pos,
+        "--%s\r\n"
+        "Content-Disposition: form-data; name=\"image\"; filename=\"face.jpg\"\r\n"
+        "Content-Type: image/jpeg\r\n\r\n",
+        WEBHOOK_BOUNDARY);
+    if ((uint32_t)pos + jpeg_size + 64 > body_size) {
+        LOG_SVC_ERROR("Webhook: body buffer too small");
+        buffer_free(body);
+        return AICAM_ERROR_NO_MEMORY;
+    }
+    memcpy(body + pos, jpeg_data, jpeg_size);
+    pos += jpeg_size;
+    pos += snprintf((char *)body + pos, body_size - pos,
+                    "\r\n--%s--\r\n", WEBHOOK_BOUNDARY);
+
+    aicam_bool_t use_https = (strncmp(cfg.url, "https://", 8) == 0);
+    network_tls_config_t tls_config;
+    char *custom_ca_cert = NULL;
+    if (use_https) {
+        if (webhook_build_tls_config(&tls_config, &custom_ca_cert) != AICAM_OK) {
+            LOG_SVC_ERROR("Webhook: failed to build TLS config");
+            buffer_free(body);
+            return AICAM_ERROR;
+        }
+    }
+
+    char content_type[64];
+    snprintf(content_type, sizeof(content_type),
+             "multipart/form-data; boundary=%s", WEBHOOK_BOUNDARY);
+
+    http_client_config_t http_cfg = {
+        .url = cfg.url,
+        .method = HTTP_METHOD_POST,
+        .post_data = (const char *)body,
+        .post_len = pos,
+        .content_type = content_type,
+        .timeout_ms = WEBHOOK_TIMEOUT_MS,
+        .tls_config = use_https ? (const http_client_tls_config_t *)&tls_config : NULL,
+    };
+
+    http_client_handle_t client = http_client_init(&http_cfg);
+    if (!client) {
+        LOG_SVC_ERROR("Webhook: failed to create HTTP client");
+        if (custom_ca_cert) buffer_free(custom_ca_cert);
+        buffer_free(body);
+        return AICAM_ERROR;
+    }
+
+    char auth_header[384];
+    if (webhook_build_auth_header(&cfg, auth_header, sizeof(auth_header)) == AICAM_OK) {
+        http_client_set_header(client, "Authorization", auth_header);
+    }
+
+    int ret = http_client_perform(client);
+    int status_code = http_client_get_status_code(client);
+
+    aicam_result_t result = AICAM_ERROR;
+    if (ret == 0 && status_code >= 200 && status_code < 300) {
+        result = AICAM_OK;
+        if (response_buf && response_buf_size > 1) {
+            uint32_t got = 0;
+            while (got + 1 < response_buf_size) {
+                int n = http_client_read(client, response_buf + got,
+                                         (int)(response_buf_size - 1 - got));
+                if (n <= 0) {
+                    break;
+                }
+                got += (uint32_t)n;
+            }
+            response_buf[got] = '\0';
+        }
+        LOG_SVC_INFO("Webhook: face report push OK (status=%d, size=%lu)",
+                     status_code, (unsigned long)jpeg_size);
+    } else {
+        LOG_SVC_WARN("Webhook: face report push failed (ret=%d, status=%d)",
+                     ret, status_code);
+    }
+
+    http_client_cleanup(client);
+    if (custom_ca_cert) buffer_free(custom_ca_cert);
+    buffer_free(body);
+    return result;
+}
+
 /* ==================== Auth Header ==================== */
 
 static aicam_result_t webhook_build_auth_header(const webhook_config_t *cfg,

@@ -63,6 +63,35 @@
  #define NVS_KEY_NMS_THRESHOLD       "nms_thresh"
  #define NVS_KEY_OVERLAY_RESULTS     "overlay_results"
  #define NVS_KEY_INFER_INTERVAL      "ai_infer_iv"
+
+ // Face detection demo configuration key names
+ #define NVS_KEY_FD_ENABLED            "fd_enabled"
+ #define NVS_KEY_FD_DET_CONF          "fd_det_conf"
+ #define NVS_KEY_FD_MIN_FACE_AREA      "fd_min_area"
+ #define NVS_KEY_FD_IOU_THRESHOLD      "fd_iou_thr"
+ #define NVS_KEY_FD_MAX_MISSED         "fd_max_miss"
+ #define NVS_KEY_FD_CONFIRM_FRAMES     "fd_conf_frm"
+ #define NVS_KEY_FD_FACE_HOLD_MS       "fd_hold_ms"
+ #define NVS_KEY_FD_EXTRAPOLATION      "fd_extrap"
+ #define NVS_KEY_FD_BLUR_ENABLED       "fd_blur_en"
+ #define NVS_KEY_FD_MOSAIC_BLOCK       "fd_mos_blk"
+ #define NVS_KEY_FD_BLUR_EXPAND        "fd_blur_exp"
+ #define NVS_KEY_FD_CROP_EXPAND        "fd_crop_exp"
+ #define NVS_KEY_FD_CROP_MIN_SIZE      "fd_crop_min"
+ #define NVS_KEY_FD_REPORT_FIXED_SIZE  "fd_rep_fixed"
+ #define NVS_KEY_FD_JPEG_QUALITY       "fd_jpeg_q"
+ #define NVS_KEY_FD_REPORT_ENABLED     "fd_rep_en"
+ #define NVS_KEY_FD_REPORT_CHANNEL     "fd_rep_chan"
+ #define NVS_KEY_FD_REPORT_CONF        "fd_rep_conf"
+ #define NVS_KEY_FD_REPORT_PERIODIC    "fd_rep_per"
+ #define NVS_KEY_FD_REPORT_COOLDOWN    "fd_rep_cool"
+ #define NVS_KEY_FD_RESULT_TIMEOUT     "fd_res_timeout"
+ #define NVS_KEY_FD_RESULT_EXPIRE      "fd_res_expire"
+ #define NVS_KEY_FD_SHOW_BOX           "fd_show_box"
+ #define NVS_KEY_FD_SHOW_ID            "fd_show_id"
+ #define NVS_KEY_FD_SHOW_CONF          "fd_show_conf"
+ #define NVS_KEY_FD_SHOW_LANDMARKS     "fd_show_lm"
+ #define NVS_KEY_FD_SHOW_RECOGNITION   "fd_show_rec"
  
  // Power mode configuration key names
  #define NVS_KEY_POWER_CURRENT_MODE  "power_cur_mode"
@@ -395,6 +424,7 @@
  /* --- From json_config_nvs.c --- */
  aicam_result_t json_config_save_log_config_to_nvs(const log_config_t *config);
  aicam_result_t json_config_save_ai_debug_config_to_nvs(const ai_debug_config_t *config);
+ aicam_result_t json_config_save_face_detection_to_nvs(const face_detection_config_t *config);
  aicam_result_t json_config_save_work_mode_config_to_nvs(const work_mode_config_t *config);
  aicam_result_t json_config_save_power_mode_config_to_nvs(const power_mode_config_t *config);
 aicam_result_t json_config_save_device_info_config_to_nvs(const device_info_config_t *config);

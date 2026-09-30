@@ -299,6 +299,7 @@ static const char *trigger_str(aicam_capture_trigger_t t)
     case AICAM_CAPTURE_TRIGGER_GPIO:     return "gpio";
     case AICAM_CAPTURE_TRIGGER_BUTTON:   return "button";
     case AICAM_CAPTURE_TRIGGER_SCHEDULE: return "schedule";
+    case AICAM_CAPTURE_TRIGGER_FACE:     return "face";
     default:                             return "unknown";
     }
 }
@@ -3308,6 +3309,17 @@ static aicam_result_t direct_publish_capture(const uint8_t *jpeg_buffer,
     return r;
 }
 
+
+static aicam_result_t enqueue_capture_impl(
+    const uint8_t *jpeg_buffer, uint32_t jpeg_size,
+    const uint8_t *inference_jpeg, uint32_t inference_jpeg_size,
+    const char *ai_result_json,
+    const mqtt_ai_result_t *ai_result,
+    const mqtt_image_metadata_t *meta_in,
+    aicam_capture_trigger_t trigger,
+    wakeup_source_type_t wakeup_src,
+    aicam_bool_t local_only);
+
 aicam_result_t upload_coordinator_enqueue_capture(
     const uint8_t *jpeg_buffer, uint32_t jpeg_size,
     const uint8_t *inference_jpeg, uint32_t inference_jpeg_size,
@@ -3316,6 +3328,31 @@ aicam_result_t upload_coordinator_enqueue_capture(
     const mqtt_image_metadata_t *meta_in,
     aicam_capture_trigger_t trigger,
     wakeup_source_type_t wakeup_src)
+{
+    return enqueue_capture_impl(jpeg_buffer, jpeg_size, inference_jpeg,
+                                inference_jpeg_size, ai_result_json, ai_result,
+                                meta_in, trigger, wakeup_src, AICAM_FALSE);
+}
+
+aicam_result_t upload_coordinator_enqueue_capture_local(
+    const uint8_t *jpeg_buffer, uint32_t jpeg_size,
+    const mqtt_image_metadata_t *meta_in,
+    aicam_capture_trigger_t trigger)
+{
+    return enqueue_capture_impl(jpeg_buffer, jpeg_size, NULL, 0, NULL, NULL,
+                                meta_in, trigger, WAKEUP_SOURCE_OTHER,
+                                AICAM_TRUE);
+}
+
+static aicam_result_t enqueue_capture_impl(
+    const uint8_t *jpeg_buffer, uint32_t jpeg_size,
+    const uint8_t *inference_jpeg, uint32_t inference_jpeg_size,
+    const char *ai_result_json,
+    const mqtt_ai_result_t *ai_result,
+    const mqtt_image_metadata_t *meta_in,
+    aicam_capture_trigger_t trigger,
+    wakeup_source_type_t wakeup_src,
+    aicam_bool_t local_only)
 {
     if (!jpeg_buffer || jpeg_size == 0 || !meta_in) return AICAM_ERROR_INVALID_PARAM;
     if (!g_up.initialized) return AICAM_ERROR_NOT_INITIALIZED;
@@ -3332,6 +3369,15 @@ aicam_result_t upload_coordinator_enqueue_capture(
     capture_mode_t mode = g_up.cfg.mode;
     auto_storage_track();
     FS_Type_t fs = g_up.active_fs;
+
+    /* Caller-forced local-only (e.g. the face demo's archive copies): persist
+     * if a store exists, never enter the upload pipeline. */
+    if (local_only) {
+        if (g_up.cfg.storage == CAPTURE_STORE_NONE) {
+            return AICAM_OK; /* nowhere to persist, drop silently */
+        }
+        mode = CAPTURE_MODE_LOCAL_ONLY;
+    }
 
     /* INSTANT + storage=NONE → in-memory upload only, no persistence needed. */
     if (mode == CAPTURE_MODE_INSTANT && g_up.cfg.storage == CAPTURE_STORE_NONE) {
@@ -3455,7 +3501,7 @@ aicam_result_t upload_coordinator_enqueue_capture(
     aicam_result_t pr = persist_record(fs, id, jpeg_buffer, jpeg_size,
                                         inference_jpeg, inference_jpeg_size,
                                         ai_result_json, meta_in, trigger, wakeup_src,
-                                        (mode == CAPTURE_MODE_LOCAL_ONLY)
+                                        (local_only || mode == CAPTURE_MODE_LOCAL_ONLY)
                                             ? RECORD_STATE_LOCAL : RECORD_STATE_PENDING);
     if (pr != AICAM_OK) {
         UPLOAD_LOG("persist failed (%d), trying WRAP cleanup\r\n", (int)pr);

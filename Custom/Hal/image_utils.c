@@ -151,55 +151,28 @@ aicam_result_t image_crop_roi(
         return AICAM_ERROR_INVALID_PARAM;
     }
     
-    // Get draw device
-    device_t *draw_dev = device_find_pattern(DRAW_DEVICE_NAME, DEV_TYPE_VIDEO);
-    if (!draw_dev) {
-        LOG_DRV_ERROR("Draw device not found");
-        return AICAM_ERROR_NOT_FOUND;
-    }
-    
-    // Set color mode for draw device
-    draw_colormode_param_t colormode = {
-        .in_colormode = src_format,
-        .out_colormode = dst_format
-    };
-    int ret = device_ioctl(draw_dev, DRAW_CMD_SET_COLOR_MODE, 
-                          (uint8_t *)&colormode, sizeof(colormode));
-    if (ret != AICAM_OK) {
-        LOG_DRV_ERROR("Failed to set color mode");
-        return ret;
-    }
-    
-    // Calculate bytes per pixel for source address calculation
+    // Bytes per pixel of the source format
     int src_bpp = DMA2D_BYTES_PER_PIXEL(src_format);
     if (src_bpp == 0) {
         LOG_DRV_ERROR("Unsupported source pixel format");
         return AICAM_ERROR_INVALID_PARAM;
     }
-    
-    // Calculate source address offset for ROI
-    uint8_t *src_roi_start = (uint8_t *)src_image + (roi_y * src_width + roi_x) * src_bpp;
-    
-    // Use DMA2D copy to crop ROI (copy from ROI start to destination)
-    // Note: We use DRAW_CMD_COPY which copies entire source buffer, but we've calculated
-    // the correct source offset, so it will copy from ROI start
-    draw_copy_param_t copy_param = {
-        .p_src = src_roi_start,
-        .src_width = roi_width,
-        .src_height = roi_height,
-        .p_dst = dst_buffer,
-        .dst_width = roi_width,
-        .dst_height = roi_height,
-        .x_offset = 0,
-        .y_offset = 0
-    };
-    
-    ret = device_ioctl(draw_dev, DRAW_CMD_COPY, (uint8_t *)&copy_param, sizeof(copy_param));
-    if (ret != AICAM_OK) {
-        LOG_DRV_ERROR("DMA2D crop failed: %d", ret);
-        return ret;
+
+    /* Row-wise CPU copy. The previous DRAW_CMD_COPY implementation was
+     * broken for any ROI: draw_copy_hw hardwires the foreground
+     * InputOffset to 0, so the hardware read the ROI rows as if they were
+     * contiguous and produced sheared output (the source frame's row
+     * stride is src_width, not roi_width). A strided DMA2D copy would
+     * need a driver extension; at crop sizes a CPU row copy is exact and
+     * fast enough, and works with both cacheable and uncached memory. */
+    const uint8_t *src_row = src_image + ((size_t)roi_y * src_width + roi_x) * src_bpp;
+    size_t row_bytes = (size_t)roi_width * src_bpp;
+    for (uint32_t row = 0; row < roi_height; row++) {
+        memcpy(dst_buffer + (size_t)row * roi_width * src_bpp,
+               src_row + (size_t)row * src_width * src_bpp,
+               row_bytes);
     }
-    
+
     return AICAM_OK;
 }
 

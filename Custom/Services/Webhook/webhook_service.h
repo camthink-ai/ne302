@@ -46,6 +46,26 @@ aicam_result_t webhook_service_push_capture(
 aicam_result_t webhook_service_test_push(void);
 
 /**
+ * @brief Push a custom JSON metadata + JPEG image to the configured webhook
+ *        URL synchronously and capture the response body.
+ * @details Used by the face-detection demo report path (protocol section
+ *          5.2/5.3): the backend returns the recognition result in the HTTP
+ *          response. Blocks for the configured webhook timeout.
+ * @param metadata_json NUL-terminated JSON metadata part payload
+ * @param jpeg_data     JPEG image bytes
+ * @param jpeg_size     JPEG size in bytes
+ * @param response_buf  Optional buffer receiving the NUL-terminated response
+ *                      body (truncated to fit)
+ * @param response_buf_size Size of response_buf (0 = response ignored)
+ * @return AICAM_OK on HTTP 2xx (response_buf filled when provided)
+ */
+aicam_result_t webhook_service_push_json_image(const char *metadata_json,
+                                               const uint8_t *jpeg_data,
+                                               uint32_t jpeg_size,
+                                               char *response_buf,
+                                               uint32_t response_buf_size);
+
+/**
  * @brief Wait until all queued webhook pushes complete
  * @param timeout_ms Maximum wait time in milliseconds
  * @return AICAM_OK if all pushes completed, AICAM_ERROR_TIMEOUT on timeout

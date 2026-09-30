@@ -83,6 +83,73 @@ aicam_result_t json_config_save_ai_debug_config_to_nvs(const ai_debug_config_t *
     return result;
 }
 
+// save face detection demo configuration to NVS
+aicam_result_t json_config_save_face_detection_to_nvs(const face_detection_config_t *config)
+{
+    if (!config)
+    {
+        LOG_CORE_ERROR("Invalid face detection configuration");
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    aicam_result_t result = AICAM_OK;
+
+    result = json_config_nvs_write_bool(NVS_KEY_FD_ENABLED, config->enabled);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd enabled to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_DET_CONF, config->detection_conf_threshold);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd det conf to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_MIN_FACE_AREA, config->min_face_area);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd min_face_area to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_IOU_THRESHOLD, config->track_iou_threshold);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd iou threshold to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_MAX_MISSED, config->track_max_missed);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd max missed to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_CONFIRM_FRAMES, config->track_confirm_frames);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd confirm frames to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_EXTRAPOLATION, config->extrapolation_enabled);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd extrapolation to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_BLUR_ENABLED, config->blur_enabled);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd blur enabled to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_MOSAIC_BLOCK, config->mosaic_block);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd mosaic block to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_BLUR_EXPAND, config->blur_expand_ratio);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd blur expand to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_CROP_EXPAND, config->crop_expand_ratio);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd crop expand to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_CROP_MIN_SIZE, config->crop_min_size);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd crop min size to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_FIXED_SIZE, config->report_fixed_size);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report fixed size to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_JPEG_QUALITY, config->jpeg_quality);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd jpeg quality to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_REPORT_ENABLED, config->report_enabled);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report enabled to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_CHANNEL, config->report_channel);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report channel to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_CONF, config->report_confidence_threshold);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report conf to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_REPORT_PERIODIC, config->report_periodic_enabled);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report periodic to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_COOLDOWN, config->report_cooldown_ms);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd report cooldown to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_RESULT_TIMEOUT, config->result_timeout_ms);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd result timeout to NVS");
+    result = json_config_nvs_write_uint32(NVS_KEY_FD_RESULT_EXPIRE, config->result_expire_ms);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd result expire to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_SHOW_BOX, config->show_box);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd show box to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_SHOW_ID, config->show_id);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd show id to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_SHOW_CONF, config->show_confidence);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd show conf to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_SHOW_LANDMARKS, config->show_landmarks);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd show landmarks to NVS");
+    result = json_config_nvs_write_bool(NVS_KEY_FD_SHOW_RECOGNITION, config->show_recognition);
+    if (result != AICAM_OK) LOG_CORE_ERROR("Failed to save fd show recognition to NVS");
+
+    LOG_CORE_INFO("Face detection configuration saved to NVS successfully");
+    return result;
+}
+
 // save work mode configuration to NVS
 aicam_result_t json_config_save_work_mode_config_to_nvs(const work_mode_config_t *config)
 {
@@ -1574,6 +1641,11 @@ aicam_result_t json_config_save_to_nvs(const aicam_global_config_t *config)
     if (result != AICAM_OK)
         LOG_CORE_ERROR("Failed to save ai debug configuration to NVS");
 
+    // Save face detection configuration
+    result = json_config_save_face_detection_to_nvs(&config->face_detection);
+    if (result != AICAM_OK)
+        LOG_CORE_ERROR("Failed to save face detection configuration to NVS");
+
     // Save work mode configuration
     result = json_config_save_work_mode_config_to_nvs(&config->work_mode_config);
     if (result != AICAM_OK)
@@ -1754,6 +1826,170 @@ aicam_result_t json_config_load_from_nvs(aicam_global_config_t *config)
         config->ai_debug.inference_interval_ms = temp_uint32;
     else
         json_config_nvs_write_uint32(NVS_KEY_INFER_INTERVAL, config->ai_debug.inference_interval_ms);
+
+    // Load face detection demo configuration (write defaults back when missing)
+    result = json_config_nvs_read_bool(NVS_KEY_FD_ENABLED, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_ENABLED, config->face_detection.enabled);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_DET_CONF, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->face_detection.detection_conf_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_DET_CONF, config->face_detection.detection_conf_threshold);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_MIN_FACE_AREA, &temp_uint32);
+    if (result == AICAM_OK)
+        config->face_detection.min_face_area = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_MIN_FACE_AREA, config->face_detection.min_face_area);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_IOU_THRESHOLD, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->face_detection.track_iou_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_IOU_THRESHOLD, config->face_detection.track_iou_threshold);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_MAX_MISSED, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 50)
+        config->face_detection.track_max_missed = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_MAX_MISSED, config->face_detection.track_max_missed);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_CONFIRM_FRAMES, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 20)
+        config->face_detection.track_confirm_frames = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_CONFIRM_FRAMES, config->face_detection.track_confirm_frames);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_FACE_HOLD_MS, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 100 && temp_uint32 <= 2000)
+        config->face_detection.face_hold_ms = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_FACE_HOLD_MS, config->face_detection.face_hold_ms);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_EXTRAPOLATION, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.extrapolation_enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_EXTRAPOLATION, config->face_detection.extrapolation_enabled);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_BLUR_ENABLED, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.blur_enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_BLUR_ENABLED, config->face_detection.blur_enabled);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_MOSAIC_BLOCK, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 4 && temp_uint32 <= 64)
+        config->face_detection.mosaic_block = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_MOSAIC_BLOCK, config->face_detection.mosaic_block);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_BLUR_EXPAND, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= 100)
+        config->face_detection.blur_expand_ratio = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_BLUR_EXPAND, config->face_detection.blur_expand_ratio);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_CROP_EXPAND, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= 100)
+        config->face_detection.crop_expand_ratio = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_CROP_EXPAND, config->face_detection.crop_expand_ratio);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_CROP_MIN_SIZE, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 8 && temp_uint32 <= 512)
+        config->face_detection.crop_min_size = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_CROP_MIN_SIZE, config->face_detection.crop_min_size);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_REPORT_FIXED_SIZE, &temp_uint32);
+    if (result == AICAM_OK &&
+        (temp_uint32 == 0 || (temp_uint32 >= 32 && temp_uint32 <= FD_REPORT_FIXED_SIZE_MAX)))
+        config->face_detection.report_fixed_size = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_FIXED_SIZE, config->face_detection.report_fixed_size);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_JPEG_QUALITY, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 10 && temp_uint32 <= 95)
+        config->face_detection.jpeg_quality = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_JPEG_QUALITY, config->face_detection.jpeg_quality);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_REPORT_ENABLED, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.report_enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_REPORT_ENABLED, config->face_detection.report_enabled);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_REPORT_CHANNEL, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 <= FD_REPORT_CHANNEL_MQTT)
+        config->face_detection.report_channel = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_CHANNEL, config->face_detection.report_channel);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_REPORT_CONF, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1 && temp_uint32 <= 99)
+        config->face_detection.report_confidence_threshold = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_CONF, config->face_detection.report_confidence_threshold);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_REPORT_PERIODIC, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.report_periodic_enabled = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_REPORT_PERIODIC, config->face_detection.report_periodic_enabled);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_REPORT_COOLDOWN, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 100)
+        config->face_detection.report_cooldown_ms = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_REPORT_COOLDOWN, config->face_detection.report_cooldown_ms);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_RESULT_TIMEOUT, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 100)
+        config->face_detection.result_timeout_ms = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_RESULT_TIMEOUT, config->face_detection.result_timeout_ms);
+
+    result = json_config_nvs_read_uint32(NVS_KEY_FD_RESULT_EXPIRE, &temp_uint32);
+    if (result == AICAM_OK && temp_uint32 >= 1000)
+        config->face_detection.result_expire_ms = temp_uint32;
+    else
+        json_config_nvs_write_uint32(NVS_KEY_FD_RESULT_EXPIRE, config->face_detection.result_expire_ms);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_SHOW_BOX, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.show_box = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_SHOW_BOX, config->face_detection.show_box);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_SHOW_ID, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.show_id = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_SHOW_ID, config->face_detection.show_id);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_SHOW_CONF, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.show_confidence = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_SHOW_CONF, config->face_detection.show_confidence);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_SHOW_LANDMARKS, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.show_landmarks = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_SHOW_LANDMARKS, config->face_detection.show_landmarks);
+
+    result = json_config_nvs_read_bool(NVS_KEY_FD_SHOW_RECOGNITION, &temp_bool);
+    if (result == AICAM_OK)
+        config->face_detection.show_recognition = temp_bool;
+    else
+        json_config_nvs_write_bool(NVS_KEY_FD_SHOW_RECOGNITION, config->face_detection.show_recognition);
 
     // Load power mode configuration
     result = json_config_nvs_read_uint32(NVS_KEY_POWER_CURRENT_MODE, &temp_uint32);

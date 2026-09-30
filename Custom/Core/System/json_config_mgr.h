@@ -12,9 +12,10 @@
  #include <stdint.h>
  #include <stdbool.h>
  #include <stddef.h>
- #include "ms_mqtt_client.h"
- #include "netif_manager.h"
+#include "ms_mqtt_client.h"
+#include "netif_manager.h"
 #include "isp_services.h"
+#include "face_detection_config.h"
  
  #ifdef __cplusplus
  extern "C" {
@@ -704,6 +705,7 @@ typedef struct {
     auth_mgr_config_t auth_mgr;
     webhook_config_t webhook_config;
     capture_upload_config_t capture_upload; /* Capture/upload mode, storage, retry, schedule */
+    face_detection_config_t face_detection; /* Face detection demo (tracking/mosaic/report) */
     // RTMP config is now in work_mode_config.video_stream_mode
  } aicam_global_config_t;
  
@@ -1020,6 +1022,22 @@ aicam_result_t json_config_set_inference_interval_ms(uint32_t interval_ms);
  * @return Interval in milliseconds (0 = process every frame)
  */
 uint32_t json_config_get_inference_interval_ms(void);
+
+/* ==================== Face Detection Configuration API ==================== */
+
+/**
+ * @brief Get the face detection demo configuration
+ * @param config Output configuration structure
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_get_face_detection_config(face_detection_config_t *config);
+
+/**
+ * @brief Set the face detection demo configuration (persisted to NVS)
+ * @param config New configuration (fields must be pre-validated by caller)
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_face_detection_config(const face_detection_config_t *config);
 
 
 /**

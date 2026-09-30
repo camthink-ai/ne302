@@ -40,9 +40,36 @@ typedef struct {
     fd_yunet_pp_static_param_t core;   /* original static params, now per-instance */
     fd_pp_outBuffer_t *fd_pp_buffer;   /* internal face detection buffer */
     fd_pp_keyPoints_t *fd_kp_buffer;   /* internal keypoints buffer */
-    od_detect_t *od_detect_buffer;     /* per-instance OD-style detection buffer */
+    mpe_detect_t *mpe_detect_buffer;   /* per-instance MPE-style detection buffer */
     char **class_names;                /* per-instance class name array */
+    int16_t *anchors_32;               /* generated anchor tables (grid corners) */
+    int16_t *anchors_16;
+    int16_t *anchors_8;
 } pp_fd_yunet_ui_params_t;
+
+/*
+YuNet anchor convention (matches OpenCV FaceDetectorYN decode
+cx = (col + offset) * stride): one anchor per feature-map cell, laid out
+row-major, 2 x int16 pixel values each: {col*stride, row*stride}. The decode
+also reads stride from anchors[1].x, which only works with this layout.
+The tables are generated at init from in_size, so any square input that is a
+multiple of 32 is supported and nb_detections_* are derived, not hardcoded.
+*/
+static int16_t *fd_yunet_gen_anchor_table(uint32_t in_size, uint32_t stride)
+{
+    uint32_t dim = in_size / stride;
+    int16_t *tbl = (int16_t *)hal_mem_alloc_any(sizeof(int16_t) * 2U * dim * dim);
+    if (!tbl) {
+        return NULL;
+    }
+    for (uint32_t r = 0; r < dim; r++) {
+        for (uint32_t c = 0; c < dim; c++) {
+            tbl[(r * dim + c) * 2U + 0] = (int16_t)(c * stride);
+            tbl[(r * dim + c) * 2U + 1] = (int16_t)(r * stride);
+        }
+    }
+    return tbl;
+}
 
 /*
 Example JSON configuration (all fields optional):
@@ -53,6 +80,8 @@ Example JSON configuration (all fields optional):
   "max_detections": 100,
   "image_size": 320
 }
+nb_detections_8/16/32 are accepted for compatibility but ignored: they are
+derived from image_size together with the generated anchor tables.
 */
 static int32_t init(const char *json_str, void **pp_params, void *nn_inst)
 {
@@ -165,11 +194,49 @@ static int32_t init(const char *json_str, void **pp_params, void *nn_inst)
                 if (cJSON_IsNumber(img_size)) {
                     params->in_size = (uint32_t)img_size->valuedouble;
                 }
+
+                cJSON *nbd8 = cJSON_GetObjectItemCaseSensitive(pp, "nb_detections_8");
+                if (cJSON_IsNumber(nbd8)) {
+                    params->nb_detections_8 = (uint32_t)nbd8->valuedouble;
+                }
+
+                cJSON *nbd16 = cJSON_GetObjectItemCaseSensitive(pp, "nb_detections_16");
+                if (cJSON_IsNumber(nbd16)) {
+                    params->nb_detections_16 = (uint32_t)nbd16->valuedouble;
+                }
+
+                cJSON *nbd32 = cJSON_GetObjectItemCaseSensitive(pp, "nb_detections_32");
+                if (cJSON_IsNumber(nbd32)) {
+                    params->nb_detections_32 = (uint32_t)nbd32->valuedouble;
+                }
             }
 
             cJSON_Delete(root);
         }
     }
+
+    /* Generate the per-stride anchor tables from the final in_size and make
+     * nb_detections_* consistent with them (grid cells per level). */
+    if (params->in_size == 0 || (params->in_size % 32U) != 0) {
+        hal_mem_free(pp_ctx);
+        return AI_FD_PP_ERROR;
+    }
+    pp_ctx->anchors_32 = fd_yunet_gen_anchor_table(params->in_size, 32U);
+    pp_ctx->anchors_16 = fd_yunet_gen_anchor_table(params->in_size, 16U);
+    pp_ctx->anchors_8  = fd_yunet_gen_anchor_table(params->in_size, 8U);
+    if (!pp_ctx->anchors_32 || !pp_ctx->anchors_16 || !pp_ctx->anchors_8) {
+        if (pp_ctx->anchors_32) hal_mem_free(pp_ctx->anchors_32);
+        if (pp_ctx->anchors_16) hal_mem_free(pp_ctx->anchors_16);
+        if (pp_ctx->anchors_8) hal_mem_free(pp_ctx->anchors_8);
+        hal_mem_free(pp_ctx);
+        return AI_FD_PP_ERROR;
+    }
+    params->pAnchors_32 = pp_ctx->anchors_32;
+    params->pAnchors_16 = pp_ctx->anchors_16;
+    params->pAnchors_8  = pp_ctx->anchors_8;
+    params->nb_detections_32 = (params->in_size / 32U) * (params->in_size / 32U);
+    params->nb_detections_16 = (params->in_size / 16U) * (params->in_size / 16U);
+    params->nb_detections_8  = (params->in_size / 8U) * (params->in_size / 8U);
 
     /* Allocate per-instance buffers */
     size_t max_boxes = params->allocated_boxes;
@@ -178,12 +245,12 @@ static int32_t init(const char *json_str, void **pp_params, void *nn_inst)
     pp_ctx->fd_kp_buffer =
         (fd_pp_keyPoints_t *)hal_mem_alloc_large(sizeof(fd_pp_keyPoints_t) * max_boxes * 2U *
                                                  (size_t)params->nb_keypoints);
-    pp_ctx->od_detect_buffer =
-        (od_detect_t *)hal_mem_alloc_large(sizeof(od_detect_t) * params->max_boxes_limit);
+    pp_ctx->mpe_detect_buffer =
+        (mpe_detect_t *)hal_mem_alloc_large(sizeof(mpe_detect_t) * params->max_boxes_limit);
 
     assert(pp_ctx->fd_pp_buffer != NULL &&
            pp_ctx->fd_kp_buffer != NULL &&
-           pp_ctx->od_detect_buffer != NULL);
+           pp_ctx->mpe_detect_buffer != NULL);
 
     /* Initialize keypoints pointers for fd output */
     for (size_t i = 0; i < max_boxes; i++) {
@@ -214,9 +281,21 @@ static int32_t deinit(void *pp_params)
         hal_mem_free(pp->fd_kp_buffer);
         pp->fd_kp_buffer = NULL;
     }
-    if (pp->od_detect_buffer != NULL) {
-        hal_mem_free(pp->od_detect_buffer);
-        pp->od_detect_buffer = NULL;
+    if (pp->mpe_detect_buffer != NULL) {
+        hal_mem_free(pp->mpe_detect_buffer);
+        pp->mpe_detect_buffer = NULL;
+    }
+    if (pp->anchors_32 != NULL) {
+        hal_mem_free(pp->anchors_32);
+        pp->anchors_32 = NULL;
+    }
+    if (pp->anchors_16 != NULL) {
+        hal_mem_free(pp->anchors_16);
+        pp->anchors_16 = NULL;
+    }
+    if (pp->anchors_8 != NULL) {
+        hal_mem_free(pp->anchors_8);
+        pp->anchors_8 = NULL;
     }
     if (pp->class_names != NULL) {
         /* Yunet usually has single class "face" */
@@ -231,14 +310,31 @@ static int32_t deinit(void *pp_params)
     return AI_FD_PP_ERROR_NO;
 }
 
+/* YuNet emits 5 landmarks (OpenCV order): right/left eye, nose tip,
+ * right/left mouth corner. Connections: eyes, eyes-nose, mouth corners. */
+#define FD_YUNET_NUM_KEYPOINTS 5
+#define FD_YUNET_NUM_CONNECTIONS 4
+static const char *fd_kp_names[FD_YUNET_NUM_KEYPOINTS] = {
+    "right_eye", "left_eye", "nose", "mouth_right", "mouth_left"
+};
+static const uint8_t fd_kp_connections[FD_YUNET_NUM_CONNECTIONS * 2] = {
+    0, 1,  /* eyes */
+    0, 2,  /* right eye - nose */
+    1, 2,  /* left eye - nose */
+    3, 4   /* mouth corners */
+};
+
 static void fd_pp_out_t_to_pp_result_t(fd_pp_out_t *pFdOutput,
                                        pp_result_t *result,
                                        const pp_fd_yunet_ui_params_t *pp)
 {
-    result->type = PP_TYPE_OD;
+    /* MPE flavor (same contract as pp_fd_blazeface_ui): carries the 5
+     * keypoints through to drawers/telemetry; consumers that only need
+     * boxes read x/y/width/height/conf identically. */
+    result->type = PP_TYPE_MPE;
     result->is_valid = pFdOutput->nb_detect > 0;
-    result->od.nb_detect = (uint8_t)pFdOutput->nb_detect;
-    result->od.detects = pp->od_detect_buffer;
+    result->mpe.nb_detect = (uint8_t)pFdOutput->nb_detect;
+    result->mpe.detects = pp->mpe_detect_buffer;
 
     for (int i = 0; i < pFdOutput->nb_detect; i++) {
         float32_t x_center = pFdOutput->pOutBuff[i].x_center;
@@ -246,21 +342,40 @@ static void fd_pp_out_t_to_pp_result_t(fd_pp_out_t *pFdOutput,
         float32_t width    = pFdOutput->pOutBuff[i].width;
         float32_t height   = pFdOutput->pOutBuff[i].height;
 
-        result->od.detects[i].x =
+        result->mpe.detects[i].x =
             MAX(0.0f, MIN(1.0f, x_center - width / 2.0f));
-        result->od.detects[i].y =
+        result->mpe.detects[i].y =
             MAX(0.0f, MIN(1.0f, y_center - height / 2.0f));
-        result->od.detects[i].width =
+        result->mpe.detects[i].width =
             MAX(0.0f, MIN(1.0f, width));
-        result->od.detects[i].height =
+        result->mpe.detects[i].height =
             MAX(0.0f, MIN(1.0f, height));
-        result->od.detects[i].conf =
+        result->mpe.detects[i].conf =
             MAX(0.0f, MIN(1.0f, pFdOutput->pOutBuff[i].conf));
 
         if (pp->class_names && pp->class_names[0]) {
-            result->od.detects[i].class_name = pp->class_names[0];
+            result->mpe.detects[i].class_name = pp->class_names[0];
         } else {
-            result->od.detects[i].class_name = "face";
+            result->mpe.detects[i].class_name = "face";
+        }
+
+        /* fd_pp_keyPoints_t carries no confidence; parent box passed the
+         * threshold, so report 1.0. */
+        result->mpe.detects[i].nb_keypoints = FD_YUNET_NUM_KEYPOINTS;
+        result->mpe.detects[i].keypoint_names = (char **)fd_kp_names;
+        result->mpe.detects[i].num_connections = FD_YUNET_NUM_CONNECTIONS;
+        result->mpe.detects[i].keypoint_connections = (uint8_t *)fd_kp_connections;
+        memset(result->mpe.detects[i].keypoints + FD_YUNET_NUM_KEYPOINTS, 0,
+               sizeof(keypoint_t) * (33 - FD_YUNET_NUM_KEYPOINTS));
+
+        if (pFdOutput->pOutBuff[i].pKeyPoints != NULL) {
+            for (int j = 0; j < FD_YUNET_NUM_KEYPOINTS; j++) {
+                float32_t kx = pFdOutput->pOutBuff[i].pKeyPoints[j].x;
+                float32_t ky = pFdOutput->pOutBuff[i].pKeyPoints[j].y;
+                result->mpe.detects[i].keypoints[j].x = MAX(0.0f, MIN(1.0f, kx));
+                result->mpe.detects[i].keypoints[j].y = MAX(0.0f, MIN(1.0f, ky));
+                result->mpe.detects[i].keypoints[j].conf = 1.0f;
+            }
         }
     }
 }
@@ -269,7 +384,12 @@ static int32_t run(void *pInput[], uint32_t nb_input, void *pResult, void *pp_pa
 {
     (void)nn_inst;
 
-    assert(nb_input == 12);
+    /* Output count mismatch means the model variant does not match this
+     * postprocess (or the framework truncated the buffer list). Fail the
+     * inference instead of halting the device on an assert. */
+    if (nb_input != 12) {
+        return AI_FD_PP_ERROR;
+    }
     pp_fd_yunet_ui_params_t *pp = (pp_fd_yunet_ui_params_t *)pp_params;
     fd_yunet_pp_static_param_t *params = &pp->core;
     int32_t error = AI_FD_PP_ERROR_NO;

@@ -23,6 +23,7 @@
 #include "service_init.h"
 #include "common_utils.h"
 #include "device_service.h"
+#include "face_detection.h"
 /* ==================== MQTT Service Context ==================== */
 
 #define MQTT_SERVICE_VERSION "1.0.0"
@@ -4134,7 +4135,15 @@ static void mqtt_control_cmd_handle_message(ms_mqtt_event_data_t *event_data)
     if (!is_control_topic) {
         return; // Not a control command topic
     }
-    
+
+    // Face recognition results share the control channel as type-tagged
+    // JSON (face demo protocol section 5.3) — consume before the generic
+    // control-command parser rejects them.
+    if (face_detection_try_handle_mqtt((const char *)event_data->data,
+                                       event_data->data_len) == AICAM_TRUE) {
+        return;
+    }
+
     LOG_SVC_INFO("Processing MQTT control command from topic: %s", topic);
     
     // Parse control command

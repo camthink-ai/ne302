@@ -1,6 +1,6 @@
 {
   "base_path": "/api/v1",
-  "total_endpoints": 176,
+  "total_endpoints": 183,
   "modules": {
     "ai_management": {
       "source": "Custom/Services/Web/api/api_ai_management_module.c",
@@ -257,6 +257,54 @@
           "path": "/api/v1/device/preference/stream_tab",
           "handler": "device_pref_stream_tab_handler",
           "require_auth": true
+        }
+      ]
+    },
+    "face_detection": {
+      "source": "Custom/Services/Web/api/api_face_detection_module.c",
+      "source_sha256": "0d6b74d18f830492",
+      "routes": [
+        {
+          "method": "GET",
+          "path": "/api/v1/face/config",
+          "handler": "face_config_get_handler",
+          "require_auth": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/face/config",
+          "handler": "face_config_set_handler",
+          "require_auth": false
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/face/status",
+          "handler": "face_status_handler",
+          "require_auth": false
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/face/results",
+          "handler": "face_results_handler",
+          "require_auth": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/face/trigger",
+          "handler": "face_trigger_handler",
+          "require_auth": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/face/verify",
+          "handler": "face_verify_handler",
+          "require_auth": false
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/face/reset",
+          "handler": "face_reset_handler",
+          "require_auth": false
         }
       ]
     },

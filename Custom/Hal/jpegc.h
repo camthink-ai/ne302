@@ -45,7 +45,19 @@ typedef enum {
     JPEGC_CMD_RETURN_DEC_BUFFER,
     JPEGC_CMD_UNSHARE_ENC_BUFFER,       // unshare the enc buffer to the caller, need reset the enc params after use
     JPEGC_CMD_FREE_ENC_BUFFER,          // free the unshared enc buffer
+    JPEGC_CMD_GET_ENC_DEBUG,            // fill jpegc_enc_debug_t (diagnostics)
 } JPEGC_CMD_E;
+
+/* Encoder state snapshot for diagnosing stalled encodes */
+typedef struct {
+    uint8_t mode;                  /* jpegc_mode_e */
+    uint8_t input_paused;
+    uint8_t output_paused;
+    uint8_t hw_end;                /* Jpeg_HWEncodingEnd */
+    uint32_t sem_count;            /* completion semaphore token count */
+    uint32_t out_capacity;
+    uint32_t out_size;
+} jpegc_enc_debug_t;
 
 typedef struct
 {

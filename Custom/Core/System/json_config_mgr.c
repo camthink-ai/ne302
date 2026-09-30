@@ -42,6 +42,36 @@
          .overlay_results = AICAM_TRUE,
          .inference_interval_ms = 0
      },
+
+     .face_detection = {
+         .enabled = AICAM_FALSE,
+         .detection_conf_threshold = 50,
+         .min_face_area = 1500,
+         .track_iou_threshold = 30,
+         .track_max_missed = 15,
+         .track_confirm_frames = 3,
+         .face_hold_ms = 400,
+         .extrapolation_enabled = AICAM_FALSE,
+         .blur_enabled = AICAM_FALSE,
+         .mosaic_block = 16,
+         .blur_expand_ratio = 10,
+         .crop_expand_ratio = 20,
+         .crop_min_size = 32,
+         .report_fixed_size = 0,
+         .jpeg_quality = 80,
+         .report_enabled = AICAM_FALSE,
+         .report_channel = FD_REPORT_CHANNEL_WEBHOOK,
+         .report_confidence_threshold = 60,
+         .report_periodic_enabled = AICAM_FALSE,
+         .report_cooldown_ms = 10000,
+         .result_timeout_ms = 5000,
+         .result_expire_ms = 30000,
+         .show_box = AICAM_TRUE,
+         .show_id = AICAM_TRUE,
+         .show_confidence = AICAM_TRUE,
+         .show_landmarks = AICAM_TRUE,
+         .show_recognition = AICAM_TRUE
+     },
      
      .power_mode_config = {
          .current_mode = POWER_MODE_LOW_POWER,
@@ -894,6 +924,43 @@
  uint32_t json_config_get_inference_interval_ms(void)
  {
      return g_json_config_ctx.current_config.ai_debug.inference_interval_ms;
+ }
+
+ /*=================== Face Detection Configuration API Implementation ===================*/
+
+ aicam_result_t json_config_get_face_detection_config(face_detection_config_t *config)
+ {
+     if (!config)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
+     if (!g_json_config_ctx.initialized)
+     {
+         return AICAM_ERROR_NOT_INITIALIZED;
+     }
+
+     *config = g_json_config_ctx.current_config.face_detection;
+     return AICAM_OK;
+ }
+
+ aicam_result_t json_config_set_face_detection_config(const face_detection_config_t *config)
+ {
+     if (!config)
+     {
+         return AICAM_ERROR_INVALID_PARAM;
+     }
+
+     if (!g_json_config_ctx.initialized)
+     {
+         return AICAM_ERROR_NOT_INITIALIZED;
+     }
+
+     memcpy(&g_json_config_ctx.current_config.face_detection, config,
+            sizeof(face_detection_config_t));
+
+     json_config_save_face_detection_to_nvs(&g_json_config_ctx.current_config.face_detection);
+     return AICAM_OK;
  }
 
  /*=================== Work Mode Configuration API Implementation ====================*/

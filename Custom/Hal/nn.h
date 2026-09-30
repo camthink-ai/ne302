@@ -17,7 +17,10 @@
 #include "cJSON.h"
 /* ==================== AI model related definition ==================== */
 #define NN_MAX_INPUT_BUFFER 3
-#define NN_MAX_OUTPUT_BUFFER 5
+/* Must cover the model with the most outputs in Model/weights: YuNet exposes
+ * 12 (cls/obj/bbox/kps x strides 8/16/32). A cap below the real count makes
+ * the enumeration in nn.c truncate the list handed to the postprocess. */
+#define NN_MAX_OUTPUT_BUFFER 16
 
 #define NN_MAX_INSTANCES 2
 

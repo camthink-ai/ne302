@@ -22,9 +22,15 @@ GEN_RELOC = $(SCRIPT_DIR)/generate-reloc-model.sh
 PACKAGER = $(SCRIPT_DIR)/model_packager.py
 CHECK_STEDGEAI = python $(SCRIPT_DIR)/check_stedgeai_toolchain.py
 
-# Model files (example: YOLOv8)
-MODEL_NAME ?= yolov8n_256_quant_pc_uf_od_coco-person-st
-MODEL_FILE = $(WEIGHTS_DIR)/$(MODEL_NAME).tflite
+# Model files (default: YuNet face detection for the face-detection demo)
+MODEL_NAME ?= yunetn_320_qdq_int8_rgb_fd_ui
+# Weights extension: .tflite when present, otherwise .onnx
+ifeq ($(wildcard $(WEIGHTS_DIR)/$(MODEL_NAME).tflite),)
+MODEL_EXT := onnx
+else
+MODEL_EXT := tflite
+endif
+MODEL_FILE = $(WEIGHTS_DIR)/$(MODEL_NAME).$(MODEL_EXT)
 MODEL_JSON = $(WEIGHTS_DIR)/$(MODEL_NAME).json
 
 # Intermediate files
@@ -91,7 +97,7 @@ info:
 	@echo "  TARGET      = $(TARGET)"
 	@echo "  BUILD_DIR   = $(BUILD_DIR)"
 	@echo "  MODEL       = $(MODEL_NAME)"
-	@echo "  MODEL_FILE  = $(MODEL_FILE)"
+	@echo "  MODEL_FILE  = $(MODEL_FILE) ($(MODEL_EXT))"
 	@echo "  CONFIG      = $(MODEL_JSON)"
 
 ######################################
