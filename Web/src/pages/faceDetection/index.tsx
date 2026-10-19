@@ -172,8 +172,17 @@ export default function FaceDetection() {
   const triggerReports = async () => {
     try {
       const res = await faceDetection.triggerReportReq(0);
-      const armed = (res.data as { armed: number })?.armed ?? 0;
-      toast.success(`${i18n._('sys.face_detection.trigger_done')}: ${armed}`);
+      const d = res.data as { armed: number; report_enabled?: boolean };
+      if (d.report_enabled === false) {
+        toast.warning(i18n._('sys.face_detection.report_disabled'));
+        return;
+      }
+      const armed = d.armed ?? 0;
+      toast.success(
+        armed > 0
+          ? `${i18n._('sys.face_detection.trigger_done')}: ${armed}`
+          : i18n._('sys.face_detection.no_tracks')
+      );
     } catch (error) {
       console.error(error);
       toast.error(i18n._('sys.face_detection.save_failed'));
@@ -273,12 +282,17 @@ export default function FaceDetection() {
   const trackCard = (t: FaceTrackInfo) => {
     const st = t.recognition?.status ?? 'none';
     const pct = (v?: number) => (v === undefined || v === null ? '--' : `${Math.round(v * 100)}%`);
-    let label = i18n._('sys.face_detection.recognizing');
+    // Reporting disabled: nothing will ever arrive — say so instead of a
+    // perpetual "recognizing"
+    const reportingOff =      config?.report_enabled === false && (st === 'none' || st === 'pending');
+    let label = reportingOff
+      ? i18n._('sys.face_detection.report_off')
+      : i18n._('sys.face_detection.recognizing');
     if (st === 'ok') label = t.recognition.name || i18n._('sys.face_detection.recognized');
     else if (st === 'unknown') label = i18n._('sys.face_detection.unknown');
     else if (st === 'timeout') label = i18n._('sys.face_detection.timeout');
     else if (st === 'error') label = i18n._('sys.face_detection.error');
-    else if (st === 'pending') label = i18n._('sys.face_detection.recognizing');
+    else if (st === 'pending' && !reportingOff) label = i18n._('sys.face_detection.recognizing');
     return (
       <div
         key={t.track_id}
@@ -290,7 +304,11 @@ export default function FaceDetection() {
         </div>
         <div className="flex items-center gap-2 min-w-0">
           <span
-            className={`px-2 py-0.5 rounded text-xs text-white truncate max-w-[160px] ${STATUS_CLASS[st]}`}
+            className={`px-2 py-0.5 rounded text-xs text-white truncate max-w-[160px] ${
+              reportingOff && (st === 'none' || st === 'pending')
+                ? 'bg-gray-400/80 text-white'
+                : STATUS_CLASS[st]
+            }`}
             title={t.recognition?.name}
           >
             {label}

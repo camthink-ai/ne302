@@ -1272,7 +1272,13 @@ void face_detection_draw_overlay(uint8_t *fb, uint32_t width, uint32_t height)
                 snprintf(name_line, sizeof(name_line), "%s", result_tag); break;
             default: /* NONE / PENDING */
                 box_color = (track->request_in_flight) ? COLOR_CYAN : COLOR_WHITE;
-                snprintf(name_line, sizeof(name_line), "%s", result_tag);
+                if (!cfg.report_enabled) {
+                    /* Reporting off: nothing will ever arrive — showing a
+                     * perpetual "recognizing" placeholder would be wrong */
+                    name_line[0] = (char)0;
+                } else {
+                    snprintf(name_line, sizeof(name_line), "%s", result_tag);
+                }
                 break;
         }
 
@@ -1724,7 +1730,7 @@ void face_detection_get_default_config(face_detection_config_t *config)
         return;
     }
     memset(config, 0, sizeof(face_detection_config_t));
-    config->enabled = AICAM_FALSE;
+    config->enabled = AICAM_TRUE; /* on by default: face page is the demo entry */
     config->detection_conf_threshold = 50;    /* matches the model default */
     config->min_face_area = 1500;             /* ~37px square at 720p */
     config->track_iou_threshold = 30;

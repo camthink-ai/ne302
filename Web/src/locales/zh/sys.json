@@ -840,7 +840,7 @@
       "results_unknown": "识别未知",
       "results_timeout": "识别超时",
       "tracks_title": "人脸跟踪与识别",
-      "no_tracks": "画面中暂无人脸",
+      "no_tracks": "当前无可上报的人脸",
       "recognizing": "识别中...",
       "recognized": "已识别",
       "unknown": "未知",
@@ -899,7 +899,9 @@
       "face_hold_ms": "防闪烁保持(ms)",
       "verify_title": "识别验证",
       "verify_hint": "上传一张人脸照片，经识别通道返回结果（与实时识别同路径）",
-      "verify_running": "识别中..."
+      "verify_running": "识别中...",
+      "report_disabled": "上报开关未开启，请先在配置中开启上报",
+      "report_off": "上报未开启"
     }
   },
   "common": {

@@ -80,6 +80,7 @@ const faceDetection = {
   getStatusReq: () => request.get('/api/v1/face/status'),
   getResultsReq: () => request.get('/api/v1/face/results'),
   triggerReportReq: (trackId = 0) => request.post('/api/v1/face/trigger', { track_id: trackId }),
+  // trigger response now carries { armed, report_enabled }
   resetReq: () => request.post('/api/v1/face/reset'),
   verifyReq: (file: File) => {
     const form = new FormData();

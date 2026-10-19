@@ -70,3 +70,4 @@ __pycache__/
 # Face demo local test data - BIOMETRIC sensitive, never commit
 face_captures/
 face_gallery/
+face_test_pic/

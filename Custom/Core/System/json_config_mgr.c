@@ -44,7 +44,7 @@
      },
 
      .face_detection = {
-         .enabled = AICAM_FALSE,
+         .enabled = AICAM_TRUE,
          .detection_conf_threshold = 50,
          .min_face_area = 1500,
          .track_iou_threshold = 30,

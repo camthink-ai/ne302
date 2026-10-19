@@ -842,7 +842,7 @@
       "results_unknown": "Unknown",
       "results_timeout": "Timeout",
       "tracks_title": "Face tracking & recognition",
-      "no_tracks": "No faces in frame",
+      "no_tracks": "No faces to report",
       "recognizing": "Recognizing...",
       "recognized": "Recognized",
       "unknown": "Unknown",
@@ -901,7 +901,9 @@
       "face_hold_ms": "Anti-blink hold (ms)",
       "verify_title": "Recognition check",
       "verify_hint": "Upload a face photo; it runs through the same recognition channel as live faces",
-      "verify_running": "Recognizing..."
+      "verify_running": "Recognizing...",
+      "report_disabled": "Reporting is disabled — enable it in the config first",
+      "report_off": "report off"
     }
   },
   "common": {

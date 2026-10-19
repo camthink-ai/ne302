@@ -452,8 +452,11 @@ static aicam_result_t face_trigger_handler(http_handler_context_t *ctx)
 
     uint32_t armed = face_detection_trigger_report(track_id);
 
+    face_detection_config_t cfg;
+    face_detection_get_config(&cfg);
     cJSON *data = cJSON_CreateObject();
     cJSON_AddNumberToObject(data, "armed", armed);
+    cJSON_AddBoolToObject(data, "report_enabled", cfg.report_enabled);
     char *json_string = cJSON_Print(data);
     cJSON_Delete(data);
 

@@ -76,7 +76,7 @@ bash Script/build_all_models.sh yunetn_320_qdq_int8_rgb_fd_ui
 
 | 分组 | 配置项 | 类型/范围 | 默认 | 说明 |
 |------|--------|-----------|------|------|
-| 总开关 | `enabled` | bool | false | demo 总开关 |
+| 总开关 | `enabled` | bool | true | demo 总开关（烧录后默认开启） |
 | 检测 | `confidence_threshold` | 0–1 | 0.5 | 显示/跟踪用置信度阈值 |
 | 检测 | `detection_conf_threshold` | 0–1 | 0.5 | 检测置信度阈值，低于此值的人脸直接丢弃（过滤背景误检） |
 | 检测 | `min_face_area` | 千分比² | 1500 | 小于此面积的人脸忽略（720p 下约 37px 见方，远距离小脸过滤） |
