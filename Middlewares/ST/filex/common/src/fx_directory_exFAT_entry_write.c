@@ -29,7 +29,7 @@
 #ifdef FX_ENABLE_EXFAT
 #include "fx_directory.h"
 
-/* NE301 patch: transparent UTF-8 name support on exFAT.
+/* NE302 patch: transparent UTF-8 name support on exFAT.
  *
  * FileX 6.1 offers no public API to create or look up exFAT entries by their
  * real (UTF-16) name, so names passed through the CHAR* APIs are zero-
@@ -170,7 +170,7 @@ UINT  _fx_directory_exFAT_entry_write(FX_MEDIA *media_ptr, FX_DIR_ENTRY *entry_p
 UINT status;
 
 
-    /* NE301 patch: a non-ASCII CHAR* name that is valid UTF-8 is written as
+    /* NE302 patch: a non-ASCII CHAR* name that is valid UTF-8 is written as
      * its real UTF-16 name so a PC card reader shows the proper characters.
      * Every update level is redirected for a consistent name encoding: the
      * unicode writer only touches the name area at UPDATE_FULL/UPDATE_NAME,
@@ -188,7 +188,7 @@ UINT status;
                 UINT  u16_len = _fx_utility_exFAT_utf8_to_utf16(entry_ptr -> fx_dir_entry_name, u16, FX_MAX_LONG_NAME_LEN);
                 if (u16_len)
                 {
-                    /* NE301 patch: on read-back the name is re-encoded to
+                    /* NE302 patch: on read-back the name is re-encoded to
                      * the exact same UTF-8 bytes, so a name of
                      * FX_MAX_LONG_NAME_LEN-1 bytes or more would be truncated
                      * in the CHAR* buffer - an entry the device itself can

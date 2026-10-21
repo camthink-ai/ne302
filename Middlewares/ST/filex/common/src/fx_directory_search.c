@@ -32,7 +32,7 @@
 #ifdef FX_ENABLE_EXFAT
 #include "fx_directory_exFAT.h"
 
-/* NE301 patch: defined in fx_directory_exFAT_entry_write.c */
+/* NE302 patch: defined in fx_directory_exFAT_entry_write.c */
 UINT  _fx_utility_exFAT_utf8_to_utf16(const CHAR *utf8, UCHAR *u16, UINT u16_max);
 #endif /* FX_ENABLE_EXFAT */
 
@@ -122,7 +122,7 @@ FX_DIR_ENTRY  search_dir;
 FX_DIR_ENTRY *search_dir_ptr;
 CHAR         *name, alpha, name_alpha;
 #ifdef FX_ENABLE_EXFAT
-/* NE301 patch: real UTF-16 name of the exFAT entry just read (see the
+/* NE302 patch: real UTF-16 name of the exFAT entry just read (see the
  * unicode match fallback in the entry loop below). */
 UCHAR         search_unicode_name[FX_MAX_LONG_NAME_LEN * 2];
 UINT          search_unicode_len;
@@ -651,7 +651,7 @@ USHORT        hash = 0;
             if (media_ptr -> fx_media_FAT_type == FX_exFAT)
             {
 
-                /* NE301 patch: also capture the entry's real UTF-16 name so
+                /* NE302 patch: also capture the entry's real UTF-16 name so
                  * the fallback compare below can match non-ASCII names. The
                  * hash pre-filter is bypassed (hash argument 0) because the
                  * UTF-16 fallback must see every entry. */
@@ -813,7 +813,7 @@ USHORT        hash = 0;
             }
 
 #ifdef FX_ENABLE_EXFAT
-            /* NE301 patch: match exFAT entries by their real UTF-16 name.
+            /* NE302 patch: match exFAT entries by their real UTF-16 name.
              * The byte/short-name compares above cannot match names whose
              * characters are >= 0x80 (e.g. Chinese names), so as a last
              * resort compare the input name, decoded as UTF-8, against the

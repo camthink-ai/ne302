@@ -109,7 +109,7 @@ UCHAR  *read_ptr;
 UCHAR   secondary_count;
 UCHAR   name_length = 0;
 UCHAR   name_pos = 0;
-UCHAR   u16_pos = 0;    /* NE301 patch: UTF-16 unit cursor for unicode_name - name_pos now counts UTF-8 BYTES (see the CHAR* copy loop) */
+UCHAR   u16_pos = 0;    /* NE302 patch: UTF-16 unit cursor for unicode_name - name_pos now counts UTF-8 BYTES (see the CHAR* copy loop) */
 UCHAR   copy_size = 0;
 USHORT  checksum = 0;
 USHORT  file_checksum;
@@ -641,7 +641,7 @@ ULONG   clusters_count = 0;
                 if (unicode_name)
                 {
 
-                    /* NE301 patch: name_pos below counts UTF-8 bytes, not
+                    /* NE302 patch: name_pos below counts UTF-8 bytes, not
                      * UTF-16 units, so the unicode copy tracks its own unit
                      * cursor (u16_pos) - offsets here and the length returned
                      * at the end must stay in units. Names longer than the
@@ -673,7 +673,7 @@ ULONG   clusters_count = 0;
                     {
                         UINT cp = _fx_utility_16_unsigned_read(read_ptr);
 
-                        /* NE301 patch: encode the UTF-16 code point as UTF-8
+                        /* NE302 patch: encode the UTF-16 code point as UTF-8
                          * so the CHAR* name carries the actual characters
                          * (exFAT names are UTF-16 by specification; a PC card
                          * reader shows them natively). The encoding is
@@ -739,7 +739,7 @@ ULONG   clusters_count = 0;
                 /* Modify the name_length to indicate the remaining length.  */
                 name_length = (UCHAR)(name_length - copy_size);
 
-                /* NE301 patch: advance the unicode unit cursor with the same
+                /* NE302 patch: advance the unicode unit cursor with the same
                  * bound check as the copy above.  */
                 if (u16_pos + copy_size < FX_MAX_LONG_NAME_LEN)
                 {
@@ -763,7 +763,7 @@ ULONG   clusters_count = 0;
     if (unicode_name)
     {
 
-        /* Terminate the unicode name string.  NE301 patch: unit cursor, not
+        /* Terminate the unicode name string.  NE302 patch: unit cursor, not
          * the UTF-8 byte count (name_pos).  */
         unicode_name[u16_pos * 2] = 0;
         unicode_name[u16_pos * 2 + 1] = 0;

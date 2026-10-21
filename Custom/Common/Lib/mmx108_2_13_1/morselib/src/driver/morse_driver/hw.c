@@ -187,7 +187,7 @@ void morse_hw_pager_update_consec_failure_cnt(struct driver_data *driverd, int r
         if (driverd->pageset_consec_failure_cnt > MAX_CONSEC_FAILURES)
         {
             driverd->pageset_consec_failure_cnt = 0;
-            /* NE301 port patch: with the transport hard-dead (6 consecutive
+            /* NE302 port patch: with the transport hard-dead (6 consecutive
              * bus failures) the polite health-check ladder can never win —
              * its command retries cost seconds while the host watchdog
              * window is ~3 s, so the whole MCU reset instead (field logs:

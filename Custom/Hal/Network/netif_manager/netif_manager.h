@@ -49,20 +49,22 @@
 #define NETIF_4G_CAT1_PPP_SEND_TIMEOUT      (50)
 #define NETIF_4G_CAT1_TRY_CNT               (3)
 
-#define NETIF_USB_ECM_IS_ENABLE             (0)
-#define NETIF_USB_ECM_ACTIVATE_TIMEOUT_MS   (30000)
-#define NETIF_USB_ECM_DHCP_TIMEOUT_MS       (30000)
-#define NETIF_USB_ECM_UP_TIMEOUT_MS         (3000)
-#define NETIF_USB_ECM_STABLE_TIME_MS        (3000)
-#define NETIF_USB_ECM_STABLE_TIMEOUT_MS     (30000)
-#define NETIF_USB_ECM_DEFAULT_IP_MODE       (NETIF_IP_MODE_DHCP)
-#define NETIF_USB_ECM_DEFAULT_IP            {192, 168, 10, 100}
-#define NETIF_USB_ECM_DEFAULT_MASK          {255, 255, 255, 0}
-#define NETIF_USB_ECM_DEFAULT_GW            {192, 168, 10, 1}
+/* USB host RNDIS netif ("ue"): 4G modem uplink over CherryUSB host RNDIS.
+ * The modem must be in RNDIS usbnet mode (Quectel AT+QCFG).
+ * NE302 has no USB-attached CAT1 modem — kept disabled. */
+#define NETIF_USB_RNDIS_IS_ENABLE            (0)
+#define NETIF_USB_RNDIS_ACTIVATE_TIMEOUT_MS  (30000)
+#define NETIF_USB_RNDIS_DHCP_TIMEOUT_MS      (30000)
+#define NETIF_USB_RNDIS_UP_TIMEOUT_MS        (3000)
+#define NETIF_USB_RNDIS_STABLE_TIME_MS       (3000)
+#define NETIF_USB_RNDIS_DEFAULT_IP_MODE      (NETIF_IP_MODE_DHCP)
+#define NETIF_USB_RNDIS_DEFAULT_IP           {192, 168, 10, 100}
+#define NETIF_USB_RNDIS_DEFAULT_MASK         {255, 255, 255, 0}
+#define NETIF_USB_RNDIS_DEFAULT_GW           {192, 168, 10, 1}
 #if defined(STM32N6_DK_BOARD)
-    #define NETIF_USB_ECM_IS_CAT1_MODULE        (0)
+    #define NETIF_USB_RNDIS_IS_CAT1_MODULE       (0)
 #else
-    #define NETIF_USB_ECM_IS_CAT1_MODULE        (1)
+    #define NETIF_USB_RNDIS_IS_CAT1_MODULE       (0)
 #endif
 
 #ifndef NETIF_WIFI_HALOW_IS_ENABLE
@@ -93,7 +95,11 @@
 #define NETIF_NAME_WIFI_HALOW               "hw"
 #define NETIF_NAME_ETH_WAN                  "wn"
 #define NETIF_NAME_4G_CAT1                  "4g"
-#define NETIF_NAME_USB_ECM                  "ue"
+#define NETIF_NAME_USB_RNDIS                "ue"
+#ifndef NETIF_USB_DEV_IS_ENABLE
+#define NETIF_USB_DEV_IS_ENABLE              (1)
+#endif
+#define NETIF_NAME_USB_DEV                  "ud"
 #if NETIF_ETH_WAN_IS_ENABLE
 #define NETIF_DEFAULT_NETIF_NAME            NETIF_NAME_ETH_WAN
 #else

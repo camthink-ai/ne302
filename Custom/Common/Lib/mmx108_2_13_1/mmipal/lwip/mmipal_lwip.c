@@ -56,7 +56,7 @@ static inline struct mmipal_data *mmipal_get_data(void)
     return &mmipal_data;
 }
 
-/* NE301: expose the lwip netif (used by mm_halow_netif for direct status queries). */
+/* NE302: expose the lwip netif (used by mm_halow_netif for direct status queries). */
 struct netif *mmipal_get_lwip_netif(void)
 {
     return &mmipal_data.lwip_mmnetif;
@@ -167,7 +167,7 @@ enum mmipal_status mmipal_set_ip_config(const struct mmipal_ip_config *config)
     if (strncmp(data->hostname, config->hostname, MM_HOSTNAME_MAX_LEN) != 0)
     {
         mmosal_safer_strcpy(data->hostname, config->hostname, MM_HOSTNAME_MAX_LEN);
-        /* NE301: LWIP_NETIF_HOSTNAME is not enabled in our lwipopts; the app
+        /* NE302: LWIP_NETIF_HOSTNAME is not enabled in our lwipopts; the app
          * passes an empty hostname (both sides equal) so this never runs. */
 #if LWIP_NETIF_HOSTNAME
         netif_set_hostname(netif, data->hostname);

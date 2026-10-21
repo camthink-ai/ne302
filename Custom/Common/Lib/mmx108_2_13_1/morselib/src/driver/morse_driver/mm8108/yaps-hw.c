@@ -605,7 +605,7 @@ int morse_yaps_hw_update_status(struct morse_yaps *yaps)
     {
         if (ret != -ENODEV)
         {
-            /* NE301 port patch: rate-limit to one line per second — this
+            /* NE302 port patch: rate-limit to one line per second — this
              * fires on every driver-task pass while the transport is down
              * and used to flood the console at ~120 lines/s. */
             static uint32_t last_err_print_ms = 0;

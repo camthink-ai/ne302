@@ -42,7 +42,7 @@ static mmtrace_channel yaps_channel_handle;
 
 #define CHIP_FULL_RECOVERY_TIMEOUT_MS 30
 
-/* NE301 port patch (class C wake recovery, from the 2.10.4 tree): sustained
+/* NE302 port patch (class C wake recovery, from the 2.10.4 tree): sustained
  * -ENOMEM on TX while the status registers read back all-zero is the
  * signature of a chip that went back to sleep under a bus the host still
  * considers awake. Escalate to a WAKE kick after this long. */
@@ -278,7 +278,7 @@ static int morse_yaps_tx(struct morse_yaps *yaps, struct morse_skbq *mq)
             MMLOG_ERR("Insufficient memory for skb TX (TC_Q: %d)\n", tc_queue);
             mmpkt_list_append_list(&skbq_failed, &skbq_to_send);
 
-            /* NE301 port patch (class C wake recovery, from the 2.10.4 tree):
+            /* NE302 port patch (class C wake recovery, from the 2.10.4 tree):
              * upstream asserts here, which on this port resets the whole MCU.
              * -ENOMEM is excluded from the consec-failure counter, so without
              * this nothing else escalates: update_status "succeeds" against a
@@ -484,7 +484,7 @@ void morse_yaps_work(struct driver_data *driverd)
         if (update_stat_rc)
         {
             MMLOG_WRN("YAPS HW update status failed with code %d\n", update_stat_rc);
-            /* NE301 port patch: the TX events above are polled with
+            /* NE302 port patch: the TX events above are polled with
              * is_pending() and only their handlers clear them, and this goto
              * skips those handlers — with a dead transport the driver task's
              * inner event loop spanned at full speed (one status-read

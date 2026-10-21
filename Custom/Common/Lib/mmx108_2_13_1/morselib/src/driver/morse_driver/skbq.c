@@ -525,7 +525,7 @@ static bool skbq_mmpkt_list_contains(struct mmpkt_list *list, struct mmpkt *mmpk
 static int __skbq_cmd_finish(struct morse_skbq *mq, struct mmpkt *mmpkt)
 {
     /*
-     * NE301 port patch: a command packet whose YAPS write failed was already
+     * NE302 port patch: a command packet whose YAPS write failed was already
      * released by morse_yaps_tx() (mmpkt_list_clear of skbq_failed). Only
      * remove+release when the packet is really still queued, otherwise the
      * stale pointer corrupts the pool (double release -> heap/list poisoning

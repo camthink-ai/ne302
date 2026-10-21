@@ -152,7 +152,7 @@ int32_t st_yolox_pp_level_decode_and_store(float32_t *pInbuff,
     float32_t grid_height_inv = 1.0f / grid_height;
     int32_t det_count = pInput_static_param->nb_detect;
     od_pp_outBuffer_t *pOutBuff = (od_pp_outBuffer_t *)pOutput->pOutBuff;
-    int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne301: pOutBuff is sized to max_detections */
+    int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne302: pOutBuff is sized to max_detections */
 
     if ( 1 == pInput_static_param->nb_classes) {
       float32_t computedThreshold = -logf( 1 / pInput_static_param->conf_threshold - 1);
@@ -253,7 +253,7 @@ int32_t st_yolox_pp_level_decode_and_store_is8(int8_t *pInbuff,
 
   int32_t det_count = pInput_static_param->nb_detect;
   od_pp_outBuffer_t *pOutBuff = (od_pp_outBuffer_t *)pOutput->pOutBuff;
-  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne301: pOutBuff is sized to max_detections */
+  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne302: pOutBuff is sized to max_detections */
 
   if ( 1 == pInput_static_param->nb_classes) {
 

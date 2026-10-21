@@ -40,7 +40,7 @@ static mmtrace_channel ps_evt_channel_handle;
 
 #define DEFAULT_BUS_TIMEOUT_MS (5)
 
-/* NE301 port patch (class C wake recovery, from the 2.10.4 tree): WAKE is a
+/* NE302 port patch (class C wake recovery, from the 2.10.4 tree): WAKE is a
  * level veto line, so re-asserting an already-asserted pin gives the chip no
  * new edge and it stays asleep. A kick must hold the line low for at least
  * this long to guarantee a fresh low->high transition. */
@@ -69,7 +69,7 @@ static void morse_ps_wait_after_wake_pin_raise(struct driver_data *driverd)
 
     if (!ok && hw_signals_wake)
     {
-        /* NE301 port patch (class C wake recovery, from the 2.10.4 tree): the
+        /* NE302 port patch (class C wake recovery, from the 2.10.4 tree): the
          * semb wait covers the normal wakeup delay only. Poll the BUSY pin
          * for a further full window before declaring the wake lost - this is
          * the entry point of the "bus marked awake but chip unresponsive"

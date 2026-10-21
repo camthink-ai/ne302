@@ -35,7 +35,6 @@
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
-#include "usb_otg.h"
 #include "venc.h"
 #include "gpio.h"
 #include "npu_cache.h"
@@ -65,6 +64,7 @@ extern int __uncached_bss_end__;
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "system_service.h"
+#include "usb_cherry.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -350,9 +350,15 @@ void StartMainTask(void *argument)
     // step_duration_ms = step_end_time_ms - step_start_time_ms;
     // printf("[BOOT] Step 2 - framework_init: %lu ms\r\n", (unsigned long)step_duration_ms);
     
-    // Step 3: Driver core initialization
+    // Step 3: Driver initialization
     // step_start_time_ms = rtc_get_uptime_ms();
     driver_core_init();
+
+    /* USB device: CDC console for logs comes up on every boot; the RNDIS
+     * NIC is added only on the config-mode path (decided inside the boot
+     * task from the U0 wakeup flag — tcpip and the flag cache are ready
+     * by this point). Runs as a low-priority background task. */
+    usb_cherry_device_boot_start();
     // step_end_time_ms = rtc_get_uptime_ms();
     // step_duration_ms = step_end_time_ms - step_start_time_ms;
     // printf("[BOOT] Step 3 - driver_core_init: %lu ms\r\n", (unsigned long)step_duration_ms);
@@ -383,9 +389,6 @@ void StartMainTask(void *argument)
     // step_duration_ms = step_end_time_ms - step_start_time_ms;
     // printf("[BOOT] Step 5 - service_init: %lu ms\r\n", (unsigned long)step_duration_ms);
     
-    // Start USB CDC init as a low-priority background task (non-blocking)
-    debug_start_usb_cdc_task();
-
     // printf("[MAIN] All systems initialized successfully\r\n");
 
     // Step 6: Process wakeup event

@@ -32,7 +32,7 @@ void morse_ps_network_activity(struct driver_data *driverd);
 /**
  * @brief Redo the WAKE handshake while the bus is marked awake.
  *
- * NE301 port patch (class C wake recovery, from the 2.10.4 tree). Recovery
+ * NE302 port patch (class C wake recovery, from the 2.10.4 tree). Recovery
  * path for a chip that missed a WAKE pin transition and went back to sleep
  * even though the host still considers the bus awake: drop WAKE low for
  * MORSE_PS_KICK_WAKE_LOW_MS to force a fresh edge, re-assert it, then wait

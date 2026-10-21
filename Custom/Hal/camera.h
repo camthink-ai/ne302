@@ -43,13 +43,8 @@ typedef enum {
 
 #define PIPE1_DEFAULT_WIDTH 1280
 #define PIPE1_DEFAULT_HEIGHT 720
-#ifdef ISP_MW_TUNING_TOOL_SUPPORT
-#define PIPE1_DEFAULT_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_ARGB8888
-#define PIPE1_DEFAULT_BPP 4
-#else
 #define PIPE1_DEFAULT_FORMAT DCMIPP_PIXEL_PACKER_FORMAT_RGB565_1
 #define PIPE1_DEFAULT_BPP 2
-#endif
 
 #define PIPE2_DEFAULT_WIDTH 224
 #define PIPE2_DEFAULT_HEIGHT 224
@@ -58,11 +53,7 @@ typedef enum {
 #define PIPE2_MAX_WIDTH     480
 #define PIPE2_MAX_HEIGHT    480
 
-#ifdef ISP_MW_TUNING_TOOL_SUPPORT
 #define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
-#else
-#define CAPTURE_BUFFER_NB (CAPTURE_DELAY + 2)
-#endif
 #define NN_BUFFER_NB 3
 
 #define CAMERA_CTRL_PIPE1_BIT (1<<1)
@@ -212,7 +203,7 @@ ISP_HandleTypeDef* camera_get_isp_handle(void);
 
 /**
  * @brief Fill ISP IQ parameters for a built-in scene (indoor vs outdoor stock).
- * @param scene CAM_IQ_SCENE_INDOOR applies IQTune contrast + stat region (OS04C10); outdoor uses sensor defaults only.
+ * @param scene CAM_IQ_SCENE_INDOOR applies the indoor stat region only (OS04C10); outdoor uses the tuned profile verbatim.
  * @param out_iq Output buffer (must not be NULL).
  */
 void camera_fill_isp_iq_scene(cam_iq_scene_t scene, ISP_IQParamTypeDef *out_iq);

@@ -117,7 +117,7 @@ int ota_bundle_layout_matches_device(const ota_bundle_header_t *hdr)
     return 0;
 }
 
-/* NE301: a layout-changing bundle that MOVES or RESIZES a burned partition
+/* NE302: a layout-changing bundle that MOVES or RESIZES a burned partition
  * must also carry that partition's firmware. The new FSBL boots and the system
  * state is rebuilt against the NEW addresses, so a moved partition without its
  * image (e.g. a bundle packed with --exclude app) points boot selection at

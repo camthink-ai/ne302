@@ -356,7 +356,7 @@ int32_t yolov_d_pp_getNNBoxes_centroid(od_yolo_d_pp_in_centroid_t *pInput,
 {
   int32_t error   = AI_OD_POSTPROCESS_ERROR_NO;
   float32_t *pRaw_detections = (float32_t *)pInput->pRaw_detections;
-  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne301: pOutBuff is sized to max_detections */
+  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne302: pOutBuff is sized to max_detections */
 
   // To be done 3 time for each stride
   for ( uint8_t stride_idx = 0; stride_idx < pInput_static_param->strides_nb; stride_idx++) {
@@ -468,7 +468,7 @@ int32_t yolov_d_pp_getNNBoxes_centroid_int8(od_yolo_d_pp_in_centroid_t *pInput,
   int32_t error   = AI_OD_POSTPROCESS_ERROR_NO;
   int8_t *pRaw_detections = (int8_t *)pInput->pRaw_detections;
   int16_t conf_threshold_s16 = (int16_t)(pInput_static_param->conf_threshold / (pInput_static_param->raw_output_scale * pInput_static_param->raw_output_scale) + 0.5f);
-  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne301: pOutBuff is sized to max_detections */
+  int32_t det_cap = pInput_static_param->max_boxes_limit; /* ne302: pOutBuff is sized to max_detections */
 
   // To be done 3 time for each stride
   for ( uint8_t stride_idx = 0; stride_idx < pInput_static_param->strides_nb; stride_idx++) {

@@ -55,7 +55,7 @@ struct morse_yaps
 
     uint8_t flags;
 
-    /* NE301 port patch (class C wake recovery, from the 2.10.4 tree):
+    /* NE302 port patch (class C wake recovery, from the 2.10.4 tree):
      * timestamp of the first TX -ENOMEM in the current sustained bout;
      * 0 = no bout in progress. */
     uint32_t enomem_since_ms;
