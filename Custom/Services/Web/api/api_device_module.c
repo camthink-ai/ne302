@@ -28,6 +28,7 @@
 #include "version.h"
 #include "fsbl_app_common.h"
 #include "wifi.h"
+#include "usb_cherry.h"
 /* ==================== Helper Functions ==================== */
 
 static uint32_t restart_delay_seconds = 3;
@@ -363,6 +364,106 @@ aicam_result_t device_storage_config_handler(http_handler_context_t *ctx) {
     //hal_mem_free(json_string);
     
     return api_result;
+}
+
+/**
+ * @brief GET /api/v1/device/usb - USB device status (config + runtime)
+ */
+aicam_result_t device_usb_status_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+
+    if (!web_api_verify_method(ctx, "GET")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only GET method is allowed");
+    }
+
+    usb_config_t usb_cfg = { .device_enable = AICAM_TRUE };
+    (void)json_config_get_usb_config(&usb_cfg);
+
+    cJSON* response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+
+    cJSON_AddBoolToObject(response_json, "enabled", usb_cfg.device_enable);
+    cJSON_AddBoolToObject(response_json, "running",
+                          usb_cherry_device_is_inited() ? AICAM_TRUE : AICAM_FALSE);
+    cJSON_AddBoolToObject(response_json, "rndis_active",
+                          usb_cherry_device_rndis_is_active() ? AICAM_TRUE : AICAM_FALSE);
+
+    char* json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+
+    aicam_result_t api_result = api_response_success(ctx, json_string, NULL);
+    return api_result;
+}
+
+/**
+ * @brief POST /api/v1/device/usb/config - Set usb.device_enable (applied immediately)
+ * @details enabled=false: the USB device is torn down right away (bus power
+ *          released) and stays down across reboots until re-enabled.
+ *          enabled=true: persists the switch and, if the device was not
+ *          running (disabled this boot), starts the full composite — a web
+ *          session is by definition the configuration-mode context.
+ */
+aicam_result_t device_usb_config_handler(http_handler_context_t *ctx) {
+    if (!ctx) return AICAM_ERROR_INVALID_PARAM;
+
+    if (!web_api_verify_method(ctx, "POST")) {
+        return api_response_error(ctx, API_ERROR_METHOD_NOT_ALLOWED, "Only POST method is allowed");
+    }
+
+    cJSON* request_json = web_api_parse_body(ctx);
+    if (!request_json) {
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Invalid JSON request body");
+    }
+
+    cJSON* enabled_item = cJSON_GetObjectItem(request_json, "enabled");
+    if (!enabled_item || !cJSON_IsBool(enabled_item)) {
+        cJSON_Delete(request_json);
+        return api_response_error(ctx, API_ERROR_INVALID_REQUEST, "Missing or invalid 'enabled' field");
+    }
+    aicam_bool_t enabled = cJSON_IsTrue(enabled_item) ? AICAM_TRUE : AICAM_FALSE;
+    cJSON_Delete(request_json);
+
+    usb_config_t usb_cfg = { .device_enable = enabled };
+    aicam_result_t result = json_config_set_usb_config(&usb_cfg);
+    if (result != AICAM_OK) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to save USB configuration");
+    }
+
+    /* Apply immediately so the power saving takes effect without a reboot.
+     * Synchronous deinit right here: the web server dispatches handlers on
+     * a single thread, so concurrent enable/disable requests are naturally
+     * serialized — no deferred teardown, no races. When this request
+     * arrived over the RNDIS netif (web UI at 192.168.20.1) the response
+     * may not reach the browser (the NIC just died); the frontend treats
+     * that network error as success. */
+    if (enabled == AICAM_FALSE) {
+        (void)usb_cherry_device_deinit();
+    } else if (!usb_cherry_device_is_inited()) {
+        (void)usb_cherry_device_init_ex(1);
+    }
+
+    cJSON* response_json = cJSON_CreateObject();
+    if (!response_json) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to create response");
+    }
+
+    cJSON_AddBoolToObject(response_json, "enabled", enabled);
+    cJSON_AddBoolToObject(response_json, "running",
+                          usb_cherry_device_is_inited() ? AICAM_TRUE : AICAM_FALSE);
+    cJSON_AddStringToObject(response_json, "message", "USB configuration updated");
+
+    char* json_string = cJSON_Print(response_json);
+    cJSON_Delete(response_json);
+    if (!json_string) {
+        return api_response_error(ctx, API_ERROR_INTERNAL_ERROR, "Failed to serialize response");
+    }
+
+    return api_response_success(ctx, json_string, "USB configuration updated");
 }
 
 /**
@@ -2270,6 +2371,20 @@ static const api_route_t device_module_routes[] = {
         .method = "POST",
         .path = API_PATH_PREFIX "/device/storage/config",
         .handler = device_storage_config_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "GET",
+        .path = API_PATH_PREFIX "/device/usb",
+        .handler = device_usb_status_handler,
+        .require_auth = AICAM_TRUE,
+        .user_data = NULL
+    },
+    {
+        .method = "POST",
+        .path = API_PATH_PREFIX "/device/usb/config",
+        .handler = device_usb_config_handler,
         .require_auth = AICAM_TRUE,
         .user_data = NULL
     },

@@ -156,6 +156,10 @@
              .fill_light_while_streaming = AICAM_FALSE
          }
      },
+
+     .usb_config = {
+         .device_enable = AICAM_TRUE
+     },
      
      .network_service = {
          .ap_sleep_time = 0,        // Default AP sleep time (0 = no sleep)
@@ -1181,6 +1185,44 @@
                    light_config->connected, light_config->mode, light_config->start_hour, light_config->start_minute, light_config->end_hour, light_config->end_minute, light_config->brightness_level, light_config->auto_trigger_enabled, light_config->light_threshold, light_config->fill_light_while_streaming);
      return AICAM_OK;
  }
+
+/*=================== USB Configuration API Implementation ====================*/
+aicam_result_t json_config_get_usb_config(usb_config_t *usb_config)
+{
+    if (!usb_config)
+    {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+    if (!g_json_config_ctx.initialized)
+    {
+        return AICAM_ERROR_NOT_INITIALIZED;
+    }
+    *usb_config = g_json_config_ctx.current_config.usb_config;
+    return AICAM_OK;
+}
+
+aicam_result_t json_config_set_usb_config(const usb_config_t *usb_config)
+{
+    if (!usb_config)
+    {
+        return AICAM_ERROR_INVALID_PARAM;
+    }
+
+    if (usb_config != &g_json_config_ctx.current_config.usb_config)
+    {
+        memcpy(&g_json_config_ctx.current_config.usb_config, usb_config, sizeof(usb_config_t));
+    }
+
+    // update to NVS
+    aicam_result_t result = json_config_save_usb_config_to_nvs(usb_config);
+    if (result != AICAM_OK) {
+        LOG_CORE_ERROR("Failed to save USB configuration to NVS");
+        return result;
+    }
+
+    LOG_CORE_INFO("USB configuration updated: device_enable=%u", usb_config->device_enable);
+    return AICAM_OK;
+}
 
 /*=================== ISP Configuration API Implementation ====================*/
 aicam_result_t json_config_get_isp_config(isp_config_t *isp_config)

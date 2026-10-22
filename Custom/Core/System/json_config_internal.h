@@ -117,6 +117,9 @@
  #define NVS_KEY_LIGHT_THRESHOLD         "light_thr"
  #define NVS_KEY_LIGHT_FILL_STREAMING    "light_fill"
 
+// USB device configuration key names
+#define NVS_KEY_USB_DEVICE_ENABLE       "usb_dev_en"
+
 // ISP configuration key names
 #define NVS_KEY_ISP_VALID               "isp_valid"
 // StatRemoval
@@ -402,6 +405,7 @@
 aicam_result_t json_config_save_device_info_config_to_nvs(const device_info_config_t *config);
 aicam_result_t json_config_save_device_service_image_config_to_nvs(const image_config_t *config);
 aicam_result_t json_config_save_device_service_light_config_to_nvs(const light_config_t *config);
+aicam_result_t json_config_save_usb_config_to_nvs(const usb_config_t *config);
 aicam_result_t json_config_save_isp_config_to_nvs(const isp_config_t *config);
 aicam_result_t json_config_save_network_service_config_to_nvs(const network_service_config_t *config);
 aicam_result_t json_config_save_poe_config_to_nvs(const poe_config_persist_t *config);

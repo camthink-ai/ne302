@@ -36,6 +36,7 @@
 #include "Log/debug.h"
 #include "u0_module.h"
 #include "system_service.h"
+#include "json_config_mgr.h"
 
 /*!< RNDIS function endpoints */
 #define RNDIS_IN_EP  0x81
@@ -612,11 +613,6 @@ static struct {
     uint8_t buf[CDC_CONSOLE_RING_SIZE];
 } g_cdc_tx_ring, g_cdc_rx_ring;
 
-static volatile uint8_t g_cdc_dtr;
-/* Host reader detected: DTR asserted OR the host has sent us at least one
- * byte (tools/scripts that open the port without DTR). Console output is
- * gated on this instead of DTR alone. Cleared on bus reset/disconnect. */
-static volatile uint8_t g_cdc_host_active;
 static volatile uint8_t g_cdc_ep_tx_busy;
 static osThreadId_t g_usb_dev_thread;
 static volatile uint8_t g_usb_dev_thread_run;
@@ -650,12 +646,12 @@ static uint8_t ring_pop(uint8_t *buf, volatile uint32_t *head, volatile uint32_t
  */
 void usb_console_output_hook(const char *msg, int len)
 {
-    /* Gate on CONFIGURED only: many terminals/scripts open the COM port
-     * without asserting DTR — output must still flow. If nothing reads the
-     * endpoint, the first chunk parks in g_cdc_ep_tx_busy until a reader
-     * appears (ring absorbs the backlog, overflow drops). */
+    /* CONFIGURED-gated only: stream logs in real time as soon as the host
+     * enumerates the device — no reader (DTR/rx) handshake. Producers never
+     * block (ring push, drop on overflow); if the host is not actually
+     * reading, the first chunk parks in g_cdc_ep_tx_busy and the ring
+     * absorbs the backlog (lossy by design, like any console). */
     if (!g_dev_configured || g_dev_suspended) return;
-    if (!g_cdc_dtr && !g_cdc_host_active) return;
     if (msg == NULL || len <= 0) return;
 
     uint32_t primask = __get_PRIMASK();
@@ -677,9 +673,6 @@ static void cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
     (void)ep;
     /* read_buffer belongs to this function alone; reuse via static below. */
     static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t cdc_read_buffer[512];
-    if (nbytes > 0) {
-        g_cdc_host_active = 1; /* reader on the host side: enable console tx */
-    }
     for (uint32_t i = 0; i < nbytes && i < sizeof(cdc_read_buffer); i++) {
         ring_push(g_cdc_rx_ring.buf, &g_cdc_rx_ring.head, g_cdc_rx_ring.tail, cdc_read_buffer[i]);
     }
@@ -710,13 +703,13 @@ static struct usbd_endpoint cdc_in_ep = {
     .ep_cb = cdc_acm_bulk_in
 };
 
-/* DTR means "a terminal is attached on the PC side" (informational; console
- * tx is gated on DTR OR any received host data — see g_cdc_host_active). */
+/* DTR means "a terminal is attached on the PC side" — informational only:
+ * console tx is NOT reader-gated (logs stream from enumeration on), this
+ * just logs the port open/close transitions. */
 void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
 {
     (void)busid;
     (void)intf;
-    g_cdc_dtr = dtr ? 1 : 0;
     printf("[USB-DEV] console port %s\r\n", dtr ? "opened" : "closed");
 }
 
@@ -779,6 +772,8 @@ static struct usbd_interface intf_acm1;
 static const char *dev_event_name(uint8_t event)
 {
     switch (event) {
+        case USBD_EVENT_INIT: return "init";
+        case USBD_EVENT_DEINIT: return "deinit";
         case USBD_EVENT_RESET: return "reset";
         case USBD_EVENT_CONNECTED: return "connected";
         case USBD_EVENT_DISCONNECTED: return "disconnected";
@@ -815,7 +810,6 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
             g_dev_suspended = 0;
             g_cdc_ep_tx_busy = 0;
             g_rndis_tx_busy = 0;
-            g_cdc_host_active = 0; /* re-learn the reader after re-enum */
             break;
         default:
             break;
@@ -980,10 +974,23 @@ void usb_cherry_device_diag(char *buf, int buflen)
  * Classification reuses system_service's canonical helpers; the U0 flag
  * cache is refreshed first so it reflects THIS boot (u0_module_register
  * ran earlier in driver_core_init).
+ *
+ * Master switch: usb_config.device_enable (web system settings, default
+ * ON). OFF -> the USB device side is not initialized AT ALL (no composite
+ * device, no DWC2 clocks/IRQ) — power saving. The boot task runs after
+ * core_system_init, so the config manager is up when this reads it.
  */
 static void usb_dev_boot_task(void *argument)
 {
     (void)argument;
+
+    usb_config_t usb_cfg;
+    if (json_config_get_usb_config(&usb_cfg) == AICAM_OK &&
+        usb_cfg.device_enable != AICAM_TRUE) {
+        printf("[USB-DEV] boot: disabled by config (usb.device_enable=0), skipping init\r\n");
+        osThreadTerminate(osThreadGetId());
+        return;
+    }
 
     uint32_t flag = 0;
     (void)u0_module_get_wakeup_flag(&flag);

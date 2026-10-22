@@ -589,6 +589,17 @@ typedef struct {
     isp_config_t isp_config;
 } device_service_config_t;
 
+/* ==================== USB Configuration ==================== */
+
+typedef struct {
+    aicam_bool_t device_enable;   /* Master switch for the USB device (CDC
+                                   * console + RNDIS NIC). OFF (default is
+                                   * ON): nothing on the USB device side is
+                                   * initialized at boot — no composite
+                                   * device, no DWC2 IRQ, saves power. The
+                                   * host sees no enumeration at all. */
+} usb_config_t;
+
 typedef struct {
     uint32_t session_timeout_ms;                       // Session timeout in milliseconds
     aicam_bool_t enable_session_timeout;               // Enable session timeout
@@ -714,6 +725,7 @@ typedef struct {
     power_mode_config_t power_mode_config; // Power mode configuration
     device_info_config_t device_info;
     device_service_config_t device_service;
+    usb_config_t usb_config;               // USB device configuration
     network_service_config_t network_service;
     mqtt_service_config_t mqtt_service;
     auth_mgr_config_t auth_mgr;
@@ -1083,6 +1095,20 @@ aicam_result_t json_config_get_device_service_light_config(light_config_t *light
  * @return aicam_result_t Operation result
  */
 aicam_result_t json_config_set_device_service_light_config(const light_config_t *light_config);
+
+/**
+ * @brief Get USB device configuration
+ * @param usb_config USB configuration structure pointer
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_get_usb_config(usb_config_t *usb_config);
+
+/**
+ * @brief Set USB device configuration (persisted to NVS immediately)
+ * @param usb_config USB configuration structure pointer
+ * @return aicam_result_t Operation result
+ */
+aicam_result_t json_config_set_usb_config(const usb_config_t *usb_config);
 
 /**
  * @brief Get ISP configuration
