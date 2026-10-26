@@ -164,10 +164,10 @@ static const system_capture_request_t g_capture_defaults = {
  static void init_default_power_config(power_mode_config_t *config)
  {
      if (!config) return;
-     
-     // Device defaults to low power mode
-     config->current_mode = POWER_MODE_LOW_POWER;
-     config->default_mode = POWER_MODE_LOW_POWER;
+
+     // Device defaults to full speed mode
+     config->current_mode = POWER_MODE_FULL_SPEED;
+     config->default_mode = POWER_MODE_FULL_SPEED;
      
      // Return to low power mode after 1 minute of inactivity
      config->low_power_timeout_ms = 60000; // 60 seconds
@@ -371,7 +371,7 @@ static const system_capture_request_t g_capture_defaults = {
  power_mode_t system_controller_get_power_mode(system_controller_t *controller)
  {
      if (!controller || !controller->is_initialized) {
-         return POWER_MODE_LOW_POWER; // Default to low power mode
+         return POWER_MODE_FULL_SPEED; // Default to full speed mode
      }
      return controller->power_config.current_mode;
  }
@@ -503,34 +503,14 @@ static const system_capture_request_t g_capture_defaults = {
     //      // Automatically switch to full speed mode when device is woken up (based on trigger conditions in diagram)
     //      system_controller_set_power_mode(controller, POWER_MODE_FULL_SPEED, POWER_TRIGGER_AUTO_WAKEUP);
     //  }
-     
-     return AICAM_OK;
- }
- 
- aicam_result_t system_controller_check_power_timeout(system_controller_t *controller)
- {
-     if (!controller || !controller->is_initialized) {
-         return AICAM_ERROR_INVALID_PARAM;
-     }
-     
-     // Only check timeout in full speed mode
-     if (controller->power_config.current_mode != POWER_MODE_FULL_SPEED) {
-         return AICAM_OK;
-     }
-     
-     uint64_t current_time = get_timestamp_ms();
-     uint64_t elapsed_time = current_time - controller->power_config.last_activity_time;
-     
-     // Check if 1 minute timeout with no activity
-     if (elapsed_time >= controller->power_config.low_power_timeout_ms) {
-         LOG_SVC_INFO("Power mode timeout reached (%lu ms), switching to low power mode", (unsigned long)elapsed_time);
-         return system_controller_set_power_mode(controller, POWER_MODE_LOW_POWER, POWER_TRIGGER_TIMEOUT);
-     }
-     return AICAM_OK;
-     
- }
- 
- // system_controller_set_power_feature function removed - use wakeup source configuration instead
+
+    return AICAM_OK;
+}
+
+// system_controller_check_power_timeout removed: never called (the mode
+// only ever changes via explicit set_power_mode / wake paths).
+
+// system_controller_set_power_feature function removed - use wakeup source configuration instead
  
  /* ==================== Wakeup Source Management Helper Functions ==================== */
  

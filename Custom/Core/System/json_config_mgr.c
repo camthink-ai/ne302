@@ -44,8 +44,8 @@
      },
      
      .power_mode_config = {
-         .current_mode = POWER_MODE_LOW_POWER,
-         .default_mode = POWER_MODE_LOW_POWER,
+         .current_mode = POWER_MODE_FULL_SPEED,
+         .default_mode = POWER_MODE_FULL_SPEED,
          .low_power_timeout_ms = 60000,  // 60 seconds
          .last_activity_time = 0,
          .mode_switch_count = 0

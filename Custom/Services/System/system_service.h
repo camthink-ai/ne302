@@ -245,12 +245,7 @@ aicam_result_t system_controller_register_power_callback(system_controller_t *co
  */
 aicam_result_t system_controller_update_activity(system_controller_t *controller);
 
-/**
- * @brief Check and handle power mode timeout
- * @param controller System controller handle
- * @return AICAM_OK on success
- */
-aicam_result_t system_controller_check_power_timeout(system_controller_t *controller);
+// system_controller_check_power_timeout removed: never called
 
 // system_controller_set_power_feature function removed - use wakeup source configuration instead
 
